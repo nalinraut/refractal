@@ -66,8 +66,14 @@ def check_arity(fn: Any, kind: str, import_string: str) -> None:
     two positional parameters and is refused at build time, rather than raising
     a TypeError several hundred scenarios into an evaluation.
 
-    ``*args`` is accepted -- a callable that takes anything cannot be shown to be
-    wrong, and refusing it would break legitimate wrappers.
+    **Known hole, not a subtlety:** a callable taking ``*args`` or ``**kwargs``
+    passes unchecked, because a function that accepts anything cannot be shown
+    to be wrong. Someone will write a wrapper that forwards ``**kwargs`` and it
+    will slip through -- ``**kwargs`` forwarding is precisely what the harness's
+    own MRO bug (upstream #132) was about, so this is a live pattern rather than
+    a hypothetical. If that starts biting, marker decorators make the intent
+    explicit rather than inferred; arity is what is cheap and needs nothing from
+    the user, so it is what ships.
     """
     import inspect
 

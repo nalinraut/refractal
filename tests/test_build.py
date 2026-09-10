@@ -305,3 +305,41 @@ class TestCallableShapesAreChecked(unittest.TestCase):
         with Temp() as root:
             report = build(root)
             self.assertTrue(any("could not import" in n for n in report.notes))
+
+
+class TestFilterDiagnosis(unittest.TestCase):
+    """Three distinct ways a filter can be wrong, each named separately."""
+
+    def test_wrong_shape_reports_the_shape_not_the_workspace(self):
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            with_filter(tmp, root, "refractal.example:cube_in_bowl")
+            self.assertIn("shape of a predicate", str(self._error(root)))
+
+    def test_wrong_parameter_names_are_named(self):
+        """Right arity, wrong grid: the error must show what the scenarios carry.
+
+        `within_reach` reads cube_x/cube_y; the vial grid carries vial_x/vial_y.
+        `.get()` returns the default and every scenario is rejected, which looks
+        exactly like an unreachable workspace unless the parameters are printed.
+        """
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            with_filter(tmp, root, "refractal.example:within_reach")
+            message = str(self._error(root))
+            self.assertIn("'friction', 'vial_x', 'vial_y'", message)
+            self.assertIn("parameters this grid does not define", message)
+
+    def test_genuinely_inverted_filter_still_reports(self):
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            with_filter(tmp, root, "tests.fixture_filters:rejects_everything")
+            self.assertIn("inverted", str(self._error(root)))
+
+    def _error(self, root):
+        with self.assertRaises(Exception) as ctx:
+            build(root)
+        return ctx.exception
