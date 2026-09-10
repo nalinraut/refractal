@@ -90,10 +90,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
     eligibility = build_units(rows, checkpoints=checkpoints, min_seeds=args.min_seeds)
     verdict = evaluate(
         eligibility,
-        checkpoints[0],
-        checkpoints[1],
+        checkpoints,
+        baseline=args.baseline,
         rule=args.dichotomy,
         resamples=args.resamples,
+        correct=not args.no_correction,
     )
     print(render(verdict))
     return verdict.exit_code
@@ -134,7 +135,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="majority",
         help="how several seeds at one scenario collapse to pass/fail for McNemar",
     )
+    compare.add_argument(
+        "--baseline", help="checkpoint every other is measured against (default: the first)"
+    )
     compare.add_argument("--min-seeds", type=int, default=None, help="seed floor per scenario")
+    compare.add_argument(
+        "--no-correction",
+        action="store_true",
+        help="skip the Holm correction across the family of contrasts. Only for "
+        "inspecting a single contrast; the gate is not calibrated without it.",
+    )
     compare.add_argument("--resamples", type=int, default=5000)
     compare.set_defaults(func=cmd_compare)
     return parser

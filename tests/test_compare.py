@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from refractal.compare import (
+    holm,
     evaluate,
     render,
     build_units,
@@ -295,7 +296,7 @@ class TestGate(unittest.TestCase):
     """The gate is one bit and the choice is deliberate: the bootstrap decides.
 
     Measured power at 120 scenarios x 5 seeds with an interaction present, 300
-    trials, same false-positive rate for both tests:
+    trials, at the same false-positive rate for both tests:
 
         true delta   McNemar   bootstrap
               0.00      4.0%        4.3%
@@ -316,7 +317,7 @@ class TestGate(unittest.TestCase):
             **kw,
         )
         return evaluate(
-            build_units(rows, checkpoints=[A, B]), A, B, resamples=2000, seed=7
+            build_units(rows, checkpoints=[A, B]), [A, B], resamples=2000, seed=7
         )
 
     def test_a_real_regression_goes_red(self):
@@ -331,24 +332,23 @@ class TestGate(unittest.TestCase):
 
     def test_an_improvement_is_not_a_regression(self):
         verdict = self._verdict(+0.12)
-        self.assertEqual([t.gate for t in verdict.tasks], ["improved"])
+        self.assertEqual([c.gate for t in verdict.tasks for c in t.contrasts], ["improved"])
         self.assertEqual(verdict.exit_code, 0)
 
     def test_bootstrap_gates_even_when_mcnemar_retains_its_null(self):
         """The disagreement case, resolved in the bootstrap's favour."""
         verdict = self._verdict(-0.06, salt="r3")
-        task = verdict.tasks[0]
-        self.assertGreater(task.mcnemar.p_value, 0.05)   # McNemar sees nothing
-        self.assertTrue(task.bootstrap.excludes_zero)     # the rate moved
+        contrast = verdict.tasks[0].contrasts[0]
+        self.assertGreater(contrast.mcnemar.p_value, 0.05)      # McNemar sees nothing
+        self.assertTrue(contrast.bootstrap.excludes_zero)        # the rate moved
         self.assertTrue(verdict.regressed)
         # ...and the report says why, so a red is interpretable rather than obeyed.
-        self.assertTrue(any("flipped their majority" in n for n in task.notes))
+        self.assertTrue(any("flipped their majority" in n for n in contrast.notes))
 
     def test_small_scenario_count_is_flagged_as_optimistic(self):
         verdict = self._verdict(0.0)
         self.assertTrue(
-            any("nominal 5%" in n for t in verdict.tasks for n in t.notes),
-            "120 scenarios is below the calibrated threshold and must say so",
+            any("nominal 5%" in n for t in verdict.tasks for c in t.contrasts for n in c.notes)
         )
 
     def test_changed_geometry_blocks_rather_than_reporting_a_regression(self):
@@ -356,23 +356,130 @@ class TestGate(unittest.TestCase):
         for row in rows:
             if row["checkpoint_id"] == B:
                 row["scene_hash"] = "sha256:changed"
-        verdict = evaluate(build_units(rows, checkpoints=[A, B], min_seeds=2), A, B,
-                           resamples=200, seed=1)
+        verdict = evaluate(
+            build_units(rows, checkpoints=[A, B], min_seeds=2), [A, B], resamples=200, seed=1
+        )
         # "the geometry changed" is a different sentence from "the policy got
         # worse", and exit code 2 keeps them different.
         self.assertEqual(verdict.exit_code, 2)
         self.assertFalse(verdict.regressed)
+        self.assertEqual(verdict.tasks, [])
         self.assertIn("not comparable", verdict.blocking[0])
 
     def test_session_spanning_is_noted(self):
         rows = rows_for(success_rate=0.6, salt="s0")
         for row in rows[: len(rows) // 2]:
             row["session_id"] = "session-b"
-        verdict = evaluate(build_units(rows, checkpoints=[A, B]), A, B, resamples=200, seed=1)
+        verdict = evaluate(
+            build_units(rows, checkpoints=[A, B]), [A, B], resamples=200, seed=1
+        )
         self.assertTrue(any("spans 2 sessions" in n for n in verdict.notes))
 
     def test_report_leads_with_overlap(self):
         text = render(self._verdict(0.0))
         self.assertTrue(text.strip().startswith("Scenarios in all"))
-        self.assertIn("McNemar (reported)", text)
-        self.assertIn("bootstrap (gates)", text)
+        self.assertIn("McNemar p=", text)
+        self.assertIn("holm=", text)
+
+
+C = "ckpt-48"
+
+
+class TestMultipleCheckpoints(unittest.TestCase):
+    """Two is the common case, not a special one. D7."""
+
+    def _rows(self, rates):
+        """rates: {checkpoint: success_rate} for one task."""
+        out = []
+        for checkpoint, rate in rates.items():
+            for row in rows_for(
+                success_rate=0.5,
+                scenario_spread=0.30,
+                salt="m0",
+                per_task={(B, "vial-slot-7"): rate},
+            ):
+                if row["checkpoint_id"] != B:
+                    continue
+                out.append({**row, "checkpoint_id": checkpoint})
+        return out
+
+    def test_three_checkpoints_compare_against_one_baseline(self):
+        rows = self._rows({A: 0.50, B: 0.50, C: 0.75})
+        verdict = evaluate(
+            build_units(rows, checkpoints=[A, B, C]), [A, B, C],
+            baseline=A, resamples=2000, seed=3,
+        )
+        contrasts = {c.candidate: c for c in verdict.tasks[0].contrasts}
+        # (k-1) contrasts against the baseline, not k(k-1)/2 pairs: the question
+        # is "did my change help", which has a reference point.
+        self.assertEqual(sorted(contrasts), [B, C])
+        self.assertEqual(contrasts[C].gate, "improved")
+        self.assertEqual(contrasts[B].gate, "ok")
+
+    def test_outcome_vectors_show_what_pairwise_cannot(self):
+        """"Scenarios only ckpt-48 solves" is not recoverable from pairwise tables."""
+        rows = self._rows({A: 0.50, B: 0.50, C: 0.75})
+        task = evaluate(
+            build_units(rows, checkpoints=[A, B, C]), [A, B, C], baseline=A,
+            resamples=200, seed=3,
+        ).tasks[0]
+        self.assertEqual(len(next(iter(task.patterns))), 3)
+        only_c = task.patterns.get((False, False, True), 0)
+        self.assertGreater(only_c, 0)
+        self.assertEqual(sum(task.patterns.values()), task.units)
+
+    def test_cochran_q_screens_for_any_difference(self):
+        same = self._rows({A: 0.50, B: 0.50, C: 0.50})
+        differ = self._rows({A: 0.50, B: 0.50, C: 0.85})
+        q_same = evaluate(build_units(same, checkpoints=[A, B, C]), [A, B, C],
+                          resamples=200, seed=3).tasks[0].cochran
+        q_differ = evaluate(build_units(differ, checkpoints=[A, B, C]), [A, B, C],
+                            resamples=200, seed=3).tasks[0].cochran
+        self.assertGreater(q_same.p_value, 0.05)
+        self.assertLess(q_differ.p_value, 0.05)
+
+    def test_a_single_checkpoint_is_refused(self):
+        rows = self._rows({A: 0.5})
+        with self.assertRaises(ValueError):
+            evaluate(build_units(rows, checkpoints=[A]), [A])
+
+
+class TestMultiplicityCorrection(unittest.TestCase):
+    """The gate fires if ANY contrast trips, so all of them are one family."""
+
+    def test_family_spans_tasks_and_checkpoints(self):
+        rows = rows_for(task_id=None, success_rate=0.55, salt="f0")
+        verdict = evaluate(
+            build_units(rows, checkpoints=[A, B]), [A, B], resamples=400, seed=5
+        )
+        # three tasks in the example catalog, one candidate against the baseline
+        self.assertEqual(verdict.family_size, 3 * 1)
+        self.assertTrue(any("Holm-adjusted" in n for n in verdict.notes))
+
+    def test_correction_makes_the_gate_stricter(self):
+        rows = rows_for(task_id=None, success_rate=0.55, salt="f1")
+        kwargs = dict(resamples=2000, seed=5)
+        corrected = evaluate(
+            build_units(rows, checkpoints=[A, B]), [A, B], correct=True, **kwargs
+        )
+        raw = evaluate(
+            build_units(rows, checkpoints=[A, B]), [A, B], correct=False, **kwargs
+        )
+        for task_c, task_r in zip(corrected.tasks, raw.tasks):
+            for c, r in zip(task_c.contrasts, task_r.contrasts):
+                self.assertGreaterEqual(c.adjusted_p, r.adjusted_p)
+
+    def test_holm_is_monotone_and_bounded(self):
+        adjusted = holm({"a": 0.001, "b": 0.04, "c": 0.30, "d": 0.9})
+        values = [adjusted[k] for k in ("a", "b", "c", "d")]
+        self.assertEqual(values, sorted(values))
+        self.assertLessEqual(max(values), 1.0)
+        self.assertAlmostEqual(adjusted["a"], 0.004)
+
+    def test_uncorrected_family_wise_rate_is_stated(self):
+        rows = rows_for(task_id=None, success_rate=0.55, salt="f0")
+        verdict = evaluate(
+            build_units(rows, checkpoints=[A, B]), [A, B], resamples=400, seed=5
+        )
+        note = next(n for n in verdict.notes if "Holm-adjusted" in n)
+        self.assertIn("14%", note)   # 1 - 0.95^3

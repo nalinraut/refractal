@@ -17,6 +17,7 @@ No plots. Comparison and statistics ship; visualisation is DuckDB's job.
 from .pairing import Eligibility, Unit, UnitKey, build_units
 from .verdict import (
     MIN_UNITS_FOR_CALIBRATED_CI,
+    Contrast,
     TaskVerdict,
     Verdict,
     evaluate,
@@ -27,8 +28,11 @@ from .stats import (
     Discordance,
     TestResult,
     clustered_bootstrap,
+    cochran_q,
     contingency,
+    holm,
     mcnemar_exact,
+    outcome_vectors,
     mcnemar_unclustered,
     two_proportion_z,
 )
@@ -47,6 +51,10 @@ __all__ = [
     "mcnemar_exact",
     "mcnemar_unclustered",
     "two_proportion_z",
+    "cochran_q",
+    "holm",
+    "outcome_vectors",
+    "Contrast",
     "TaskVerdict",
     "Verdict",
     "evaluate",

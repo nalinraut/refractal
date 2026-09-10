@@ -31,7 +31,7 @@ import math
 import random
 import statistics
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 from .pairing import Dichotomy, Unit
 
@@ -172,6 +172,12 @@ class BootstrapResult:
     #: than to reach for BCa on a hunch.
     basic_low: float = 0.0
     basic_high: float = 0.0
+    #: Achieved significance level: twice the smaller tail of the resample
+    #: distribution about zero. The interval is what a human reads, but a
+    #: multiplicity correction needs a p-value it can rank, and inventing a
+    #: second procedure for intervals would put the gate and the report on
+    #: different footings.
+    p_value: float = 1.0
 
     @property
     def excludes_zero(self) -> bool:
@@ -216,11 +222,17 @@ def clustered_bootstrap(
     lo_index = max(0, int(math.floor((alpha / 2) * resamples)))
     hi_index = min(resamples - 1, int(math.ceil((1 - alpha / 2) * resamples)) - 1)
     low, high = draws[lo_index], draws[hi_index]
+    # +1 in both parts so a p-value is never exactly zero: with B resamples the
+    # most that can honestly be claimed is 1/(B+1).
+    below = sum(1 for d in draws if d <= 0)
+    above = sum(1 for d in draws if d >= 0)
+    asl = min(1.0, 2 * (min(below, above) + 1) / (resamples + 1))
     return BootstrapResult(
         difference=observed,
         low=low,
         high=high,
         resamples=resamples,
+        p_value=asl,
         # Reflected about the observed value: 2*theta - upper, 2*theta - lower.
         basic_low=2 * observed - high,
         basic_high=2 * observed - low,
@@ -229,6 +241,9 @@ def clustered_bootstrap(
 
 __all__ = [
     "BootstrapResult",
+    "cochran_q",
+    "holm",
+    "outcome_vectors",
     "Discordance",
     "TestResult",
     "clustered_bootstrap",
@@ -237,3 +252,113 @@ __all__ = [
     "mcnemar_unclustered",
     "two_proportion_z",
 ]
+
+
+# ---------------------------------------------------------------------------
+# N checkpoints
+# ---------------------------------------------------------------------------
+
+
+def outcome_vectors(
+    units: Sequence[Unit], checkpoints: Sequence[str], rule: Dichotomy
+) -> dict[tuple[bool, ...], int]:
+    """How many scenarios show each pass/fail pattern across all k checkpoints.
+
+    The k-checkpoint generalisation of the 2x2, and the reason it is worth
+    running three checkpoints together rather than three pairs: "scenarios only
+    ckpt-48 solves" is directly readable here and cannot be recovered from three
+    pairwise comparisons, because a pairwise table never says which *other*
+    checkpoint was also failing.
+    """
+    counts: dict[tuple[bool, ...], int] = {}
+    for unit in units:
+        pattern = tuple(unit.passed(c, rule) for c in checkpoints)
+        counts[pattern] = counts.get(pattern, 0) + 1
+    return counts
+
+
+def _cochran_q_statistic(rows: Sequence[tuple[bool, ...]], k: int) -> float:
+    """Q for a scenarios x checkpoints table of pass/fail."""
+    col = [sum(row[j] for row in rows) for j in range(k)]
+    row_totals = [sum(row) for row in rows]
+    denom = k * sum(row_totals) - sum(t * t for t in row_totals)
+    if denom == 0:
+        return 0.0
+    mean_col = sum(col) / k
+    return k * (k - 1) * sum((c - mean_col) ** 2 for c in col) / denom
+
+
+def cochran_q(
+    units: Sequence[Unit],
+    checkpoints: Sequence[str],
+    rule: Dichotomy,
+    *,
+    permutations: int = 4000,
+    seed: int = 0,
+) -> TestResult:
+    """The k-sample extension of McNemar: do *any* of these checkpoints differ?
+
+    Used as a gate before pairwise testing, which is standard practice and keeps
+    the family of pairwise comparisons from being run at all when there is
+    nothing to find.
+
+    The p-value is by permutation rather than the chi-square approximation.
+    Under the null the k outcomes within one scenario are exchangeable, so
+    permuting labels within each row gives an exact reference distribution. The
+    approximation needs a large table, and the small-table regime is exactly
+    where a regression first shows up -- the same reason McNemar here is exact
+    rather than chi-square. It also avoids depending on an incomplete gamma
+    function for one call site.
+    """
+    k = len(checkpoints)
+    rows = [tuple(unit.passed(c, rule) for c in checkpoints) for unit in units]
+    observed = _cochran_q_statistic(rows, k)
+
+    rng = random.Random(seed)
+    # Rows that are all-pass or all-fail are invariant under permutation and
+    # contribute nothing; skipping them is free and makes the loop honest about
+    # how much information there actually is.
+    variable = [list(row) for row in rows if 0 < sum(row) < k]
+    if not variable:
+        return TestResult(0.0, 1.0, 0, "every scenario agrees across all checkpoints")
+
+    fixed_contrib = [row for row in rows if not (0 < sum(row) < k)]
+    at_least = 1
+    for _ in range(permutations):
+        shuffled = []
+        for row in variable:
+            copy = list(row)
+            rng.shuffle(copy)
+            shuffled.append(tuple(copy))
+        stat = _cochran_q_statistic(shuffled + fixed_contrib, k)
+        if stat >= observed - 1e-12:
+            at_least += 1
+    return TestResult(
+        observed,
+        at_least / (permutations + 1),
+        len(variable),
+        f"{len(variable)} of {len(rows)} scenarios disagree across checkpoints",
+    )
+
+
+def holm(p_values: Mapping[Any, float]) -> dict[Any, float]:
+    """Holm-Bonferroni adjusted p-values, controlling family-wise error.
+
+    Holm rather than plain Bonferroni because it is uniformly more powerful and
+    no harder to implement, and neither needs a dependency.
+
+    This matters more than it looks. Four checkpoints is six pairwise
+    comparisons; across three tasks that is eighteen, and at a nominal 5% each
+    you expect a false positive about 60% of the time. Correction is not
+    bookkeeping, it is the difference between a finding and noise -- and a gate
+    that fires when *any* comparison trips is exactly the family this corrects.
+    """
+    items = sorted(p_values.items(), key=lambda kv: kv[1])
+    m = len(items)
+    adjusted: dict[Any, float] = {}
+    running = 0.0
+    for i, (key, p) in enumerate(items):
+        # Monotone: an adjusted p can never fall below one for a smaller raw p.
+        running = max(running, min(1.0, (m - i) * p))
+        adjusted[key] = running
+    return adjusted

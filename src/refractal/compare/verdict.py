@@ -1,40 +1,49 @@
-"""The gate: one bit, decided deliberately rather than by whatever the CLI returns.
+"""The verdict: N checkpoints, one gate, and a correction across the whole family.
 
-"Report both" is a display decision. A regression gate needs a single answer,
-and when McNemar says no and the bootstrap says yes something has to break the
-tie. Left implicit, that decision gets made by an exit code somebody wrote
-without thinking about it.
+**Two checkpoints is the common case, not a special one.** A single checkpoint is
+a comparison of size one; three is a training sweep. The shape of the report
+changes with k, but nothing structural does.
 
-**The clustered bootstrap gates. McNemar is reported and never gates.**
+What the gate is
+----------------
 
-Measured, at 120 scenarios x 5 seeds, 300 trials per cell, with a checkpoint x
-scenario interaction present:
+**The clustered bootstrap gates. McNemar and Cochran's Q are reported and never
+gate.** Measured at 120 scenarios x 5 seeds, 300 trials per cell, with a
+checkpoint x scenario interaction present -- both at the same false-positive
+rate:
 
-===========  =========  =============  ==================
-true delta   McNemar    bootstrap      what this means
-===========  =========  =============  ==================
-0.00          4.0%       4.3%          both calibrated
-0.05         13.0%      29.3%          bootstrap 2.3x the power
-0.07         24.7%      47.3%          McNemar misses a real 7pp regression 3 times in 4
+===========  =========  =============
+true delta   McNemar    bootstrap
+===========  =========  =============
+0.00          4.0%       4.3%
+0.05         13.0%      29.3%
+0.07         24.7%      47.3%
 0.10         46.0%      75.3%
-0.15         79.7%      97.3%
-===========  =========  =============  ==================
+===========  =========  =============
 
-Same false-positive rate, roughly double the power. So McNemar retaining its
-null at this scale is weak evidence of no change, and gating on it would let
-real regressions through most of the time.
+Same type I error, roughly double the power. Gating on McNemar would miss a real
+7-point regression three times in four, because collapsing 3/5 versus 2/5 into a
+single bit discards most of the signal in a uniform shift -- and a uniform shift
+is what a slightly worse checkpoint produces.
 
-The reasoning behind the numbers: a rate regression is a regression whether or
-not any scenario flipped its *majority*. Collapsing 3/5 to 2/5 into a single bit
-discards most of the signal in a uniform shift, and a uniform shift is what a
-slightly worse checkpoint produces.
+Multiplicity, which is where two checkpoints was quietly wrong
+--------------------------------------------------------------
 
-**The failure mode of this choice, stated plainly.** The bootstrap can go red
-when no scenario actually changed from failing to passing -- a rate moved,
-nothing flipped. A user reading "regression" will picture scenarios that broke.
-That is why the 2x2 is printed next to the verdict and never omitted: the gate
-is the bootstrap, but the report always shows what did and did not flip, so the
-red can be interpreted rather than merely obeyed.
+The gate fires if *any* comparison trips, so every comparison is in one family
+and the family has to be corrected as a whole. Uncorrected, three tasks at a
+nominal 5% is a family-wise rate near 14%; four checkpoints across three tasks
+is eighteen comparisons and roughly 60%.
+
+That is the same error the design doc criticises in D7, so it is worth being
+exact about the family: **(k-1) contrasts against the baseline x T tasks**, with
+Holm-Bonferroni applied across all of them at once. Contrasts against a baseline
+rather than all k(k-1)/2 pairs, because the question is "did my change help",
+which has a reference point. Comparing every pair would triple the family for
+answers nobody asked for.
+
+Cochran's Q runs per task as a screen -- do *any* of these checkpoints differ --
+and is reported alongside. It does not gate, because a screen that gates would
+make the gate's calibration depend on a second test's power.
 """
 
 from __future__ import annotations
@@ -48,30 +57,35 @@ from .stats import (
     Discordance,
     TestResult,
     clustered_bootstrap,
+    cochran_q,
     contingency,
+    holm,
     mcnemar_exact,
+    outcome_vectors,
 )
 
-#: Below this many scenarios the percentile interval is optimistic. Measured at
-#: a true difference of zero: 120 scenarios rejects ~7% of the time against a
+#: Below this many scenarios the percentile interval is optimistic: measured at
+#: a true difference of zero, 120 scenarios rejects ~7% of the time against a
 #: nominal 5%, 300 rejects 4.8%, 500 rejects 4.0%. The basic (reverse
-#: percentile) interval tracks it almost exactly at every size, which rules out
-#: the bias that percentile intervals are known for -- so this is small-cluster
-#: behaviour and BCa would not have fixed it. The honest response is to say so
-#: rather than to add machinery.
+#: percentile) interval tracks it at every size, which rules out the bias BCa
+#: corrects -- so this is small-cluster behaviour and more machinery would not
+#: have fixed it. Saying so beats pretending otherwise.
 MIN_UNITS_FOR_CALIBRATED_CI = 200
 
 
 @dataclass
-class TaskVerdict:
+class Contrast:
+    """One checkpoint measured against the baseline, for one task."""
+
     task_id: str
     scene_id: str
-    units: int
-    rate_a: float
-    rate_b: float
+    baseline: str
+    candidate: str
     cells: Discordance
     mcnemar: TestResult
     bootstrap: BootstrapResult
+    #: Holm-adjusted across every contrast in the run, not just this task's.
+    adjusted_p: float = 1.0
     gate: str = "ok"  # ok | regressed | improved
     notes: list[str] = field(default_factory=list)
 
@@ -81,13 +95,32 @@ class TaskVerdict:
 
 
 @dataclass
+class TaskVerdict:
+    task_id: str
+    scene_id: str
+    units: int
+    rates: dict[str, float]
+    #: Pattern of pass/fail across all k checkpoints -> how many scenarios.
+    #: "Only ckpt-48 solves these" is readable here and is not recoverable from
+    #: pairwise tables.
+    patterns: dict[tuple[bool, ...], int]
+    cochran: TestResult
+    contrasts: list[Contrast] = field(default_factory=list)
+
+    @property
+    def regressed(self) -> bool:
+        return any(c.regressed for c in self.contrasts)
+
+
+@dataclass
 class Verdict:
     eligibility: Eligibility
-    a: str
-    b: str
+    checkpoints: list[str]
+    baseline: str
     tasks: list[TaskVerdict] = field(default_factory=list)
     blocking: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    family_size: int = 0
 
     @property
     def regressed(self) -> bool:
@@ -97,10 +130,9 @@ class Verdict:
     def exit_code(self) -> int:
         """0 clean, 1 regression, 2 cannot be answered.
 
-        A blocking condition is not a regression and must not be reported as
-        one: "the two runs used different geometry" is a different sentence from
-        "the policy got worse", and conflating them teaches people to ignore the
-        gate.
+        The third is not a regression and must not be reported as one: "the two
+        runs used different geometry" is a different sentence from "the policy
+        got worse", and conflating them teaches people to ignore the gate.
         """
         if self.blocking:
             return 2
@@ -109,138 +141,194 @@ class Verdict:
 
 def evaluate(
     eligibility: Eligibility,
-    a: str,
-    b: str,
+    checkpoints: Sequence[str] | None = None,
     *,
+    baseline: str | None = None,
     rule: Dichotomy = "majority",
     alpha: float = 0.05,
     resamples: int = 5000,
+    permutations: int = 2000,
     seed: int = 0,
+    correct: bool = True,
 ) -> Verdict:
-    """Apply the gate, per task, and collect everything the report needs."""
-    verdict = Verdict(eligibility=eligibility, a=a, b=b)
+    """Compare k checkpoints against a baseline, correcting across the family."""
+    checkpoints = list(checkpoints or eligibility.checkpoints)
+    if len(checkpoints) < 2:
+        raise ValueError(f"need at least two checkpoints to compare, got {checkpoints}")
+    baseline = baseline or checkpoints[0]
+    if baseline not in checkpoints:
+        raise ValueError(f"baseline {baseline!r} is not among {checkpoints}")
+
+    verdict = Verdict(
+        eligibility=eligibility, checkpoints=checkpoints, baseline=baseline
+    )
 
     for scene_id, hashes in sorted(eligibility.scene_hash_conflicts.items()):
-        # Not a warning. The scenarios carry the same parameters but a different
-        # world, so the comparison is between two things that were never the
-        # same experiment.
         verdict.blocking.append(
             f"scene {scene_id!r} has {len(hashes)} different scene_hash values across the "
             "checkpoints being compared: the geometry changed between runs, so these "
             "results are not comparable. Re-run, or compare within one geometry."
         )
-
     if verdict.blocking:
-        # Return before computing anything per task. Data that has just been
-        # declared incomparable must not also yield a per-task verdict --
-        # `regressed` would then be True on a comparison we refused to make, and
-        # anyone reading the object rather than the exit code gets the wrong
-        # answer.
+        # Return before any per-task work. Data just declared incomparable must
+        # not also yield a verdict -- `regressed` would then be True on a
+        # comparison we refused to make.
         return verdict
 
     if len(eligibility.sessions) > 1:
         verdict.notes.append(
             f"this comparison spans {len(eligibility.sessions)} sessions, so warmup and "
             "thermal conditions differ across episodes. Success rates are unaffected; "
-            "latency comparisons from it are not trustworthy."
+            "latency comparisons from it are not."
         )
     if len(eligibility.harness_versions) > 1:
         verdict.notes.append(
-            f"episodes were produced by {len(eligibility.harness_versions)} different harness "
-            f"versions ({', '.join(sorted(eligibility.harness_versions))}). Harness changes "
-            "can alter which observation parameters reach the benchmark."
+            f"episodes were produced by {len(eligibility.harness_versions)} harness versions "
+            f"({', '.join(sorted(eligibility.harness_versions))}). Harness changes can alter "
+            "which observation parameters reach the benchmark."
         )
 
     by_task: dict[tuple[str, str], list[Unit]] = {}
     for unit in eligibility.units:
         by_task.setdefault((unit.key.scene_id, unit.key.task_id), []).append(unit)
 
+    candidates = [c for c in checkpoints if c != baseline]
+    raw_p: dict[tuple[str, str, str], float] = {}
+
     for (scene_id, task_id), units in sorted(by_task.items()):
-        cells = contingency(units, a, b, rule)
-        bootstrap = clustered_bootstrap(
-            units, a, b, resamples=resamples, seed=seed, alpha=alpha
-        )
-        task_verdict = TaskVerdict(
+        task = TaskVerdict(
             task_id=task_id,
             scene_id=scene_id,
             units=len(units),
-            rate_a=sum(u.rate(a) for u in units) / len(units),
-            rate_b=sum(u.rate(b) for u in units) / len(units),
-            cells=cells,
-            mcnemar=mcnemar_exact(cells),
-            bootstrap=bootstrap,
+            rates={c: sum(u.rate(c) for u in units) / len(units) for c in checkpoints},
+            patterns=outcome_vectors(units, checkpoints, rule),
+            cochran=cochran_q(
+                units, checkpoints, rule, permutations=permutations, seed=seed
+            ),
         )
-
-        if bootstrap.excludes_zero:
-            task_verdict.gate = "regressed" if bootstrap.difference < 0 else "improved"
-
-        if len(units) < MIN_UNITS_FOR_CALIBRATED_CI:
-            task_verdict.notes.append(
-                f"{len(units)} scenarios is below {MIN_UNITS_FOR_CALIBRATED_CI}, where the "
-                "percentile interval measures ~7% false positives against a nominal 5%. "
-                "Treat a marginal interval as marginal."
+        for candidate in candidates:
+            bootstrap = clustered_bootstrap(
+                units, baseline, candidate, resamples=resamples, seed=seed, alpha=alpha
             )
-        if bootstrap.excludes_zero and task_verdict.mcnemar.p_value >= alpha:
-            task_verdict.notes.append(
-                "the rate moved but few scenarios flipped their majority "
-                f"(McNemar p={task_verdict.mcnemar.p_value:.3f}). A uniform shift, not a set "
-                "of scenarios breaking -- see the 2x2 before acting."
+            contrast = Contrast(
+                task_id=task_id,
+                scene_id=scene_id,
+                baseline=baseline,
+                candidate=candidate,
+                cells=contingency(units, baseline, candidate, rule),
+                mcnemar=mcnemar_exact(contingency(units, baseline, candidate, rule)),
+                bootstrap=bootstrap,
             )
-        verdict.tasks.append(task_verdict)
+            raw_p[(scene_id, task_id, candidate)] = bootstrap.p_value
+            task.contrasts.append(contrast)
+        verdict.tasks.append(task)
+
+    adjusted = holm(raw_p) if correct else dict(raw_p)
+    verdict.family_size = len(raw_p)
+
+    for task in verdict.tasks:
+        for contrast in task.contrasts:
+            key = (task.scene_id, task.task_id, contrast.candidate)
+            contrast.adjusted_p = adjusted[key]
+            if contrast.adjusted_p < alpha:
+                contrast.gate = (
+                    "regressed" if contrast.bootstrap.difference < 0 else "improved"
+                )
+            if task.units < MIN_UNITS_FOR_CALIBRATED_CI:
+                contrast.notes.append(
+                    f"{task.units} scenarios is below {MIN_UNITS_FOR_CALIBRATED_CI}, where the "
+                    "percentile interval measures ~7% false positives against a nominal 5%."
+                )
+            if contrast.gate != "ok" and contrast.mcnemar.p_value >= alpha:
+                contrast.notes.append(
+                    "the rate moved but few scenarios flipped their majority "
+                    f"(McNemar p={contrast.mcnemar.p_value:.3f}). A uniform shift, not a set "
+                    "of scenarios breaking -- read the 2x2 before acting."
+                )
+
+    if verdict.family_size > 1:
+        verdict.notes.append(
+            f"{verdict.family_size} contrasts "
+            f"({len(candidates)} checkpoint(s) x {len(verdict.tasks)} task(s)); "
+            f"p-values are Holm-adjusted across all of them. Uncorrected, the chance of at "
+            f"least one false positive here would be about "
+            f"{1 - (1 - alpha) ** verdict.family_size:.0%}."
+        )
 
     return verdict
 
 
-def render(verdict: Verdict) -> str:
-    """The report. Overlap first, then the 2x2, then the tests, then the gate."""
-    a, b = verdict.a, verdict.b
-    lines: list[str] = []
+def _pattern_label(pattern: tuple[bool, ...], checkpoints: Sequence[str]) -> str:
+    solved = [c for c, ok in zip(checkpoints, pattern) if ok]
+    if not solved:
+        return "none solve"
+    if len(solved) == len(checkpoints):
+        return "all solve"
+    return "only " + ", ".join(solved)
 
-    # Overlap above everything else, never in a footnote: silently comparing an
-    # intersection while believing you compared everything is the failure this
-    # exists to prevent.
+
+def render(verdict: Verdict) -> str:
+    """Overlap first, then what changed, then the tests, then the gate."""
+    lines: list[str] = []
     lines.extend(f"  {line}" for line in verdict.eligibility.summary_lines())
     lines.append("")
 
-    for blocker in verdict.blocking:
-        lines.append(f"  BLOCKED: {blocker}")
     if verdict.blocking:
-        lines.append("")
-        return "\n".join(lines)
+        for blocker in verdict.blocking:
+            lines.append(f"  BLOCKED: {blocker}")
+        return "\n".join(lines) + "\n"
 
+    checkpoints = verdict.checkpoints
     for task in verdict.tasks:
         lines.append(f"  {task.scene_id} / {task.task_id}   ({task.units} scenarios)")
-        lines.append(f"    {a}: {task.rate_a:.1%}    {b}: {task.rate_b:.1%}")
-        cells = task.cells
-        lines.append(f"                        {b} fails   {b} succeeds")
         lines.append(
-            f"      {a} fails        {cells.both_fail:>9}   {cells.only_b_passes:>11}"
+            "    rates:  "
+            + "   ".join(f"{c}: {task.rates[c]:.1%}" for c in checkpoints)
+            + f"    (baseline {verdict.baseline})"
         )
-        lines.append(
-            f"      {a} succeeds     {cells.only_a_passes:>9}   {cells.both_pass:>11}"
-        )
-        lines.append(
-            f"    McNemar (reported):  p={task.mcnemar.p_value:.4f}  "
-            f"n_discordant={task.mcnemar.n}"
-        )
-        lines.append(
-            f"    bootstrap (gates):   {task.bootstrap.difference:+.3f} "
-            f"[{task.bootstrap.low:+.3f}, {task.bootstrap.high:+.3f}]"
-        )
-        marker = {"regressed": "REGRESSED", "improved": "improved", "ok": "no change"}
-        lines.append(f"    verdict: {marker[task.gate]}")
-        for note in task.notes:
-            lines.append(f"      note: {note}")
+
+        if len(checkpoints) > 2:
+            lines.append("    outcome patterns:")
+            for pattern, count in sorted(
+                task.patterns.items(), key=lambda kv: (-kv[1], kv[0])
+            ):
+                lines.append(
+                    f"      {count:>5}  {_pattern_label(pattern, checkpoints)}"
+                )
+            lines.append(
+                f"    Cochran Q (screen):  Q={task.cochran.statistic:.2f} "
+                f"p={task.cochran.p_value:.4f}  ({task.cochran.detail})"
+            )
+        else:
+            cells = task.contrasts[0].cells
+            a, b = verdict.baseline, task.contrasts[0].candidate
+            lines.append(f"                        {b} fails   {b} succeeds")
+            lines.append(f"      {a} fails        {cells.both_fail:>9}   {cells.only_b_passes:>11}")
+            lines.append(f"      {a} succeeds     {cells.only_a_passes:>9}   {cells.both_pass:>11}")
+
+        for contrast in task.contrasts:
+            marker = {"regressed": "REGRESSED", "improved": "improved", "ok": "no change"}
+            lines.append(
+                f"    {verdict.baseline} -> {contrast.candidate}: "
+                f"{contrast.bootstrap.difference:+.3f} "
+                f"[{contrast.bootstrap.low:+.3f}, {contrast.bootstrap.high:+.3f}]  "
+                f"p={contrast.bootstrap.p_value:.4f} "
+                f"holm={contrast.adjusted_p:.4f}  "
+                f"McNemar p={contrast.mcnemar.p_value:.4f}  "
+                f"-> {marker[contrast.gate]}"
+            )
+            for note in contrast.notes:
+                lines.append(f"      note: {note}")
         lines.append("")
 
     for note in verdict.notes:
         lines.append(f"  note: {note}")
-
     return "\n".join(lines)
 
 
 __all__ = [
     "MIN_UNITS_FOR_CALIBRATED_CI",
+    "Contrast",
     "TaskVerdict",
     "Verdict",
     "evaluate",
