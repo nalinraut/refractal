@@ -60,12 +60,36 @@ def filter_key(scenario_set: ScenarioSet, scene_hash: str) -> str:
     )
 
 
+def filter_source_sha(callable_obj: Any) -> str | None:
+    """Hash a callable's own source text, or None when it has none to read."""
+    import inspect
+
+    try:
+        source = inspect.getsource(callable_obj)
+    except (OSError, TypeError):
+        return None
+    return hash_obj({"source": source})
+
+
 class FilterEntry(Strict):
     scenario_set_id: str
     key: str
     survivors: list[str]
     generated: int
     dropped: int
+    #: sha256 of ``inspect.getsource`` of the resolved filter callable.
+    #:
+    #: Deliberately NOT part of ``key``. ``resolve`` has to be able to recompute
+    #: the key to detect staleness, and recomputing a source hash means importing
+    #: the filter -- which is the thing filters were moved to ``build`` to avoid,
+    #: since a reachability filter drags in a kinematics stack. So the body is
+    #: recorded here and verified separately, best-effort.
+    #:
+    #: **Known limit:** this covers the function's own source text. A filter that
+    #: calls a helper, or imports a module whose behaviour changed, still hashes
+    #: the same. It catches the common case -- someone edits the filter and
+    #: re-plans -- and does not pretend to catch every case.
+    source_sha: str | None = None
 
 
 class ShapeEntry(Strict):
@@ -100,6 +124,42 @@ class BuildLock(Strict):
                 file=LOCK_FILENAME,
             )
         return set(entry.survivors)
+
+    def check_filter_source(self, scenario_set: ScenarioSet) -> str | None:
+        """Best-effort check that the filter's body is the one that ran.
+
+        Importing the filter may fail -- that is the normal case on a laptop with
+        no simulator, and it must stay normal, so a failed import returns a note
+        rather than raising. On the machine where ``build`` ran the import
+        succeeds and a body edit is caught, which is where the mistake actually
+        gets made.
+        """
+        entry = next(
+            (f for f in self.filters if f.scenario_set_id == scenario_set.id), None
+        )
+        if entry is None or entry.source_sha is None or scenario_set.filter is None:
+            return None
+        try:
+            from ..schema.importstr import resolve_import_string
+
+            current = filter_source_sha(resolve_import_string(scenario_set.filter))
+        except Exception as exc:
+            return (
+                f"could not verify the body of filter {scenario_set.filter!r} "
+                f"({type(exc).__name__}); the recorded survivors are trusted. Run "
+                "'refractal build' where the filter is importable to re-verify."
+            )
+        if current is None:
+            return f"filter {scenario_set.filter!r} has no readable source to verify"
+        if current != entry.source_sha:
+            raise CatalogError(
+                f"the body of filter {scenario_set.filter!r} changed since build.lock was "
+                f"written, though its name did not. The recorded survivors for "
+                f"{scenario_set.id!r} were computed by different logic. Re-run "
+                "'refractal build'.",
+                file=LOCK_FILENAME,
+            )
+        return None
 
     def check_filter_fresh(self, scenario_set: ScenarioSet, scene_hash: str) -> None:
         entry = next(
@@ -147,5 +207,6 @@ __all__ = [
     "SceneEntry",
     "ShapeEntry",
     "filter_key",
+    "filter_source_sha",
     "load_lock",
 ]

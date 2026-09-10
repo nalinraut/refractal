@@ -343,7 +343,11 @@ class Checkpoint(Strict):
     path: str
     server: ImportString
     server_args: dict[str, Any] = Field(default_factory=dict)
-    vram_mb: int = Field(default=8192, gt=0)
+    #: ``ge=0``, not ``gt=0``: a CPU-only policy needs no VRAM, and so does the
+    #: echo server the `refractal init` example ships. Requiring a positive
+    #: value would make the shipped example unplannable, which is how this was
+    #: found.
+    vram_mb: int = Field(default=8192, ge=0)
 
     @model_validator(mode="after")
     def _check(self) -> "Checkpoint":

@@ -72,6 +72,39 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    from .init import init
+
+    written = init(args.target, force=args.force)
+    catalog = Path(args.target) / "catalog"
+    print(f"  wrote {len(written)} file(s) under {args.target}")
+    print(f"  next:  refractal plan {catalog} --hardware laptop")
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    import uuid
+
+    from .execute import run_local
+    from .schema.plan import read_plan
+
+    plan = read_plan(args.plan)
+    session_id = args.session_id or uuid.uuid4().hex
+    summary = run_local(
+        plan,
+        args.results,
+        catalog_root=args.catalog,
+        session_id=session_id,
+        resume=not args.no_resume,
+    )
+    print(
+        f"  session {summary.session_id[:8]}  "
+        f"{summary.written} episode(s) written, {summary.skipped} already done"
+    )
+    print(f"  next:  refractal compare {args.results} {plan.plan_id}")
+    return 0
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     """Exit code is the gate. 0 clean, 1 regression, 2 unanswerable."""
     from .compare import build_units, evaluate, render
@@ -133,6 +166,26 @@ def build_parser() -> argparse.ArgumentParser:
         "(at 90s load, packing eleven scenes costs 16 minutes of pure loading)",
     )
     plan.set_defaults(func=cmd_plan)
+
+    init_cmd = sub.add_parser(
+        "init", help="write a working example catalog", description=
+        "The example declares no filter on purpose: filters need 'refractal build', "
+        "which needs the engine, so a filtered example could not be planned.")
+    init_cmd.add_argument("target", nargs="?", default=".", help="directory to write into")
+    init_cmd.add_argument("--force", action="store_true", help="overwrite existing files")
+    init_cmd.set_defaults(func=cmd_init)
+
+    run_cmd = sub.add_parser("run", help="execute a plan")
+    run_cmd.add_argument("plan", help="path to plan.json")
+    run_cmd.add_argument("-o", "--results", default="./results", help="results URI")
+    run_cmd.add_argument("--catalog", help="catalog to copy in as provenance")
+    run_cmd.add_argument(
+        "--backend", choices=("local",), default="local",
+        help="only 'local' exists so far; compose and k8s are later steps")
+    run_cmd.add_argument("--session-id", help="fixed session id, for reproducible tests")
+    run_cmd.add_argument("--no-resume", action="store_true",
+                         help="re-run episodes that already have results")
+    run_cmd.set_defaults(func=cmd_run)
 
     build_cmd = sub.add_parser(
         "build",

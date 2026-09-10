@@ -1,5 +1,7 @@
+import importlib
 import json
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -199,3 +201,64 @@ class TestDeterminism(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFilterBodyIsHashed(unittest.TestCase):
+    """The name is not enough: editing the body without renaming must be caught.
+
+    Same class as the mesh case, and less obvious, because nothing about the
+    catalog changed at all.
+    """
+
+    def _write_filter(self, pkg_dir: Path, threshold: float):
+        (pkg_dir / "movable_filter.py").write_text(
+            f"def reachable(scenario):\n"
+            f"    return abs(scenario.get('vial_y', 0.0)) <= {threshold}\n",
+            encoding="utf-8",
+        )
+        for name in list(sys.modules):
+            if name == "movable_filter":
+                del sys.modules[name]
+        importlib.invalidate_caches()
+
+    def test_editing_the_body_invalidates_the_lock(self):
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            pkg_dir = root.parent
+            sys.path.insert(0, str(pkg_dir))
+            try:
+                self._write_filter(pkg_dir, 0.05)
+                with_filter(tmp, root, "movable_filter:reachable")
+                report = build(root)
+                self.assertIsNotNone(report.lock.filters[0].source_sha)
+
+                # Same name, same catalog, different logic.
+                self._write_filter(pkg_dir, 0.02)
+                with self.assertRaises(CatalogError) as ctx:
+                    resolve(root, hardware_profile=HARDWARE)
+                self.assertIn("though its name did not", str(ctx.exception))
+            finally:
+                sys.path.remove(str(pkg_dir))
+                sys.modules.pop("movable_filter", None)
+
+    def test_an_unimportable_filter_degrades_to_a_warning_not_a_failure(self):
+        """A laptop with no simulator must still be able to plan."""
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            with_filter(tmp, root)
+            build(root)
+            # Rewrite the lock to name a filter nothing here can import, keeping
+            # the key consistent so only the body check can fire.
+            lock_path = root / LOCK_FILENAME
+            doc = json.loads(lock_path.read_text(encoding="utf-8"))
+            lock_path.write_text(json.dumps(doc), encoding="utf-8")
+            tmp.edit(
+                "scenarios.yaml",
+                lambda d: d["scenario_sets"][0].__setitem__(
+                    "filter", "tests.fixture_filters:reachable"
+                ),
+            )
+            plan = resolve(root, hardware_profile=HARDWARE)
+            self.assertTrue(plan.total_episodes > 0)

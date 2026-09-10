@@ -65,6 +65,9 @@ def resolve(
     for scenario_set in catalog.active_scenario_sets():
         if lock is not None:
             lock.check_filter_fresh(scenario_set, scene_hashes[scenario_set.scene])
+            unverifiable = lock.check_filter_source(scenario_set)
+            if unverifiable:
+                warnings.append(unverifiable)
         produced = generate_scenarios(scenario_set, lock)
         if scenario_set.filter is not None and lock is not None:
             entry = next(f for f in lock.filters if f.scenario_set_id == scenario_set.id)
