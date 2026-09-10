@@ -100,6 +100,21 @@ def cmd_compare(args: argparse.Namespace) -> int:
     return verdict.exit_code
 
 
+def cmd_build(args: argparse.Namespace) -> int:
+    """Establish the facts that need an engine, and write catalog/build.lock."""
+    from .build import build as build_catalog
+
+    report = build_catalog(args.catalog, hardware_profile=args.hardware)
+    for line in report.summary_lines():
+        print(line)
+    for note in report.notes:
+        print(f"  {note}")
+    for warning in report.warnings:
+        print(f"  warning: {warning}", file=sys.stderr)
+    print(f"  wrote {Path(args.catalog) / 'build.lock'}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="refractal", description=__doc__)
     parser.add_argument("--version", action="version", version=f"refractal {__version__}")
@@ -118,6 +133,16 @@ def build_parser() -> argparse.ArgumentParser:
         "(at 90s load, packing eleven scenes costs 16 minutes of pure loading)",
     )
     plan.set_defaults(func=cmd_plan)
+
+    build_cmd = sub.add_parser(
+        "build",
+        help="compute scene hashes, evaluate filters, record resource shapes",
+        description="Runs where the engine is installed. Writes catalog/build.lock; "
+        "never rewrites hand-authored YAML.",
+    )
+    build_cmd.add_argument("catalog", help="path to the catalog directory")
+    build_cmd.add_argument("--hardware", help="hardware profile to record shapes for")
+    build_cmd.set_defaults(func=cmd_build)
 
     compare = sub.add_parser(
         "compare",

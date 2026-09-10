@@ -121,6 +121,11 @@ class Verdict:
     blocking: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     family_size: int = 0
+    #: Pairs that exist in the data and were never tested, because contrasts run
+    #: against a baseline. Disclosed for the same reason the overlap counts are:
+    #: a reader looking at three rate columns forms a view about every pair,
+    #: including the ones no test covered.
+    untested_pairs: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def regressed(self) -> bool:
@@ -245,6 +250,27 @@ def evaluate(
                     f"(McNemar p={contrast.mcnemar.p_value:.3f}). A uniform shift, not a set "
                     "of scenarios breaking -- read the 2x2 before acting."
                 )
+
+    tested = {(baseline, c) for c in candidates}
+    verdict.untested_pairs = [
+        (x, y)
+        for i, x in enumerate(checkpoints)
+        for y in checkpoints[i + 1 :]
+        if (x, y) not in tested and (y, x) not in tested
+    ]
+    if verdict.untested_pairs:
+        pairs = ", ".join(f"{x} vs {y}" for x, y in verdict.untested_pairs)
+        best = max(checkpoints, key=lambda c: sum(t.rates[c] for t in verdict.tasks))
+        extra = ""
+        if best != baseline and any(best in pair for pair in verdict.untested_pairs):
+            extra = (
+                f" {best} has the highest mean rate here and is in an untested pair, so "
+                "shipping it on this report would mean shipping on a contrast nobody ran."
+            )
+        verdict.notes.append(
+            f"contrasts are against the baseline {baseline!r}, so these pairs were NOT "
+            f"tested: {pairs}. Choosing a baseline is a modelling decision.{extra}"
+        )
 
     if verdict.family_size > 1:
         verdict.notes.append(

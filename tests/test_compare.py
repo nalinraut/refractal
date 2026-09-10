@@ -483,3 +483,39 @@ class TestMultiplicityCorrection(unittest.TestCase):
         )
         note = next(n for n in verdict.notes if "Holm-adjusted" in n)
         self.assertIn("14%", note)   # 1 - 0.95^3
+
+
+class TestUntestedPairsAreDisclosed(unittest.TestCase):
+    """Baseline choice is a modelling decision, so say what it left out."""
+
+    def _verdict(self, rates, baseline):
+        rows = []
+        for checkpoint, rate in rates.items():
+            for row in rows_for(
+                success_rate=0.5, scenario_spread=0.30, salt="u0",
+                per_task={(B, "vial-slot-7"): rate},
+            ):
+                if row["checkpoint_id"] == B:
+                    rows.append({**row, "checkpoint_id": checkpoint})
+        names = list(rates)
+        return evaluate(
+            build_units(rows, checkpoints=names), names,
+            baseline=baseline, resamples=400, seed=3,
+        )
+
+    def test_two_checkpoints_leave_nothing_untested(self):
+        verdict = self._verdict({A: 0.5, B: 0.6}, A)
+        self.assertEqual(verdict.untested_pairs, [])
+
+    def test_three_checkpoints_leave_one_pair_untested(self):
+        verdict = self._verdict({A: 0.5, B: 0.6, C: 0.7}, A)
+        self.assertEqual(verdict.untested_pairs, [(B, C)])
+        self.assertTrue(any("NOT tested" in n for n in verdict.notes))
+
+    def test_it_warns_when_the_best_checkpoint_is_in_an_untested_pair(self):
+        # The case that actually bites: the reader wants to ship the leader, and
+        # no contrast covers it against the runner-up.
+        verdict = self._verdict({A: 0.50, B: 0.80, C: 0.75}, A)
+        note = next(n for n in verdict.notes if "NOT tested" in n)
+        self.assertIn("highest mean rate", note)
+        self.assertIn("nobody ran", note)
