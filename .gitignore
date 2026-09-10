@@ -1,8 +1,12 @@
+# Anchored to the repo root. An unanchored `build/` also matches
+# src/refractal/build/, which silently kept the whole `refractal build` package
+# out of git -- `git status` stayed clean, the tests passed against the working
+# tree, and the wheel shipped without it. Anchor these.
 __pycache__/
 *.py[cod]
-.venv/
-dist/
-build/
 *.egg-info/
-results/
-plan.json
+.venv/
+/build/
+/dist/
+/results/
+/plan.json

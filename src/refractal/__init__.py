@@ -99,6 +99,11 @@ and leaving a ``scene_hash`` mismatch as a note would have demoted a
 precondition to provenance.
 """
 
-__version__ = "0.1.0.dev0"
+try:  # single source of truth is pyproject; this mirrors it at runtime
+    from importlib.metadata import PackageNotFoundError, version as _version
+
+    __version__ = _version("refractal")
+except (ImportError, PackageNotFoundError):  # running from a source tree
+    __version__ = "0.0.0+source"
 
 __all__ = ["__version__"]
