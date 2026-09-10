@@ -1,0 +1,20 @@
+apiVersion: refractal.dev/v1alpha1
+scenario_sets:
+  - id: vial-grid
+    scene: vial-rack-v1
+    generator: refractal.generators:linspace_grid
+    generator_seed: 12345
+    params:
+      vial_x:   {range: [0.08, 0.16], steps: 5}
+      vial_y:   {range: [-0.08, 0.08], steps: 8}
+      friction: {choices: [0.4, 0.6, 0.8]}
+    faults: []          # reserved; validated and inert in v1
+
+  - id: cube-grid
+    scene: cube-bowl-v1
+    generator: refractal.generators:latin_hypercube
+    generator_seed: 999
+    params:
+      cube_x:   {range: [0.05, 0.20], samples: 24, distribution: uniform}
+      cube_y:   {range: [-0.10, 0.10], samples: 24, distribution: uniform}
+      bowl_yaw: {value: 0.0}

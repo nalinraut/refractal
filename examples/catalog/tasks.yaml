@@ -1,0 +1,29 @@
+apiVersion: refractal.dev/v1alpha1
+tasks:
+  # Two tasks on one scene share a batch: the goal, the instruction and the
+  # success check all live outside the physics tensor.
+  - id: vial-slot-4
+    scene: vial-rack-v1
+    instruction: "put the vial in slot 4"
+    predicate: so101_eval.predicates:object_in_slot
+    predicate_args: {object: vial, slot: 4}
+    max_steps: 400
+    phases:
+      - {name: reach,     predicate: so101_eval.predicates:ee_near, predicate_args: {target: vial, tol: 0.02}}
+      - {name: grasp,     predicate: so101_eval.predicates:lifted,  predicate_args: {object: vial, height: 0.02}}
+      - {name: transport, predicate: so101_eval.predicates:over,    predicate_args: {object: vial, target: slot_4}}
+      - {name: place,     predicate: so101_eval.predicates:seated,  predicate_args: {object: vial, slot: 4}}
+
+  - id: vial-slot-7
+    scene: vial-rack-v1
+    instruction: "put the vial in slot 7"
+    predicate: so101_eval.predicates:object_in_slot
+    predicate_args: {object: vial, slot: 7}
+    max_steps: 400
+
+  - id: cube-in-bowl
+    scene: cube-bowl-v1
+    instruction: "put the cube in the bowl"
+    predicate: so101_eval.predicates:object_in_container
+    predicate_args: {object: cube, container: bowl}
+    max_steps: 300

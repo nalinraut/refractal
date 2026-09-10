@@ -1,0 +1,30 @@
+apiVersion: refractal.dev/v1alpha1
+scenes:
+  # The affinity key. Work cannot move between scenes, because vectorized
+  # environments require identical structure.
+  - id: vial-rack-v1
+    engine: mujoco
+    model: assets/vial_rack.xml
+    engine_version: "3.2.0"
+    model_hash: null            # written by `refractal build`
+    resource_shape:
+      - hardware_profile: rtx5090
+        envs_per_process: 1     # classic MuJoCo: one env per process
+        vram_per_env_mb: 0      # CPU-only, so the model server is the sole GPU consumer
+        cpu_cores: 1
+        sec_per_1k_steps: 72
+        startup_sec: 3
+    description: contact-rich insertion; slots deliberately generous under MuJoCo's soft contacts
+
+  - id: cube-bowl-v1
+    engine: mujoco
+    model: assets/cube_bowl.xml
+    engine_version: "3.2.0"
+    resource_shape:
+      - hardware_profile: rtx5090
+        envs_per_process: 1
+        vram_per_env_mb: 0
+        cpu_cores: 1
+        sec_per_1k_steps: 41
+        startup_sec: 3
+    description: contact-light and forgiving; record this one first to shake out teleop

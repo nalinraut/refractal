@@ -1,0 +1,19 @@
+apiVersion: refractal.dev/v1alpha1
+run:
+  # A list, always. Two is the common case, not a special one; a single
+  # checkpoint is a comparison of size one.
+  checkpoints:
+    - id: ckpt-46
+      path: ./checkpoints/gr00t-n16-46
+      server: so101_eval.servers:GR00TServer
+      server_args: {max_batch_size: 8}   # upstream default is 1, i.e. an idle GPU
+      vram_mb: 8192
+    - id: ckpt-47
+      path: ./checkpoints/gr00t-n16-47
+      server: so101_eval.servers:GR00TServer
+      server_args: {max_batch_size: 8}
+      vram_mb: 8192
+  seeds: 3
+  tier: regression
+  execution_mode: interleaved
+  results_uri: ./results

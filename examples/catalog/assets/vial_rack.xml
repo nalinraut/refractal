@@ -1,0 +1,14 @@
+<!-- Placeholder geometry. Enough to be a real file with a real hash; not enough
+     to be a real scene. Replaced when the SO-101 adapter lands at step 4. -->
+<mujoco model="vial_rack">
+  <worldbody>
+    <geom name="table" type="plane" size="1 1 0.1"/>
+    <body name="rack" pos="0.2 0 0">
+      <geom name="rack_body" type="box" size="0.08 0.04 0.02"/>
+    </body>
+    <body name="vial" pos="0.12 0 0.05">
+      <freejoint/>
+      <geom name="vial_body" type="cylinder" size="0.008 0.03"/>
+    </body>
+  </worldbody>
+</mujoco>

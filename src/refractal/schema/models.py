@@ -1,0 +1,447 @@
+"""Catalog models.
+
+Field-for-field from the API reference, with the deviations marked ``DEVIATION``
+and argued in the docstring beside them. Nothing in this module imports a
+simulator, a GPU library, Docker or the harness; nothing here does I/O beyond
+what :mod:`refractal.schema.loader` hands it.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .errors import NotImplementedInV1
+from .importstr import validate_import_string
+
+API_VERSION = "refractal.dev/v1alpha1"
+
+_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+
+
+def _check_id(value: str) -> str:
+    if not _ID_RE.match(value):
+        raise ValueError(
+            f"{value!r} is not a valid id: lowercase alphanumerics and hyphens, "
+            "not starting or ending with a hyphen"
+        )
+    return value
+
+
+Id = Annotated[str, Field(min_length=1, max_length=128)]
+ImportString = Annotated[str, Field(min_length=3)]
+
+
+class Strict(BaseModel):
+    """Base config for every catalog model.
+
+    ``extra="forbid"`` is the single highest-value line in this file. A typo in
+    a YAML key is the most common failure mode in configuration-driven systems,
+    and silently accepting it costs an afternoon.
+
+    ``protected_namespaces=()`` is needed because the spec names two fields
+    ``model`` and ``model_hash``, which collide with pydantic's reserved
+    ``model_*`` namespace. That collision is a small argument for the rename
+    proposed in the review notes: the value is called ``scene_hash`` everywhere
+    downstream anyway.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        protected_namespaces=(),
+        frozen=True,
+    )
+
+
+class ApiObject(Strict):
+    api_version: Literal[API_VERSION] = Field(alias="apiVersion")
+
+
+# --------------------------------------------------------------------------
+# scenes.yaml
+# --------------------------------------------------------------------------
+
+
+class ResourceShape(Strict):
+    """Given this scene on this hardware: how much machine per worker, how wide a batch.
+
+    A property of the scene, not of the run. Keyed by
+    ``(scene, engine, hardware_profile)`` -- 512 envs on a 5090 is not 512 on an
+    A100.
+    """
+
+    hardware_profile: str
+    envs_per_process: int = Field(gt=0)
+    vram_per_env_mb: int = Field(ge=0)
+    vram_base_mb: int = Field(default=0, ge=0)
+    cpu_cores: int = Field(gt=0)
+    memory_mb: int = Field(default=2048, gt=0)
+    sec_per_1k_steps: float = Field(gt=0)
+    startup_sec: int = Field(ge=0)
+    max_envs: int | None = Field(default=None, gt=0)
+    measured_at: str | None = None
+
+    @model_validator(mode="after")
+    def _check_max_envs(self) -> "ResourceShape":
+        if self.max_envs is not None and self.max_envs < self.envs_per_process:
+            raise ValueError(
+                f"max_envs ({self.max_envs}) is below envs_per_process "
+                f"({self.envs_per_process}); max_envs is a ceiling the planner may "
+                "raise the batch to, not a floor"
+            )
+        return self
+
+    def vram_mb(self, envs: int | None = None) -> int:
+        """Total VRAM for one worker at the given batch width."""
+        return self.vram_base_mb + self.vram_per_env_mb * (envs or self.envs_per_process)
+
+
+class Scene(Strict):
+    """The physical world. **The affinity key.**
+
+    Two scenarios belong to the same scene iff they compile to the same physics
+    model and differ only in that model's data. Body, joint and geom counts and
+    collision pairs live in the model, so they split scenes; position,
+    orientation, mass, friction and damping live in the data, so they do not.
+    """
+
+    id: Id
+    engine: Literal["mujoco", "mjx", "isaac"]
+    model: str
+    #: DEVIATION: added. ``model_hash`` is specified as covering "the engine
+    #: version string", but nothing in the schema carries an engine version and
+    #: ``resolve`` runs where no engine is installed to be asked. So the version
+    #: is a declared field, written by ``refractal build`` where the engine does
+    #: exist, alongside the hash itself.
+    engine_version: str | None = None
+    model_hash: str | None = None
+    assets: list[str] = Field(default_factory=list)
+    resource_shape: list[ResourceShape] = Field(default_factory=list)
+    description: str = ""
+
+    @model_validator(mode="after")
+    def _check(self) -> "Scene":
+        _check_id(self.id)
+        seen = set()
+        for shape in self.resource_shape:
+            if shape.hardware_profile in seen:
+                raise ValueError(
+                    f"scene {self.id!r} has two resource shapes for hardware profile "
+                    f"{shape.hardware_profile!r}"
+                )
+            seen.add(shape.hardware_profile)
+        return self
+
+    def shape_for(self, hardware_profile: str) -> ResourceShape | None:
+        for shape in self.resource_shape:
+            if shape.hardware_profile == hardware_profile:
+                return shape
+        return None
+
+
+class ScenesFile(ApiObject):
+    scenes: list[Scene] = Field(min_length=1)
+
+
+# --------------------------------------------------------------------------
+# tasks.yaml
+# --------------------------------------------------------------------------
+
+
+class Phase(Strict):
+    """A sub-goal, so an episode yields an outcome vector rather than one bit."""
+
+    name: str = Field(min_length=1)
+    predicate: ImportString
+    predicate_args: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check(self) -> "Phase":
+        validate_import_string(self.predicate)
+        return self
+
+
+class Task(Strict):
+    """What the robot must achieve, and the predicate that decides success.
+
+    Not in the physics model, which is why tasks are cheap to vary and scenes
+    are expensive: 200 tasks over 10 scenes runs far faster than 10 tasks over
+    200 scenes.
+    """
+
+    id: Id
+    scene: Id
+    instruction: str = Field(min_length=1)
+    predicate: ImportString
+    predicate_args: dict[str, Any] = Field(default_factory=dict)
+    phases: list[Phase] = Field(default_factory=list)
+    #: DEVIATION: ``max_steps`` is unmarked in the reference but participates in
+    #: ``task_hash``. Raising it from 400 to 800 changes outcomes, so it changes
+    #: comparability; leaving it out of identity would let a resumed run skip
+    #: episodes recorded under the old limit.
+    max_steps: int = Field(default=400, gt=0)
+    description: str = ""
+
+    @model_validator(mode="after")
+    def _check(self) -> "Task":
+        _check_id(self.id)
+        validate_import_string(self.predicate)
+        names = [p.name for p in self.phases]
+        if len(names) != len(set(names)):
+            raise ValueError(f"task {self.id!r} declares duplicate phase names: {names}")
+        return self
+
+
+class TasksFile(ApiObject):
+    tasks: list[Task] = Field(min_length=1)
+
+
+# --------------------------------------------------------------------------
+# scenarios.yaml
+# --------------------------------------------------------------------------
+
+
+class ParamSpec(Strict):
+    """One parameter axis. Exactly one form; mixing them is a validation error.
+
+    | Form     | Fields                                       |
+    |----------|----------------------------------------------|
+    | range    | ``range: [min, max]``, ``steps``             |
+    | choices  | ``choices: [...]``                           |
+    | constant | ``value: x``                                 |
+    | random   | ``range``, ``samples``, ``distribution``     |
+    """
+
+    range: list[float] | None = None
+    steps: int | None = Field(default=None, gt=0)
+    choices: list[Any] | None = None
+    value: Any = None
+    samples: int | None = Field(default=None, gt=0)
+    distribution: Literal["uniform", "normal"] | None = None
+    mean: float | None = None
+    std: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _check_form(self) -> "ParamSpec":
+        form = self.form
+
+        if form in ("range", "random"):
+            if self.range is None or len(self.range) != 2:
+                raise ValueError("range must be a two-element [min, max]")
+            if self.range[0] > self.range[1]:
+                raise ValueError(f"range min {self.range[0]} exceeds max {self.range[1]}")
+        if form == "range" and self.steps is None:
+            raise ValueError("range form requires 'steps'")
+        if form == "random":
+            if self.distribution is None:
+                raise ValueError("random form requires 'distribution' (uniform or normal)")
+            if self.distribution == "normal" and (self.mean is None or self.std is None):
+                raise ValueError("normal distribution requires 'mean' and 'std'")
+            if self.distribution == "uniform" and (self.mean is not None or self.std is not None):
+                raise ValueError("'mean' and 'std' apply only to the normal distribution")
+        if form == "choices" and not self.choices:
+            raise ValueError("choices must be non-empty")
+        return self
+
+    @property
+    def form(self) -> str:
+        """Which of the four forms this spec uses.
+
+        Derived from ``model_fields_set`` rather than from "is not None", so
+        that an explicit ``value: null`` reads as a constant rather than as an
+        absent field. Kept as a property rather than stored so the model stays
+        frozen and round-trips through ``model_dump`` unchanged.
+        """
+        given = self.model_fields_set
+        forms = []
+        if "samples" in given:
+            forms.append("random")
+        elif "steps" in given or "range" in given:
+            forms.append("range")
+        if "choices" in given:
+            forms.append("choices")
+        if "value" in given:
+            forms.append("constant")
+        if len(forms) != 1:
+            raise ValueError(
+                "a parameter must use exactly one form -- range+steps, choices, "
+                "value, or range+samples+distribution -- "
+                f"but got keys {sorted(given)}"
+            )
+        return forms[0]
+
+    def cardinality(self) -> int:
+        """How many values this axis contributes to a full cross product."""
+        if self.form == "range":
+            return int(self.steps or 1)
+        if self.form == "choices":
+            return len(self.choices or ())
+        if self.form == "random":
+            return int(self.samples or 1)
+        return 1
+
+
+class FaultSpec(Strict):
+    """**Reserved.** Validated, never executed in v1.
+
+    The hook exists so that the scenario identity format does not change when
+    Transect arrives. Note that this is not achieved by the field's presence
+    alone -- see ``identity.scenario_identity``, which folds an (empty) faults
+    list into every scenario's canonical form from the first commit. Without
+    that, adding faults later would change the shape of the hashed document and
+    invalidate every previously recorded scenario_hash, which is precisely what
+    reserving the field was meant to prevent.
+    """
+
+    at_step: int = Field(ge=0)
+    type: str
+    target: str
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScenarioSet(Strict):
+    id: Id
+    scene: Id
+    generator: ImportString
+    #: No default, deliberately: an unseeded generator cannot be reproduced, and
+    #: a default would let you forget.
+    generator_seed: int
+    params: dict[str, ParamSpec] = Field(min_length=1)
+    filter: ImportString | None = None
+    tasks: list[Id] | None = None
+    faults: list[FaultSpec] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check(self) -> "ScenarioSet":
+        _check_id(self.id)
+        validate_import_string(self.generator)
+        if self.filter is not None:
+            validate_import_string(self.filter)
+        if self.faults:
+            raise NotImplementedInV1(
+                f"scenario_set {self.id!r} declares faults. Fault injection is Transect, "
+                "not in this version. The key is reserved and validated so the scenario "
+                "hash format will not change when it lands; leave it empty."
+            )
+        return self
+
+
+class ScenariosFile(ApiObject):
+    scenario_sets: list[ScenarioSet] = Field(min_length=1)
+
+
+# --------------------------------------------------------------------------
+# run.yaml
+# --------------------------------------------------------------------------
+
+
+class Checkpoint(Strict):
+    id: Id
+    path: str
+    server: ImportString
+    server_args: dict[str, Any] = Field(default_factory=dict)
+    vram_mb: int = Field(default=8192, gt=0)
+
+    @model_validator(mode="after")
+    def _check(self) -> "Checkpoint":
+        _check_id(self.id)
+        validate_import_string(self.server)
+        return self
+
+
+class Run(Strict):
+    checkpoints: list[Checkpoint] = Field(min_length=1)
+    results_uri: str = Field(min_length=1)
+    seeds: int = Field(default=3, gt=0)
+    seed_base: int = 0
+    tier: Literal["smoke", "regression", "full"] = "full"
+    scenario_sets: list[Id] | None = None
+    execution_mode: Literal["interleaved", "serial"] = "interleaved"
+    max_concurrent_checkpoints: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _check(self) -> "Run":
+        ids = [c.id for c in self.checkpoints]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"duplicate checkpoint ids: {ids}")
+        return self
+
+    def seed_values(self) -> list[int]:
+        """The seeds every checkpoint faces.
+
+        Identical across checkpoints by construction -- that is what makes the
+        comparison paired. If two checkpoints saw different seeds there would be
+        nothing to run McNemar's test on.
+        """
+        return [self.seed_base + i for i in range(self.seeds)]
+
+
+class RunFile(ApiObject):
+    run: Run
+
+
+# --------------------------------------------------------------------------
+# hardware.yaml -- DEVIATION: proposed addition, see the review notes
+# --------------------------------------------------------------------------
+
+
+class Device(Strict):
+    id: str  # "cuda:0", "cpu"
+    vram_mb: int = Field(ge=0)
+
+
+class HardwareProfile(Strict):
+    """What a machine actually has.
+
+    DEVIATION: not in the API reference, and the planner cannot work without it.
+    ``--hardware rtx5090`` selects a *resource shape*, which describes what one
+    worker needs; nothing anywhere describes what the host provides. Yet the
+    reference's own worked example prints ``VRAM: cuda:0 16384 / 32768 MB`` and
+    a total worker count, both of which require a capacity to divide into.
+
+    Deliberately excluded from ``plan_id``: hardware determines placement, not
+    experiment identity. The same experiment planned for a 5090 and for an A100
+    is the same experiment, and its results must join.
+    """
+
+    id: str
+    cpu_cores: int = Field(gt=0)
+    memory_mb: int = Field(gt=0)
+    devices: list[Device] = Field(default_factory=list)
+    max_workers: int | None = Field(default=None, gt=0)
+
+    def device(self, device_id: str) -> Device | None:
+        for d in self.devices:
+            if d.id == device_id:
+                return d
+        return None
+
+
+class HardwareFile(ApiObject):
+    hardware_profiles: list[HardwareProfile] = Field(min_length=1)
+
+
+__all__ = [
+    "API_VERSION",
+    "ApiObject",
+    "Checkpoint",
+    "Device",
+    "FaultSpec",
+    "HardwareFile",
+    "HardwareProfile",
+    "ParamSpec",
+    "Phase",
+    "ResourceShape",
+    "Run",
+    "RunFile",
+    "Scene",
+    "ScenariosFile",
+    "ScenarioSet",
+    "ScenesFile",
+    "Strict",
+    "Task",
+    "TasksFile",
+]
