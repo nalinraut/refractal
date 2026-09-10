@@ -178,7 +178,7 @@ def evaluate(
             "checkpoints being compared: the geometry changed between runs, so these "
             "results are not comparable. Re-run, or compare within one geometry."
         )
-    if len(eligibility.harness_versions) > 1:
+    if len(eligibility.harness_surfaces) > 1:
         # A precondition, not a note. vla-eval's own paper reports a harness-side
         # integration parameter -- the proprioceptive state source fed to the
         # policy -- moving a LIBERO success rate from 97.8% to 42%. Two runs from
@@ -190,18 +190,20 @@ def evaluate(
         # change no behaviour at all. Three of the five commits in the range this
         # was written against were a docs edit, a pin bump and a data refresh.
         # Hence a gate with an explicit override rather than an identity.
-        versions = ", ".join(sorted(eligibility.harness_versions))
+        surfaces = ", ".join(sorted(eligibility.harness_surfaces))
+        versions = ", ".join(sorted(eligibility.harness_versions)) or "unknown"
         if allow_harness_mismatch:
             verdict.overrides.append(
-                f"harness version mismatch waived (--allow-harness-mismatch): {versions}"
+                f"harness surface mismatch waived (--allow-harness-mismatch): {surfaces}"
             )
         else:
             verdict.blocking.append(
-                f"episodes were produced by {len(eligibility.harness_versions)} harness "
-                f"versions ({versions}). A harness change can alter which observation "
-                "parameters reach the benchmark, so these runs may not be measuring the "
-                "same thing. Re-run under one version, or pass --allow-harness-mismatch "
-                "if you know the difference is not behavioural."
+                f"episodes were produced by {len(eligibility.harness_surfaces)} different "
+                f"harness surfaces ({surfaces}; versions {versions}). This digest covers only "
+                "the harness modules Refractal depends on, so it did not move for a docs "
+                "edit or a data refresh -- something behavioural changed. Re-run under one "
+                "surface, or pass --allow-harness-mismatch if you know the difference does "
+                "not affect these results."
             )
 
     if verdict.blocking:
@@ -209,6 +211,15 @@ def evaluate(
         # not also yield a verdict -- `regressed` would then be True on a
         # comparison we refused to make.
         return verdict
+
+    if len(eligibility.harness_versions) > 1:
+        # Provenance: the surfaces agree, so the comparison stands; the reader
+        # should still know two builds were involved.
+        verdict.notes.append(
+            f"episodes came from {len(eligibility.harness_versions)} harness versions "
+            f"({', '.join(sorted(eligibility.harness_versions))}), but the modules Refractal "
+            "depends on are identical across them, so the comparison stands."
+        )
 
     if len(eligibility.sessions) > 1:
         verdict.notes.append(

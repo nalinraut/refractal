@@ -59,10 +59,15 @@ EPISODES_SCHEMA = pa.schema(
         pa.field("session_id", pa.string(), nullable=False),
         pa.field("worker_id", pa.string(), nullable=False),
         pa.field("execution_mode", pa.string(), nullable=False),
-        # Render-time fact, and a behavioural one: dc2c4ba changed which
-        # observation params reach a benchmark. Not knowable at plan time, so it
-        # is caught at read time instead.
+        # Two columns, one of each kind. `harness_version` is provenance: human
+        # readable, never gates. `harness_surface` is a precondition: a digest
+        # over only the harness modules Refractal depends on, so it stays
+        # constant through docs edits and data refreshes and moves when
+        # something behavioural does. Gating on the version instead would fire
+        # on every dependency bump -- measured at 100% of commits -- and a check
+        # that always fires gets waived habitually.
         pa.field("harness_version", pa.string()),
+        pa.field("harness_surface", pa.string()),
         pa.field("success", pa.bool_(), nullable=False),
         # map<string,bool>, not a fixed struct. Two tasks on one scene write to
         # the same file and may declare different phases; a struct has one

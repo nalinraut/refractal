@@ -262,3 +262,46 @@ class TestFilterBodyIsHashed(unittest.TestCase):
             )
             plan = resolve(root, hardware_profile=HARDWARE)
             self.assertTrue(plan.total_episodes > 0)
+
+
+class TestCallableShapesAreChecked(unittest.TestCase):
+    """The predicate/filter swap, caught mechanically rather than by a comment."""
+
+    def test_a_predicate_in_a_filter_field_is_refused(self):
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            # cube_in_bowl is (state, args) -- a predicate, not a filter.
+            with_filter(tmp, root, "refractal.example:cube_in_bowl")
+            with self.assertRaises(Exception) as ctx:
+                build(root)
+            message = str(ctx.exception)
+            self.assertIn("must be (scenario) -> bool", message)
+            self.assertIn("That is the shape of a predicate", message)
+
+    def test_a_real_filter_passes(self):
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            with_filter(tmp, root, FILTER)   # (scenario) -> bool
+            self.assertEqual(len(build(root).lock.filters), 1)
+
+    def test_a_filter_in_a_predicate_field_is_refused(self):
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            tmp.edit(
+                "tasks.yaml",
+                lambda d: d["tasks"][0].__setitem__(
+                    "predicate", "refractal.example:within_reach"
+                ),
+            )
+            with self.assertRaises(Exception) as ctx:
+                build(root)
+            self.assertIn("must be (state, args) -> bool", str(ctx.exception))
+
+    def test_an_unimportable_predicate_is_only_a_note(self):
+        """A catalog may legitimately be built before its adapter is installed."""
+        with Temp() as root:
+            report = build(root)
+            self.assertTrue(any("could not import" in n for n in report.notes))

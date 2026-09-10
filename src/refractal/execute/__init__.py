@@ -13,6 +13,7 @@ Nothing in ``schema`` or ``resolve`` may import anything from here.
 """
 
 from .fake import FakeBenchmark
+from .harness import LOCAL, SURFACE, describe_installed_harness, surface_digest
 from .local import LOCAL_HARNESS_VERSION, RunSummary, run_local
 from .results import EPISODES_SCHEMA, STEPS_SCHEMA, ResultWriter, comparison_prefix, read_episodes
 
@@ -20,7 +21,11 @@ __all__ = [
     "EPISODES_SCHEMA",
     "LOCAL_HARNESS_VERSION",
     "STEPS_SCHEMA",
+    "LOCAL",
+    "SURFACE",
     "FakeBenchmark",
+    "describe_installed_harness",
+    "surface_digest",
     "ResultWriter",
     "RunSummary",
     "comparison_prefix",

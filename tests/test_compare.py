@@ -521,40 +521,59 @@ class TestUntestedPairsAreDisclosed(unittest.TestCase):
         self.assertIn("nobody ran", note)
 
 
-class TestHarnessVersionIsAPrecondition(unittest.TestCase):
-    """Not provenance: it gates, because it can change what was measured.
+class TestHarnessSurfaceIsAPrecondition(unittest.TestCase):
+    """Two columns, one of each kind, and the distinction is the whole point.
 
-    Not identity either: pinning it into plan_id would invalidate every
-    historical comparison on a dependency bump, and most harness commits change
-    no behaviour at all.
+    `harness_version` is provenance: it moves on every release and on most
+    commits, so gating on it would be waived habitually. Measured over the 24
+    most recent harness commits, a whole-tree digest changed on 24 of them.
+
+    `harness_surface` digests only the modules Refractal depends on. Over the
+    same range it changed on 3, and on exactly the two commits that altered
+    behaviour Refractal cares about.
     """
 
-    def _rows(self, versions):
+    def _rows(self, versions, surfaces):
         rows = rows_for(success_rate=0.6, salt="h0")
         for i, row in enumerate(rows):
             row["harness_version"] = versions[i % len(versions)]
+            row["harness_surface"] = surfaces[i % len(surfaces)]
         return rows
 
-    def test_one_version_compares_normally(self):
+    def test_one_of_each_compares_normally(self):
         verdict = evaluate(
-            build_units(self._rows(["v1"]), checkpoints=[A, B]), [A, B],
+            build_units(self._rows(["v1"], ["s1"]), checkpoints=[A, B]), [A, B],
             resamples=200, seed=1,
         )
         self.assertEqual(verdict.blocking, [])
         self.assertNotEqual(verdict.tasks, [])
 
-    def test_two_versions_block_by_default(self):
+    def test_different_versions_with_one_surface_only_note(self):
+        """The case that would have been waived habitually.
+
+        A docs edit, a leaderboard refresh or a pin bump moves the version and
+        not the surface. The comparison stands, and the reader is told.
+        """
         verdict = evaluate(
-            build_units(self._rows(["v1", "v2"]), checkpoints=[A, B]), [A, B],
+            build_units(self._rows(["v1", "v2"], ["s1"]), checkpoints=[A, B]), [A, B],
+            resamples=200, seed=1,
+        )
+        self.assertEqual(verdict.blocking, [])
+        self.assertNotEqual(verdict.tasks, [])
+        self.assertTrue(any("the comparison stands" in n for n in verdict.notes))
+
+    def test_two_surfaces_block_by_default(self):
+        verdict = evaluate(
+            build_units(self._rows(["v1"], ["s1", "s2"]), checkpoints=[A, B]), [A, B],
             resamples=200, seed=1,
         )
         self.assertEqual(verdict.exit_code, 2)
         self.assertEqual(verdict.tasks, [])          # no number produced at all
-        self.assertIn("may not be measuring the same thing", verdict.blocking[0])
+        self.assertIn("something behavioural changed", verdict.blocking[0])
 
     def test_the_override_is_explicit_and_echoed(self):
         verdict = evaluate(
-            build_units(self._rows(["v1", "v2"]), checkpoints=[A, B]), [A, B],
+            build_units(self._rows(["v1"], ["s1", "s2"]), checkpoints=[A, B]), [A, B],
             resamples=200, seed=1, allow_harness_mismatch=True,
         )
         self.assertEqual(verdict.blocking, [])

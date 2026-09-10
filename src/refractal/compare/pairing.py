@@ -112,6 +112,7 @@ class Eligibility:
     seed_counts: dict[int, int] = field(default_factory=dict)
     sessions: set[str] = field(default_factory=set)
     harness_versions: set[str] = field(default_factory=set)
+    harness_surfaces: set[str] = field(default_factory=set)
     scene_hash_conflicts: dict[str, set[str]] = field(default_factory=dict)
 
     def summary_lines(self) -> list[str]:
@@ -170,6 +171,7 @@ def build_units(
     keys: dict[tuple[str, str, str], UnitKey] = {}
     sessions: set[str] = set()
     harness_versions: set[str] = set()
+    harness_surfaces: set[str] = set()
     scene_hashes: dict[str, set[str]] = defaultdict(set)
     infra = 0
 
@@ -184,6 +186,8 @@ def build_units(
         sessions.add(row["session_id"])
         if row.get("harness_version"):
             harness_versions.add(row["harness_version"])
+        if row.get("harness_surface"):
+            harness_surfaces.add(row["harness_surface"])
         scene_hashes[row["scene_id"]].add(row["scene_hash"])
         if row["is_infra_failure"]:
             infra += 1
@@ -199,6 +203,7 @@ def build_units(
         episodes_excluded_infra=infra,
         sessions=sessions,
         harness_versions=harness_versions,
+        harness_surfaces=harness_surfaces,
         scene_hash_conflicts={
             scene: hashes for scene, hashes in scene_hashes.items() if len(hashes) > 1
         },

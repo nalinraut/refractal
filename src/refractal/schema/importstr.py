@@ -47,6 +47,58 @@ def validate_import_string(value: str) -> str:
     return value
 
 
+#: How many positional arguments each kind of user callable takes. They are
+#: different contracts and swapping them is easy, because both are just import
+#: strings in YAML and neither names its shape.
+ARITIES = {
+    "filter": (1, "(scenario) -> bool"),
+    "predicate": (2, "(state, args) -> bool"),
+    "generator": (2, "(params, seed) -> list[dict]"),
+}
+
+
+def check_arity(fn: Any, kind: str, import_string: str) -> None:
+    """Reject a callable whose shape says it is a different kind of thing.
+
+    A comment at the call site protects the person who reads the comment, which
+    is not the person who makes the mistake. This is the same check as a
+    comment, made by the machine: a predicate handed to a `filter:` field has
+    two positional parameters and is refused at build time, rather than raising
+    a TypeError several hundred scenarios into an evaluation.
+
+    ``*args`` is accepted -- a callable that takes anything cannot be shown to be
+    wrong, and refusing it would break legitimate wrappers.
+    """
+    import inspect
+
+    expected, shape = ARITIES[kind]
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return  # builtins and C callables have no introspectable signature
+
+    positional = [
+        p
+        for p in signature.parameters.values()
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+    if any(p.kind is p.VAR_POSITIONAL for p in signature.parameters.values()):
+        return
+
+    required = [p for p in positional if p.default is inspect.Parameter.empty]
+    if len(required) > expected or len(positional) < expected:
+        other = next(
+            (k for k, (n, _) in ARITIES.items() if n == len(positional) and k != kind),
+            None,
+        )
+        hint = f" That is the shape of a {other}." if other else ""
+        raise ImportStringError(
+            f"{import_string!r} is declared as a {kind}, which must be {shape}, but it "
+            f"takes {len(positional)} positional argument(s):"
+            f" {inspect.signature(fn)}.{hint}"
+        )
+
+
 def resolve_import_string(value: str) -> Any:
     """Import and return the symbol. Only ``resolve`` and ``execute`` may call this."""
     validate_import_string(value)

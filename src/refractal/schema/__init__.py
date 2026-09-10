@@ -35,7 +35,7 @@ from .identity import (
     task_hash,
     task_identity,
 )
-from .importstr import resolve_import_string, validate_import_string
+from .importstr import check_arity, resolve_import_string, validate_import_string
 from .loader import Catalog, load_catalog
 from .models import (
     API_VERSION,
@@ -75,6 +75,7 @@ __all__ = [
     "ScenarioFilter",
     "ScenarioSet",
     "Task",
+    "check_arity",
     "canonical_json",
     "comparison_unit",
     "episode_id",

@@ -12,11 +12,12 @@ from dataclasses import dataclass
 
 from ..schema.plan import Plan, PlannedEpisode, PlannedScene, PlannedWorker
 from .fake import FakeBenchmark
+from .harness import LOCAL, describe_installed_harness
 from .results import ResultWriter
 
 #: Written to every row. Under the `local` backend nothing talks to the harness,
 #: and saying so is more honest than recording a version that never ran.
-LOCAL_HARNESS_VERSION = "none/local-backend"
+LOCAL_HARNESS_VERSION = LOCAL
 
 
 @dataclass
@@ -37,6 +38,7 @@ def _row(
     execution_mode: str,
     started_at: dt.datetime,
     harness_version: str,
+    harness_surface: str,
 ) -> dict:
     ended_at = started_at + dt.timedelta(seconds=outcome["elapsed_sec"])
     return {
@@ -52,6 +54,7 @@ def _row(
         "worker_id": worker.worker_id,
         "execution_mode": execution_mode,
         "harness_version": harness_version,
+        "harness_surface": harness_surface,
         "success": outcome["success"],
         "phase_outcomes": outcome["phase_outcomes"],
         "terminal_phase": outcome["terminal_phase"],
@@ -114,6 +117,7 @@ def run_local(
                         execution_mode=plan.execution_mode,
                         started_at=cursor,
                         harness_version=LOCAL_HARNESS_VERSION,
+                        harness_surface=LOCAL,
                     )
                 )
                 cursor += dt.timedelta(seconds=outcome["elapsed_sec"])
