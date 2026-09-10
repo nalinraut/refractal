@@ -28,6 +28,20 @@ def cube_left_of(state: Mapping[str, Any], args: Mapping[str, Any]) -> bool:
     return float(state.get("cube_pos", (0.0,))[0]) < float(args["x"])
 
 
+def within_reach(scenario: Mapping[str, Any]) -> bool:
+    """A scenario filter: drop cube poses outside a plausible workspace.
+
+    Note the signature. A **filter** takes one argument, the scenario dict, and
+    is called by ``refractal build``. A **predicate** takes ``(state, args)`` and
+    is called by the adapter during an episode. They are different contracts and
+    swapping them is an easy mistake -- the CI job that exercises the filter path
+    was written against ``cube_left_of`` first, which takes two.
+    """
+    x = float(scenario.get("cube_x", 0.0))
+    y = float(scenario.get("cube_y", 0.0))
+    return 0.06 <= x <= 0.19 and abs(y) <= 0.08
+
+
 class EchoServer:
     """A model server that does nothing, so the example names something importable."""
 
@@ -38,4 +52,4 @@ class EchoServer:
         return [0.0] * 7
 
 
-__all__ = ["EchoServer", "cube_in_bowl", "cube_left_of"]
+__all__ = ["EchoServer", "cube_in_bowl", "cube_left_of", "within_reach"]

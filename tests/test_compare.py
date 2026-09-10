@@ -519,3 +519,59 @@ class TestUntestedPairsAreDisclosed(unittest.TestCase):
         note = next(n for n in verdict.notes if "NOT tested" in n)
         self.assertIn("highest mean rate", note)
         self.assertIn("nobody ran", note)
+
+
+class TestHarnessVersionIsAPrecondition(unittest.TestCase):
+    """Not provenance: it gates, because it can change what was measured.
+
+    Not identity either: pinning it into plan_id would invalidate every
+    historical comparison on a dependency bump, and most harness commits change
+    no behaviour at all.
+    """
+
+    def _rows(self, versions):
+        rows = rows_for(success_rate=0.6, salt="h0")
+        for i, row in enumerate(rows):
+            row["harness_version"] = versions[i % len(versions)]
+        return rows
+
+    def test_one_version_compares_normally(self):
+        verdict = evaluate(
+            build_units(self._rows(["v1"]), checkpoints=[A, B]), [A, B],
+            resamples=200, seed=1,
+        )
+        self.assertEqual(verdict.blocking, [])
+        self.assertNotEqual(verdict.tasks, [])
+
+    def test_two_versions_block_by_default(self):
+        verdict = evaluate(
+            build_units(self._rows(["v1", "v2"]), checkpoints=[A, B]), [A, B],
+            resamples=200, seed=1,
+        )
+        self.assertEqual(verdict.exit_code, 2)
+        self.assertEqual(verdict.tasks, [])          # no number produced at all
+        self.assertIn("may not be measuring the same thing", verdict.blocking[0])
+
+    def test_the_override_is_explicit_and_echoed(self):
+        verdict = evaluate(
+            build_units(self._rows(["v1", "v2"]), checkpoints=[A, B]), [A, B],
+            resamples=200, seed=1, allow_harness_mismatch=True,
+        )
+        self.assertEqual(verdict.blocking, [])
+        self.assertNotEqual(verdict.tasks, [])
+        # Waiving a precondition must be visible in the output, not just in the
+        # command someone typed.
+        self.assertTrue(any("waived" in o for o in verdict.overrides))
+        self.assertIn("OVERRIDDEN", render(verdict))
+
+    def test_session_id_stays_provenance(self):
+        """The contrast: differing sessions still produce a number, with a note."""
+        rows = rows_for(success_rate=0.6, salt="h1")
+        for row in rows[: len(rows) // 2]:
+            row["session_id"] = "session-b"
+        verdict = evaluate(
+            build_units(rows, checkpoints=[A, B]), [A, B], resamples=200, seed=1
+        )
+        self.assertEqual(verdict.blocking, [])
+        self.assertNotEqual(verdict.tasks, [])
+        self.assertTrue(any("spans 2 sessions" in n for n in verdict.notes))

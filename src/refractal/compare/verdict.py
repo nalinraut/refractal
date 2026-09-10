@@ -126,6 +126,9 @@ class Verdict:
     #: a reader looking at three rate columns forms a view about every pair,
     #: including the ones no test covered.
     untested_pairs: list[tuple[str, str]] = field(default_factory=list)
+    #: Set when a precondition was overridden on purpose. Echoed in the report,
+    #: so nobody reads a number without knowing what was waived to get it.
+    overrides: list[str] = field(default_factory=list)
 
     @property
     def regressed(self) -> bool:
@@ -155,6 +158,7 @@ def evaluate(
     permutations: int = 2000,
     seed: int = 0,
     correct: bool = True,
+    allow_harness_mismatch: bool = False,
 ) -> Verdict:
     """Compare k checkpoints against a baseline, correcting across the family."""
     checkpoints = list(checkpoints or eligibility.checkpoints)
@@ -174,6 +178,32 @@ def evaluate(
             "checkpoints being compared: the geometry changed between runs, so these "
             "results are not comparable. Re-run, or compare within one geometry."
         )
+    if len(eligibility.harness_versions) > 1:
+        # A precondition, not a note. vla-eval's own paper reports a harness-side
+        # integration parameter -- the proprioceptive state source fed to the
+        # policy -- moving a LIBERO success rate from 97.8% to 42%. Two runs from
+        # different harness versions may simply not be measuring the same thing,
+        # and joining them silently is the failure this project exists to stop.
+        #
+        # It is not in `plan_id`, because pinning it there would invalidate every
+        # historical comparison on a dependency bump -- and most harness commits
+        # change no behaviour at all. Three of the five commits in the range this
+        # was written against were a docs edit, a pin bump and a data refresh.
+        # Hence a gate with an explicit override rather than an identity.
+        versions = ", ".join(sorted(eligibility.harness_versions))
+        if allow_harness_mismatch:
+            verdict.overrides.append(
+                f"harness version mismatch waived (--allow-harness-mismatch): {versions}"
+            )
+        else:
+            verdict.blocking.append(
+                f"episodes were produced by {len(eligibility.harness_versions)} harness "
+                f"versions ({versions}). A harness change can alter which observation "
+                "parameters reach the benchmark, so these runs may not be measuring the "
+                "same thing. Re-run under one version, or pass --allow-harness-mismatch "
+                "if you know the difference is not behavioural."
+            )
+
     if verdict.blocking:
         # Return before any per-task work. Data just declared incomparable must
         # not also yield a verdict -- `regressed` would then be True on a
@@ -186,13 +216,6 @@ def evaluate(
             "thermal conditions differ across episodes. Success rates are unaffected; "
             "latency comparisons from it are not."
         )
-    if len(eligibility.harness_versions) > 1:
-        verdict.notes.append(
-            f"episodes were produced by {len(eligibility.harness_versions)} harness versions "
-            f"({', '.join(sorted(eligibility.harness_versions))}). Harness changes can alter "
-            "which observation parameters reach the benchmark."
-        )
-
     by_task: dict[tuple[str, str], list[Unit]] = {}
     for unit in eligibility.units:
         by_task.setdefault((unit.key.scene_id, unit.key.task_id), []).append(unit)
@@ -303,6 +326,11 @@ def render(verdict: Verdict) -> str:
         for blocker in verdict.blocking:
             lines.append(f"  BLOCKED: {blocker}")
         return "\n".join(lines) + "\n"
+
+    for override in verdict.overrides:
+        lines.append(f"  OVERRIDDEN: {override}")
+    if verdict.overrides:
+        lines.append("")
 
     checkpoints = verdict.checkpoints
     for task in verdict.tasks:

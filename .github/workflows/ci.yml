@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    name: unit tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e .[execute]
+      - run: python -m unittest discover -s tests -t . -v
+
+  boundaries:
+    name: schema and resolve import nothing heavy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Deliberately WITHOUT the execute extra. `refractal plan` must run on a
+      # machine with no pyarrow, no fsspec, no simulator and no Docker -- that is
+      # the property the whole compiler architecture rests on, and the only way
+      # to test it honestly is to not install the things it must not need.
+      - run: pip install -e .
+      - run: python -m unittest tests.test_boundaries -v
+      - name: plan an example catalog with only pydantic and pyyaml installed
+        run: |
+          python -m refractal.cli plan examples/catalog --hardware rtx5090 -o /tmp/plan.json
+
+  seconds-test:
+    name: init, plan, run, compare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # A real install, not an editable one against the source tree: `init`
+      # writes templates that live in the package, and the failure mode being
+      # guarded against is those templates drifting out of step with the schema
+      # they are supposed to demonstrate.
+      - run: pip install .[execute]
+
+      # The example has already caught two bugs the unit tests did not -- that
+      # `plan` refuses a filtered catalog with no lock, and that `vram_mb: 0`
+      # was rejected so a CPU-only server could not be declared. It is the only
+      # test that looks at the system the way a new user does, so it runs as a
+      # job rather than living in the docs where it would rot silently.
+      - name: seconds test
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euxo pipefail
+          refractal init .
+          refractal plan catalog --hardware laptop -o plan.json
+          refractal run plan.json -o results --catalog catalog --session-id "$(printf '0%.0s' {1..32})"
+          PLAN_ID=$(python -c "import json;print(json.load(open('plan.json'))['plan_id'])")
+          # 0 (no regression) and 1 (regression) are both legitimate verdicts on
+          # synthetic outcomes. 2 means the comparison could not be answered,
+          # which is the only failure this step is looking for.
+          set +e
+          refractal compare results "$PLAN_ID"
+          code=$?
+          set -e
+          test "$code" -ne 2
+
+      - name: resume is idempotent
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euxo pipefail
+          before=$(find results -name 'part-*.parquet' | wc -l)
+          refractal run plan.json -o results --catalog catalog --session-id "$(printf '1%.0s' {1..32})" \
+            | tee second-run.txt
+          grep -q '0 episode(s) written' second-run.txt
+          test "$(find results -name 'part-*.parquet' | wc -l)" -eq "$before"
+
+      - name: build is required once a filter is declared
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euxo pipefail
+          python - <<'PY'
+          import yaml, pathlib
+          p = pathlib.Path("catalog/scenarios.yaml")
+          d = yaml.safe_load(p.read_text())
+          d["scenario_sets"][0]["filter"] = "refractal.example:within_reach"
+          p.write_text(yaml.safe_dump(d, sort_keys=False))
+          PY
+          # Must refuse: filters are evaluated by build, which needs the engine.
+          if refractal plan catalog --hardware laptop -o /dev/null 2>err.txt; then
+            echo "expected plan to refuse a filtered catalog with no build.lock"; exit 1
+          fi
+          grep -q "refractal build" err.txt
+          refractal build catalog --hardware laptop
+          refractal plan catalog --hardware laptop -o plan2.json

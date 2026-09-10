@@ -128,6 +128,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         rule=args.dichotomy,
         resamples=args.resamples,
         correct=not args.no_correction,
+        allow_harness_mismatch=args.allow_harness_mismatch,
     )
     print(render(verdict))
     return verdict.exit_code
@@ -222,6 +223,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip the Holm correction across the family of contrasts. Only for "
         "inspecting a single contrast; the gate is not calibrated without it.",
+    )
+    compare.add_argument(
+        "--allow-harness-mismatch",
+        action="store_true",
+        help="compare across harness versions anyway. Blocked by default: a harness "
+        "change can alter which observation parameters reach the benchmark.",
     )
     compare.add_argument("--resamples", type=int, default=5000)
     compare.set_defaults(func=cmd_compare)

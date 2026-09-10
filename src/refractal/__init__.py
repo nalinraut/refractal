@@ -47,39 +47,56 @@ and therefore not portable, so it is a rendering of the experiment rather than
 part of its identity. Two people who plan the same catalog on different machines
 get different worker layouts, the same ``plan_id``, and results that join.
 
-Provenance fields
------------------
+Identity, precondition, provenance
+----------------------------------
 
-A **provenance field** records *where a fact came from*. It never enters an
-identity hash and it never gates a decision. Its only job is to let a reader
-tell an assertion from a measurement, and to let ``compare`` warn.
+Three kinds of field, not two. The middle one is easy to collapse into either
+neighbour and is where the interesting mistakes live.
 
-This shape recurs, and naming it here beats rediscovering it each time:
+=============  =============  ==================  ===================================
+kind           in ``plan_id``  gates?              instances
+=============  =============  ==================  ===================================
+identity       yes            by construction     ``scenario_hash``, ``task_hash``,
+                                                  the checkpoint set, ``seeds``
+precondition   no             yes, loudly         ``scene_hash``, ``harness_version``
+provenance     no             never               ``catalog_hash``, ``measured_at``,
+                                                  ``source_sha``, ``session_id``
+=============  =============  ==================  ===================================
 
-===========================  ==========================================
-``Plan.catalog_hash``        which bytes were read, next to ``plan_id``,
-                             which is what the experiment *is*
-``ResourceShape.measured_at``  set when a prober measured the shape, unset
-                             when a human declared it
-``FilterEntry.source_sha``   the filter body that produced the recorded
-                             survivors; verified best-effort, deliberately
-                             outside the staleness key
-``episodes.session_id``      which run produced the row, so a resumed
-                             ``harness_version``           comparison can be flagged for latency
-===========================  ==========================================
+**Identity** decides which episodes exist. Change one and you have a different
+experiment, so results recorded before and after must not join -- and by
+construction they cannot, because the ``plan_id`` differs.
 
-Two rules follow, and both have already been broken once by accident:
+**Precondition** decides whether a comparison is *meaningful*. It is kept out of
+the key deliberately: putting ``scene_hash`` in the join key would make a mesh
+edit produce an empty join, and an empty join is a legal result that raises
+nothing. Kept out and checked separately, the same edit produces a sentence
+somebody has to read. ``harness_version`` is the same shape -- vla-eval's own
+paper reports a harness-side integration parameter moving a success rate by 55
+points -- and gets the same treatment: out of ``plan_id``, because pinning it
+there would invalidate every historical comparison on a dependency bump, but
+gating ``compare``, because two runs from different harnesses may not be
+comparable at all.
 
-* **A provenance field must not be promoted into an identity.** Folding
-  ``plan_schema`` into ``plan_id`` was exactly this mistake -- a format version
-  is provenance, and using it as identity orphans every prior result on a
-  cosmetic bump.
-* **An identity must not be demoted into provenance.** If a fact changes what
-  the numbers mean, it belongs in a hash or a gate. ``scene_hash`` disagreeing
-  across checkpoints blocks the comparison; it is not a note.
+**Provenance** records where a fact came from. Its only job is to let a reader
+tell an assertion from a measurement, and to let ``compare`` annotate.
 
-The test for which one you have: *would two runs differing only in this field
-still be comparable?* Yes means provenance. No means identity.
+Two questions separate them, and you need both:
+
+1. *Would two runs differing only in this field be the same experiment?*
+   No -> identity.
+2. *Should ``compare`` still produce a number?*
+   No -> precondition. Yes -> provenance.
+
+``session_id`` answers yes to the second, with a note about warmup and thermal
+state. ``scene_hash`` answers no. ``harness_version`` answers no, and that is a
+decision taken explicitly rather than by omission -- with an override, because
+most harness commits change no behaviour at all.
+
+Both directions have been got wrong here already, which is why this is written
+down: folding ``plan_schema`` into ``plan_id`` promoted provenance to identity,
+and leaving a ``scene_hash`` mismatch as a note would have demoted a
+precondition to provenance.
 """
 
 __version__ = "0.1.0.dev0"
