@@ -15,6 +15,8 @@ import yaml
 
 from refractal.compare import (
     holm,
+    measure_variance,
+    modelled_variance,
     evaluate,
     render,
     build_units,
@@ -594,3 +596,84 @@ class TestHarnessSurfaceIsAPrecondition(unittest.TestCase):
         self.assertEqual(verdict.blocking, [])
         self.assertNotEqual(verdict.tasks, [])
         self.assertTrue(any("spans 2 sessions" in n for n in verdict.notes))
+
+
+class TestVarianceEstimatorIsCalibrated(unittest.TestCase):
+    """The estimator must recover known structure before it is trusted on a policy.
+
+    Every number in statistics-measurements.md was measured against
+    `interaction_spread`, a model authored to make the fixture discriminate --
+    then the tests were scored against it. The first real policy is the first
+    independent source of the effect, so a correction to that doc should be a
+    *comparison* between measured and modelled rather than a replacement.
+
+    Which only works if the estimator itself is known to be right. These assert it
+    against the doc's false-positive rates, which are independent evidence: they
+    were measured by counting rejections, not by reading a variance.
+    """
+
+    def _measure(self, scenario_spread, interaction_spread, salt="v0"):
+        rows = rows_for(
+            success_rate=0.5,
+            scenario_spread=scenario_spread,
+            interaction_spread=interaction_spread,
+            salt=salt,
+        )
+        units = build_units(rows, checkpoints=[A, B]).units
+        return measure_variance(units, A, B)
+
+    def test_no_structure_gives_a_design_effect_near_one(self):
+        report = self._measure(0.0, 0.0)
+        self.assertLess(report.design_effect, 1.25)
+        self.assertFalse(report.clustering_matters)
+
+    def test_a_shared_effect_does_not_inflate_the_paired_design_effect(self):
+        """The row that caught a bias in this estimator.
+
+        Strong shared scenario difficulty, zero interaction. The doc measured the
+        unclustered test as *conservative* here (2.7% against a nominal 5%), so a
+        design effect meaningfully above 1 would be the estimator manufacturing
+        the conclusion it exists to test. It did, at 1.38, until the binomial
+        term used s-1 rather than s.
+        """
+        report = self._measure(0.45, 0.0)
+        self.assertGreater(report.icc[A], 0.3, "the shared effect should show in ICC")
+        self.assertLess(report.design_effect, 1.25, "but must not show in the design effect")
+        self.assertFalse(report.clustering_matters)
+
+    def test_an_interaction_does_inflate_it(self):
+        report = self._measure(0.0, 0.35)
+        self.assertGreater(report.design_effect, 1.5)
+        self.assertTrue(report.clustering_matters)
+
+    def test_icc_alone_cannot_distinguish_the_two(self):
+        """Why both numbers are reported, not just one."""
+        shared = self._measure(0.45, 0.0)
+        interaction = self._measure(0.0, 0.35)
+        # Higher ICC, lower design effect. Reading ICC alone inverts the answer.
+        self.assertGreater(shared.icc[A], interaction.icc[A])
+        self.assertLess(shared.design_effect, interaction.design_effect)
+
+    def test_the_measured_excess_tracks_the_modelled_variance(self):
+        """The comparison that makes a correction to the doc statable."""
+        for interaction in (0.20, 0.35):
+            report = self._measure(0.0, interaction)
+            modelled = modelled_variance(
+                scenario_spread=0.0, interaction_spread=interaction
+            )["expected_difference_var"]
+            measured = report.observed_var - report.binomial_var
+            # Same order of magnitude and same direction; this is a sanity bound,
+            # not a precision claim at 119 scenarios.
+            self.assertGreater(measured, 0.4 * modelled)
+            self.assertLess(measured, 2.0 * modelled)
+
+    def test_only_the_interaction_term_is_expected_to_survive_pairing(self):
+        m = modelled_variance(scenario_spread=0.45, interaction_spread=0.0)
+        self.assertEqual(m["expected_difference_var"], 0.0)
+        self.assertGreater(m["cancels_in_paired_difference"], 0.0)
+
+    def test_it_degrades_rather_than_dividing_by_zero(self):
+        rows = synthetic({A: {"x": [True] * 3}, B: {"x": [True] * 3}})
+        report = measure_variance(build_units(rows, checkpoints=[A, B], min_seeds=2).units, A, B)
+        self.assertEqual(report.units, 1)
+        self.assertEqual(report.design_effect, 1.0)

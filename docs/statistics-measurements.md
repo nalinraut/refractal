@@ -169,6 +169,55 @@ lower.
 
 ---
 
+## 4b. The circularity, and how a correction gets stated
+
+Everything above was measured against `FakeBenchmark`'s `interaction_spread`.
+That knob is a *model* of within-scenario correlation, it was authored to make the
+fixture able to discriminate between the clustered and unclustered tests, and then
+the tests were scored against it.
+
+That does not invalidate the conclusions — the false-positive rates are real
+counts of real rejections — but it does mean the numbers describe a model rather
+than the world. The first real policy is the first independent source of the
+effect, and pi0's flow matching is genuinely stochastic within a scenario.
+
+So a correction to this document should be a **comparison**, not a replacement.
+`refractal.compare.measure_variance` reports the structure in units comparable
+with `modelled_variance`, which states what the knob implies:
+
+| shared | interaction | ICC (A) | design effect | modelled Var(d) | measured excess | table above says |
+|---:|---:|---:|---:|---:|---:|---|
+| 0.00 | 0.00 | 0.000 | 0.84 | 0.00000 | −0.01642 | naive calibrated (5.3%) |
+| 0.45 | 0.00 | 0.424 | 1.10 | 0.00000 | 0.00687 | naive **conservative** (2.7%) |
+| 0.00 | 0.35 | 0.164 | 1.83 | 0.08167 | 0.06896 | anti-conservative (13.7%) |
+| 0.30 | 0.35 | 0.313 | 1.80 | 0.08167 | 0.05770 | anti-conservative (14.0%) |
+
+**Both numbers are needed and the pair is the finding.** Row 2 has the highest
+ICC and the lowest design effect: a shared scenario effect cancels in a paired
+difference, so a high ICC alone does not imply clustering is load-bearing. Reading
+ICC alone inverts the answer.
+
+### The estimator manufactured the conclusion until it was calibrated
+
+The first version divided the binomial term by `s`. Since
+`E[p̂(1−p̂)] = (s−1)/s · p(1−p)`, that understates the sampling variance — and
+understates it *most* when `p` is extreme, which is exactly what a strong shared
+effect produces. Row 2 read **1.38** and tripped the "clustering matters" flag on
+the one row where the unclustered test is conservative.
+
+An estimator built to test a conclusion, producing that conclusion from a bias.
+Caught by requiring it to reproduce the false-positive column — independent
+evidence, since those were measured by counting rejections rather than by reading
+a variance. Fixed by dividing by `s−1`.
+
+Asserted in `tests/test_compare.py::TestVarianceEstimatorIsCalibrated`, including
+the row-2 case specifically, so the bias cannot return quietly.
+
+**Known limit:** at ~119 scenarios the design effect carries roughly 13% relative
+noise, so row 1's 0.84 is about a sigma low rather than evidence of anything. The
+1.25 threshold sits above that noise deliberately, and it is a judgement rather
+than a derivation.
+
 ## 5. What the pairing rule costs, and how many checkpoints you can afford
 
 The rule drops a **seed slot** — one `(unit, seed)` pair — whenever any

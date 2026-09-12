@@ -14,6 +14,7 @@ It reports, in this order:
 No plots. Comparison and statistics ship; visualisation is DuckDB's job.
 """
 
+from .variance import VarianceReport, measure_variance, modelled_variance
 from .pairing import Eligibility, Unit, UnitKey, build_units
 from .verdict import (
     MIN_UNITS_FOR_CALIBRATED_CI,
@@ -45,7 +46,10 @@ __all__ = [
     "TestResult",
     "Unit",
     "UnitKey",
+    "VarianceReport",
     "build_units",
+    "measure_variance",
+    "modelled_variance",
     "clustered_bootstrap",
     "contingency",
     "mcnemar_exact",
