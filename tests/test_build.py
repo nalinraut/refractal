@@ -10,7 +10,7 @@ import yaml
 
 from refractal.build import BuildError, DeclaredProbe, build
 from refractal.resolve import resolve
-from refractal.resolve.lock import LOCK_FILENAME, load_lock
+from refractal.resolve.lock import LOCK_FILENAME, LOCK_SCHEMA, load_lock
 from refractal.schema import CatalogError, load_catalog
 
 SRC = Path(__file__).resolve().parents[1] / "examples" / "catalog"
@@ -454,3 +454,65 @@ class TestExternallyDefinedScenes(unittest.TestCase):
             second = resolve(root, hardware_profile=HARDWARE)
             self.assertNotEqual(first.scenes[0].scene_hash, second.scenes[0].scene_hash)
             self.assertNotEqual(first.plan_id, second.plan_id)
+
+
+class TestLockSchemaRefusal(unittest.TestCase):
+    """The version gate on build.lock, exercised.
+
+    Closed because it was a gap rather than a deferral. The refusal was written
+    and correct; nobody had bumped `lock_schema`, so nothing had ever handed the
+    reader a number it did not recognise. A fixture carrying a future version
+    costs two lines and needs nothing that does not exist.
+
+    That matters more than it looks: the LIBERO bridge lives in a separate repo,
+    so two distributions have to agree on this file across a version boundary.
+    The first time that gate fires for real, it should not be the first time it
+    fires at all.
+    """
+
+    def _write_lock(self, root, mutate):
+        path = root / LOCK_FILENAME
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        mutate(doc)
+        path.write_text(json.dumps(doc), encoding="utf-8")
+
+    def test_a_future_lock_is_refused_not_read(self):
+        with Temp() as root:
+            build(root)
+            self._write_lock(root, lambda d: d.__setitem__("lock_schema", LOCK_SCHEMA + 1))
+            with self.assertRaises(CatalogError) as ctx:
+                load_lock(root)
+            message = str(ctx.exception)
+            self.assertIn(f"lock_schema={LOCK_SCHEMA + 1}", message)
+            self.assertIn("refractal build", message)
+
+    def test_a_past_lock_is_also_refused(self):
+        """A lock is regenerable, so there is no reason to attempt an old one."""
+        with Temp() as root:
+            build(root)
+            self._write_lock(root, lambda d: d.__setitem__("lock_schema", LOCK_SCHEMA - 1))
+            with self.assertRaises(CatalogError):
+                load_lock(root)
+
+    def test_a_missing_lock_schema_is_refused(self):
+        with Temp() as root:
+            build(root)
+            self._write_lock(root, lambda d: d.pop("lock_schema"))
+            with self.assertRaises(CatalogError):
+                load_lock(root)
+
+    def test_resolve_surfaces_the_refusal_rather_than_ignoring_the_lock(self):
+        """The failure must not degrade into "no lock, plan anyway"."""
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            with_filter(tmp, root)
+            build(root)
+            self._write_lock(root, lambda d: d.__setitem__("lock_schema", 99))
+            with self.assertRaises(CatalogError) as ctx:
+                resolve(root, hardware_profile=HARDWARE)
+            self.assertIn("lock_schema=99", str(ctx.exception))
+
+    def test_the_current_schema_round_trips(self):
+        with Temp() as root:
+            build(root)
+            self.assertEqual(load_lock(root).lock_schema, LOCK_SCHEMA)
