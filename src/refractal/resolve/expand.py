@@ -17,7 +17,7 @@ scenarios rather than a fraction of a grid that is mostly unreachable.
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from ..schema.errors import CatalogError, GeneratorError
 from ..schema.identity import episode_id, scenario_hash, task_hash
@@ -124,6 +124,55 @@ def generate_scenarios(scenario_set: ScenarioSet, lock: BuildLock | None) -> lis
     return kept
 
 
+def _type_signature(params: Mapping[str, Any]) -> tuple:
+    """A scenario's keys and the *type* of each numeric value."""
+    return tuple(
+        (k, type(v).__name__ if isinstance(v, (int, float)) and not isinstance(v, bool) else "_")
+        for k, v in sorted(params.items())
+    )
+
+
+def _value_signature(params: Mapping[str, Any]) -> tuple:
+    """A scenario's keys and values compared numerically, ignoring int/float."""
+    return tuple(
+        (k, float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+        for k, v in sorted(params.items())
+    )
+
+
+def find_type_only_collisions(
+    scenarios: Sequence[PlannedScenario],
+) -> list[tuple[PlannedScenario, PlannedScenario]]:
+    """Scenarios that are numerically equal but differ in a written numeric type.
+
+    Preserving the authored type means ``friction: 1`` and ``friction: 1.0`` are
+    different scenarios. That is the right trade -- an index should print as an
+    index -- but it leaves one way to be surprised: two scenario sets on one
+    scene, differing only in how a number was typed, expand to two units where
+    the author meant one, and the episode count quietly doubles.
+
+    Worth being exact about where this can happen, because the obvious guess is
+    wrong. A type *edit* to a catalog changes ``plan_id``, so the before and
+    after land in different comparison directories and ``compare`` never sees
+    both -- it cannot report them as non-overlapping. The confusion only exists
+    *within a single plan*, which is why the check lives here rather than in the
+    overlap report.
+    """
+    by_value: dict[tuple, list[PlannedScenario]] = {}
+    for scenario in scenarios:
+        by_value.setdefault(_value_signature(scenario.params), []).append(scenario)
+
+    collisions = []
+    for group in by_value.values():
+        if len(group) < 2:
+            continue
+        for i, first in enumerate(group):
+            for second in group[i + 1 :]:
+                if _type_signature(first.params) != _type_signature(second.params):
+                    collisions.append((first, second))
+    return collisions
+
+
 def expand_episodes(
     catalog: Catalog,
     scene_hash_value: str,
@@ -179,6 +228,7 @@ def task_hashes_for(catalog: Catalog) -> dict[str, str]:
 
 __all__ = [
     "TIER_FRACTION",
+    "find_type_only_collisions",
     "expand_episodes",
     "generate_scenarios",
     "subsample",

@@ -311,3 +311,87 @@ class TestEngineAbstraction(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTypeOnlyCollisions(unittest.TestCase):
+    """The residual hazard of preserving the authored numeric type.
+
+    Worth being exact about where it can fire, because the obvious guess is
+    wrong. A type *edit* to a catalog changes `plan_id`, so before and after land
+    in different comparison directories and `compare` never sees both -- it
+    cannot report them as non-overlapping. The confusion is only reachable
+    *within one plan*.
+    """
+
+    def _two_sets(self, root, first, second):
+        tmp = Temp.__new__(Temp)
+        tmp.root = root
+
+        def mutate(doc):
+            base = doc["scenario_sets"][0]
+            doc["scenario_sets"] = [
+                {**base, "id": "coarse", "params": {"friction": {"choices": [first]}}},
+                {**base, "id": "fine", "params": {"friction": {"choices": [second]}}},
+            ]
+
+        tmp.edit("scenarios.yaml", mutate)
+        tmp.edit("run.yaml", lambda d: d["run"].__setitem__("tier", "full"))
+        return resolve(root, hardware_profile=HARDWARE)
+
+    def test_a_type_edit_cannot_reach_the_overlap_report(self):
+        """Verified rather than assumed: the two land in different comparisons."""
+        with Temp() as a, Temp() as b:
+            ta, tb = Temp.__new__(Temp), Temp.__new__(Temp)
+            ta.root, tb.root = a, b
+            for tmp, value in ((ta, 1), (tb, 1.0)):
+                tmp.edit("scenarios.yaml", lambda d, v=value: d.__setitem__(
+                    "scenario_sets",
+                    [{**d["scenario_sets"][0], "params": {"friction": {"choices": [v]}}}]))
+                tmp.edit("run.yaml", lambda d: d["run"].__setitem__("tier", "full"))
+            self.assertNotEqual(
+                resolve(a, hardware_profile=HARDWARE).plan_id,
+                resolve(b, hardware_profile=HARDWARE).plan_id,
+            )
+
+    def test_within_one_plan_it_warns(self):
+        with Temp() as root:
+            plan = self._two_sets(root, 1, 1.0)
+            self.assertEqual(len(plan.scenes[0].scenarios), 2)
+            note = [w for w in plan.warnings if "numerically equal" in w]
+            self.assertEqual(len(note), 1)
+            self.assertIn("coarse", note[0])
+            self.assertIn("fine", note[0])
+            self.assertIn("two scenarios rather than one", note[0])
+
+    def test_the_same_type_twice_is_deduped_not_warned(self):
+        with Temp() as root:
+            plan = self._two_sets(root, 1.0, 1.0)
+            self.assertFalse([w for w in plan.warnings if "numerically equal" in w])
+
+    def test_genuinely_different_values_do_not_warn(self):
+        with Temp() as root:
+            plan = self._two_sets(root, 1, 2)
+            self.assertEqual(len(plan.scenes[0].scenarios), 2)
+            self.assertFalse([w for w in plan.warnings if "numerically equal" in w])
+
+    def test_identical_scenarios_across_sets_are_deduped_not_duplicated(self):
+        """Two sets, one scenario. The bug this found, as a regression test.
+
+        Deduplication used to happen only within a single scenario set, so two
+        sets on one scene producing the same scenario yielded the same
+        scenario_hash twice, the same episode_id twice, and a plan that ran and
+        recorded every affected episode twice over.
+        """
+        with Temp() as root:
+            plan = self._two_sets(root, 1.0, 1.0)
+            scenarios = plan.scenes[0].scenarios
+            self.assertEqual(len(scenarios), 1)
+            episodes = [e for w in plan.scenes[0].workers for e in w.episodes]
+            self.assertEqual(len(episodes), len({e.episode_id for e in episodes}))
+            self.assertTrue(any("kept once" in w for w in plan.warnings))
+
+    def test_dedup_is_reported_rather_than_silent(self):
+        with Temp() as root:
+            note = next(w for w in self._two_sets(root, 1.0, 1.0).warnings if "kept once" in w)
+            self.assertIn("coarse", note)
+            self.assertIn("fine", note)

@@ -25,7 +25,13 @@ from ..schema.plan import (
     PlannedWorker,
     read_plan,
 )
-from .expand import expand_episodes, generate_scenarios, subsample, task_hashes_for
+from .expand import (
+    expand_episodes,
+    find_type_only_collisions,
+    generate_scenarios,
+    subsample,
+    task_hashes_for,
+)
 from .fit import (
     Allocation,
     CapacityError,
@@ -86,7 +92,27 @@ def resolve(
                 f"scenario_set {scenario_set.id!r}: {entry.generated} generated, "
                 f"{entry.dropped} dropped by filter, {len(produced)} kept"
             )
-        scenarios_by_scene.setdefault(scenario_set.scene, []).extend(produced)
+        # Dedupe across sets, not just within one. `generate_scenarios` dedupes a
+        # single set's output, which is not enough: two sets on one scene can
+        # produce the identical scenario, and then the same scenario_hash appears
+        # twice, every episode_id derived from it appears twice, and the plan
+        # silently runs and records the work twice. Found by checking whether the
+        # type-collision case above had a same-type sibling -- it did, and it was
+        # the worse of the two.
+        bucket = scenarios_by_scene.setdefault(scenario_set.scene, [])
+        already = {s.scenario_hash: s.scenario_set_id for s in bucket}
+        for scenario in produced:
+            prior = already.get(scenario.scenario_hash)
+            if prior is not None:
+                warnings.append(
+                    f"scene {scenario_set.scene!r}: scenario set {scenario_set.id!r} produces a "
+                    f"scenario already produced by {prior!r} ({scenario.params}); kept once. "
+                    "Overlapping sets are allowed, but the duplicate does not become two "
+                    "episodes."
+                )
+                continue
+            already[scenario.scenario_hash] = scenario_set.id
+            bucket.append(scenario)
 
     # --- tier, then expansion -------------------------------------------
     demands: list[SceneDemand] = []
@@ -97,6 +123,19 @@ def resolve(
         raw = scenarios_by_scene.get(scene.id, [])
         if not raw:
             continue
+        for first, second in find_type_only_collisions(raw):
+            key = next(
+                k
+                for k in first.params
+                if type(first.params[k]) is not type(second.params[k])
+            )
+            warnings.append(
+                f"scene {scene.id!r}: scenario sets {first.scenario_set_id!r} and "
+                f"{second.scenario_set_id!r} both produce {key}="
+                f"{first.params[key]!r} / {second.params[key]!r}, which are numerically "
+                "equal but written as different types, so they are two scenarios rather "
+                "than one. If that was not intended, write both the same way."
+            )
         kept = subsample(raw, catalog.run.tier)
         episodes = expand_episodes(catalog, scene_hashes[scene.id], kept, task_hashes)
         if not episodes:
