@@ -677,3 +677,33 @@ class TestVarianceEstimatorIsCalibrated(unittest.TestCase):
         report = measure_variance(build_units(rows, checkpoints=[A, B], min_seeds=2).units, A, B)
         self.assertEqual(report.units, 1)
         self.assertEqual(report.design_effect, 1.0)
+
+
+class TestVarianceIsReportedUnconditionally(unittest.TestCase):
+    """The baseline has to be recorded by default, not when it looks interesting.
+
+    An agreement recorded is what makes a later disagreement legible. Behind a
+    flag it would be skipped on exactly the runs where nothing seemed notable,
+    which are the runs that establish what normal is.
+    """
+
+    def _verdict(self, **kw):
+        rows = rows_for(success_rate=0.5, scenario_spread=0.30, salt="rv", **kw)
+        return evaluate(build_units(rows, checkpoints=[A, B]), [A, B], resamples=300, seed=2)
+
+    def test_every_task_carries_a_variance_report(self):
+        verdict = self._verdict()
+        for task in verdict.tasks:
+            self.assertIsNotNone(task.variance)
+            self.assertGreater(task.variance.units, 0)
+
+    def test_the_report_reaches_the_rendered_output(self):
+        text = render(self._verdict())
+        self.assertIn("design effect on the paired difference", text)
+        self.assertIn("within-cell ICC", text)
+
+    def test_it_says_which_way_it_read(self):
+        no_interaction = render(self._verdict())
+        self.assertIn("not load-bearing", no_interaction)
+        with_interaction = render(self._verdict(interaction_spread=0.35))
+        self.assertIn("load-bearing here", with_interaction)

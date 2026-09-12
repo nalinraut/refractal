@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 from .pairing import Dichotomy, Eligibility, Unit
+from .variance import VarianceReport, measure_variance
 from .stats import (
     BootstrapResult,
     Discordance,
@@ -105,6 +106,15 @@ class TaskVerdict:
     #: pairwise tables.
     patterns: dict[tuple[bool, ...], int]
     cochran: TestResult
+    #: Measured correlation structure, against the baseline contrast.
+    #:
+    #: Reported unconditionally rather than behind a flag. Everything `compare`
+    #: claims about clustering was calibrated against a *model* of within-scenario
+    #: correlation, so the measured value is the only independent check on it --
+    #: and an agreement recorded is what makes a later disagreement legible. Write
+    #: it down only when it looks interesting and there is no baseline to have
+    #: been interesting against.
+    variance: VarianceReport | None = None
     contrasts: list[Contrast] = field(default_factory=list)
 
     @property
@@ -244,6 +254,7 @@ def evaluate(
             cochran=cochran_q(
                 units, checkpoints, rule, permutations=permutations, seed=seed
             ),
+            variance=measure_variance(units, baseline, candidates[0]) if candidates else None,
         )
         for candidate in candidates:
             bootstrap = clustered_bootstrap(
@@ -370,6 +381,10 @@ def render(verdict: Verdict) -> str:
             lines.append(f"                        {b} fails   {b} succeeds")
             lines.append(f"      {a} fails        {cells.both_fail:>9}   {cells.only_b_passes:>11}")
             lines.append(f"      {a} succeeds     {cells.only_a_passes:>9}   {cells.both_pass:>11}")
+
+        if task.variance is not None:
+            for line in task.variance.summary_lines():
+                lines.append(f"    {line}")
 
         for contrast in task.contrasts:
             marker = {"regressed": "REGRESSED", "improved": "improved", "ok": "no change"}

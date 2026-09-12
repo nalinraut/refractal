@@ -213,10 +213,53 @@ a variance. Fixed by dividing by `s−1`.
 Asserted in `tests/test_compare.py::TestVarianceEstimatorIsCalibrated`, including
 the row-2 case specifically, so the bias cannot return quietly.
 
-**Known limit:** at ~119 scenarios the design effect carries roughly 13% relative
-noise, so row 1's 0.84 is about a sigma low rather than evidence of anything. The
-1.25 threshold sits above that noise deliberately, and it is a judgement rather
-than a derivation.
+### Is a design effect below 1.0 a finding or an artefact?
+
+Two of the five rows read below 1.0, which is worth settling before a real policy
+reads below 1.0 and nobody knows how to take it. 200 trials per row:
+
+| shared | interaction | mean DE | sd | % below 1.0 | true value |
+|---:|---:|---:|---:|---:|---|
+| 0.00 | 0.00 | 1.014 | 0.136 | 50% | 1.0 |
+| 0.45 | 0.00 | 1.000 | 0.146 | 53% | 1.0 |
+| 0.00 | 0.20 | 1.285 | 0.175 | 4% | >1 |
+
+**Noise, not construction.** The estimator is centred on 1.0 with half the draws
+either side.
+
+The analytic reason, which is the part worth keeping: the two arms' *sampling*
+noises are independent, because they are different episodes, so no covariance term
+enters the sampling estimate. A shared scenario effect couples the true
+probabilities `π_iA` and `π_iB`, and that coupling shrinks `Var(Δπ_i)` toward zero
+— driving the design effect to exactly 1 **from above**, never below. So the true
+value is ≥ 1 always, and a reading below 1 is estimation error.
+
+Practical consequences:
+
+- A real policy reading below 1.0 is not evidence of anything. A reading
+  meaningfully above 1.0 is.
+- At 119 scenarios the sd is ~0.14, so the **1.25 threshold sits about 1.8σ above
+  1.0** — roughly a 4% false-alarm rate for "clustering matters" when it does not.
+  Close to the α it is used alongside, by coincidence rather than design, and
+  stated so nobody reads the threshold as exact.
+
+### The baseline is recorded unconditionally
+
+`refractal compare` prints the design effect and per-checkpoint ICC for every
+task, always, not behind a flag:
+
+```
+design effect on the paired difference: 0.99 (observed Var 0.08989 vs binomial 0.09094,
+                                             24 scenarios, 4.8 seeds each)
+  ckpt-46: within-cell ICC 0.082, between-scenario Var 0.01668
+  ckpt-47: within-cell ICC 0.278, between-scenario Var 0.05920
+  clustering is not load-bearing for the difference at this design effect ...
+```
+
+Behind a flag it would be skipped on exactly the runs where nothing seemed
+notable — which are the runs that establish what normal is. **An agreement
+recorded is what makes a later disagreement legible**, and there is no way to have
+been interesting against a baseline that was never written down.
 
 ## 5. What the pairing rule costs, and how many checkpoints you can afford
 
