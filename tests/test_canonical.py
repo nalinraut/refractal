@@ -95,3 +95,48 @@ class TestCanonicalForm(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFileSetIsSetShaped(unittest.TestCase):
+    """Here deduplication is correct, and the contrast is the point.
+
+    The question is *which files define this scene*, which is set-valued. A scene
+    whose `assets` glob happens to match its own `model` is the same scene as one
+    whose glob does not, and it used to hash differently -- same geometry, two
+    identities, decided by how a glob was written.
+
+    The rule is not "always preserve duplicates". It is that the container has to
+    match the question.
+    """
+
+    def test_listing_a_file_twice_does_not_change_the_hash(self):
+        import tempfile
+        from pathlib import Path
+
+        from refractal.schema.canonical import hash_file_set
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "scene.xml").write_text("model", encoding="utf-8")
+            (root / "mesh.stl").write_text("mesh", encoding="utf-8")
+            once = hash_file_set(root, [root / "scene.xml", root / "mesh.stl"])
+            # `model:` plus an `assets:` glob that also matches it.
+            twice = hash_file_set(
+                root, [root / "scene.xml", root / "scene.xml", root / "mesh.stl"]
+            )
+            self.assertEqual(once, twice)
+
+    def test_but_a_different_file_still_changes_it(self):
+        import tempfile
+        from pathlib import Path
+
+        from refractal.schema.canonical import hash_file_set
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "a.xml").write_text("a", encoding="utf-8")
+            (root / "b.stl").write_text("b", encoding="utf-8")
+            self.assertNotEqual(
+                hash_file_set(root, [root / "a.xml"]),
+                hash_file_set(root, [root / "a.xml", root / "b.stl"]),
+            )

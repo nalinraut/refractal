@@ -190,9 +190,23 @@ def hash_file_set(root: Path, paths: Iterable[Path]) -> str:
     Names are included so that renaming a mesh changes the hash: a scene that
     references ``gripper_v2.stl`` is not the scene that referenced
     ``gripper.stl``, even if the bytes happen to match today.
+
+    **Deduplicated by resolved path**, and here that is the correct shape rather
+    than a loss. The question is *which files define this scene*, which is
+    set-valued: a scene whose ``assets`` glob happens to match its own ``model``
+    is the same scene as one whose glob does not, and before this it hashed
+    differently. Same geometry, two identities, decided by how a glob was
+    written.
+
+    Note the contrast with ``Eligibility.duplicate_rows``, where discarding
+    multiplicity is a bug. The rule is not "always preserve duplicates" -- it is
+    that the container has to match the question. Here the question is set-shaped;
+    there it is "did anything arrive twice", and a set cannot answer it.
     """
     entries = sorted(
-        (str(Path(p).resolve().relative_to(root.resolve()).as_posix()), hash_file(Path(p)))
-        for p in paths
+        {
+            (str(Path(p).resolve().relative_to(root.resolve()).as_posix()), hash_file(Path(p)))
+            for p in paths
+        }
     )
     return hash_obj([{"path": name, "sha256": digest} for name, digest in entries])

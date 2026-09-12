@@ -113,6 +113,17 @@ class Eligibility:
     sessions: set[str] = field(default_factory=set)
     harness_versions: set[str] = field(default_factory=set)
     harness_surfaces: set[str] = field(default_factory=set)
+    #: Rows sharing one (scene, task, scenario, checkpoint, seed). Not collapsed.
+    #:
+    #: The container has to match the question. A dict keyed by seed answers
+    #: "what happened at this seed" and cannot answer "did anything arrive
+    #: twice" -- the second row simply overwrote the first, silently, even when
+    #: the two disagreed about the outcome.
+    #:
+    #: Third instance of that shape in this project, after the cross-set scenario
+    #: duplication and the set-based output check. Each time the invariant was
+    #: about identity and the container discarded multiplicity.
+    duplicate_rows: list[tuple[str, str, int]] = field(default_factory=list)
     scene_hash_conflicts: dict[str, set[str]] = field(default_factory=dict)
 
     def summary_lines(self) -> list[str]:
@@ -173,6 +184,7 @@ def build_units(
     harness_versions: set[str] = set()
     harness_surfaces: set[str] = set()
     scene_hashes: dict[str, set[str]] = defaultdict(set)
+    duplicates: list[tuple[str, str, int]] = []
     infra = 0
 
     for row in rows:
@@ -191,7 +203,13 @@ def build_units(
         scene_hashes[row["scene_id"]].add(row["scene_hash"])
         if row["is_infra_failure"]:
             infra += 1
-        grouped[key.as_tuple()][row["checkpoint_id"]][row["seed"]] = row
+        seeds = grouped[key.as_tuple()][row["checkpoint_id"]]
+        if row["seed"] in seeds:
+            # `execute` has verify_written, but `compare` reads any results
+            # directory including ones Refractal did not produce -- so it checks
+            # for itself rather than trusting an upstream guarantee.
+            duplicates.append((key.task_id, row["checkpoint_id"], row["seed"]))
+        seeds[row["seed"]] = row
 
     planned_seeds = max((len(s) for cps in grouped.values() for s in cps.values()), default=0)
     if min_seeds is None:
@@ -204,6 +222,7 @@ def build_units(
         sessions=sessions,
         harness_versions=harness_versions,
         harness_surfaces=harness_surfaces,
+        duplicate_rows=duplicates,
         scene_hash_conflicts={
             scene: hashes for scene, hashes in scene_hashes.items() if len(hashes) > 1
         },

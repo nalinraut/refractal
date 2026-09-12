@@ -707,3 +707,51 @@ class TestVarianceIsReportedUnconditionally(unittest.TestCase):
         self.assertIn("not load-bearing", no_interaction)
         with_interaction = render(self._verdict(interaction_spread=0.35))
         self.assertIn("load-bearing here", with_interaction)
+
+
+class TestDuplicateRowsBlock(unittest.TestCase):
+    """A duplicated episode is evidence of a bug, not something to collapse.
+
+    Third instance of the shape: a dict keyed by seed answers "what happened at
+    this seed" and cannot answer "did anything arrive twice". The second row
+    overwrote the first silently, even when they disagreed about the outcome.
+    """
+
+    def _rows(self, duplicate=False):
+        def row(ckpt, seed, success):
+            return {"scene_id": "s", "scene_hash": "sha256:a", "task_id": "t",
+                    "task_hash": "sha256:t", "scenario_hash": "sha256:x",
+                    "checkpoint_id": ckpt, "seed": seed, "session_id": "s",
+                    "harness_version": "v", "harness_surface": "v",
+                    "success": success, "is_infra_failure": False}
+        rows = [row(A, 0, True), row(A, 1, True), row(B, 0, True), row(B, 1, True)]
+        if duplicate:
+            rows.insert(1, row(A, 0, False))  # same episode, opposite outcome
+        return rows
+
+    def test_a_clean_set_has_none(self):
+        self.assertEqual(build_units(self._rows(), checkpoints=[A, B], min_seeds=2).duplicate_rows, [])
+
+    def test_a_duplicate_is_recorded_rather_than_overwritten(self):
+        eligibility = build_units(self._rows(duplicate=True), checkpoints=[A, B], min_seeds=2)
+        self.assertEqual(len(eligibility.duplicate_rows), 1)
+        self.assertEqual(eligibility.duplicate_rows[0], ("t", A, 0))
+
+    def test_it_blocks_the_comparison(self):
+        """Cannot be fixed in the analysis, so it must not produce a number."""
+        eligibility = build_units(self._rows(duplicate=True), checkpoints=[A, B], min_seeds=2)
+        verdict = evaluate(eligibility, [A, B], resamples=100, seed=1)
+        self.assertEqual(verdict.exit_code, 2)
+        self.assertEqual(verdict.tasks, [])
+        self.assertIn("weights that scenario twice", verdict.blocking[0])
+        self.assertIn("Fix the results, do not reinterpret them", verdict.blocking[0])
+
+    def test_compare_checks_for_itself_rather_than_trusting_execute(self):
+        """`compare` reads any results directory, including ones Refractal did not write."""
+        from refractal.execute import OutputMissingError
+
+        self.assertTrue(issubclass(OutputMissingError, Exception))
+        # The two checks are independent on purpose: execute verifies what it
+        # wrote, compare verifies what it reads.
+        eligibility = build_units(self._rows(duplicate=True), checkpoints=[A, B], min_seeds=2)
+        self.assertTrue(eligibility.duplicate_rows)

@@ -132,6 +132,39 @@ check that is not there. Print the design effect on every comparison; assert
 non-empty output on every worker; put the fixture in the configuration rather
 than remembering to test it.
 
+## A recurring shape: the container not matching the question
+
+Duplication has now slipped past a correctness check four times, and every time
+the invariant was about *identity* while the container discarded *multiplicity*.
+
+| where | the container | the question it could not answer |
+|---|---|---|
+| `resolve` scenario expansion | dedup scoped to one scenario set | do two sets produce the same scenario? |
+| `execute` output check | `set` of written episode ids | did any row arrive twice? |
+| `compare` pairing | `dict` keyed by seed | did two rows claim the same episode? |
+| `schema` scene hashing | list of file paths | *(the inverse — see below)* |
+
+The first three collapsed a duplicate silently. In `compare` the collapse was the
+worst of them: two rows for one episode with *opposite* outcomes, and the second
+simply overwrote the first.
+
+**But the rule is not "always preserve duplicates."** The fourth is the same shape
+inverted. `hash_file_set` preserved multiplicity over a question that is
+set-valued — *which files define this scene* — so a scene whose `assets` glob
+happened to match its own `model` hashed differently from one whose glob did not.
+Same geometry, two identities, decided by how a glob was written. There
+deduplication was the fix.
+
+So the rule is: **match the container to the question.** A set answers "did
+everything arrive"; it cannot answer "did anything arrive twice". A list answers
+"how many"; it cannot answer "which distinct". Writing down which question is
+being asked usually makes the right container obvious, and it is the step that
+was skipped all four times.
+
+Worth a scan whenever one of these turns up, because two instances of a shape are
+rarely two. The scan that found the last two took one grep over id-keyed
+assignments and `set()` construction.
+
 ## Currently known to be unexercised
 
 "Unexercised" is not one condition, and the list is only useful if it says which

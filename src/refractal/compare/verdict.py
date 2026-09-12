@@ -188,6 +188,16 @@ def evaluate(
             "checkpoints being compared: the geometry changed between runs, so these "
             "results are not comparable. Re-run, or compare within one geometry."
         )
+    if eligibility.duplicate_rows:
+        sample = eligibility.duplicate_rows[0]
+        verdict.blocking.append(
+            f"{len(eligibility.duplicate_rows)} episode(s) appear more than once in these "
+            f"results (first: task {sample[0]!r}, checkpoint {sample[1]!r}, seed {sample[2]}). "
+            "A repeated episode weights that scenario twice in every statistic below, and no "
+            "amount of care in the analysis can undo it. Fix the results, do not reinterpret "
+            "them."
+        )
+
     if len(eligibility.harness_surfaces) > 1:
         # A precondition, not a note. vla-eval's own paper reports a harness-side
         # integration parameter -- the proprioceptive state source fed to the
