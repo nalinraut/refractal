@@ -3,7 +3,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from refractal.execute import EPISODES_SCHEMA, FakeBenchmark, read_episodes, run_local
+from refractal.execute import (
+    EPISODES_SCHEMA,
+    FakeBenchmark,
+    OutputMissingError,
+    read_episodes,
+    run_local,
+)
 from refractal.execute.results import comparison_prefix
 from refractal.resolve import resolve
 
@@ -220,3 +226,66 @@ class TestKnownGroundTruth(ExecuteCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAWorkerThatWritesNothingIsCaught(ExecuteCase):
+    """A run that completes, reports success and writes nothing.
+
+    Indistinguishable from a correct run until someone tries to compare, by which
+    point the compute is spent. The concrete route is the harness's
+    `_build_recorder`, which returns NullEpisodeRecorder whenever `self._store is
+    None` — override the recorder and not the store and every episode runs, every
+    episode succeeds, and nothing is recorded.
+
+    The guard is written against the symptom rather than that cause, so these
+    tests break the writer in ways that have nothing to do with `_store`.
+    """
+
+    def test_a_writer_that_silently_discards_everything(self):
+        """The null-recorder shape, without needing the harness to reproduce it."""
+        import refractal.execute.local as local_mod
+
+        class SilentWriter(local_mod.ResultWriter):
+            def write_episodes(self, checkpoint_id, scene_id, rows, *, part):
+                return None  # accepted, wrote nothing
+
+        original = local_mod.ResultWriter
+        local_mod.ResultWriter = SilentWriter
+        try:
+            with self.assertRaises(OutputMissingError) as ctx:
+                self.run_once()
+            message = str(ctx.exception)
+            self.assertIn("wrote none", message)
+            # The message must point at the gate, not just at the count.
+            self.assertIn("recorder that was never activated", message)
+        finally:
+            local_mod.ResultWriter = original
+
+    def test_a_writer_that_drops_some_rows(self):
+        """Partial output is the worse case: it shrinks a denominator silently."""
+        import refractal.execute.local as local_mod
+
+        class LossyWriter(local_mod.ResultWriter):
+            def write_episodes(self, checkpoint_id, scene_id, rows, *, part):
+                return super().write_episodes(checkpoint_id, scene_id, rows[:-1], part=part)
+
+        original = local_mod.ResultWriter
+        local_mod.ResultWriter = LossyWriter
+        try:
+            with self.assertRaises(OutputMissingError) as ctx:
+                self.run_once()
+            self.assertIn("reached storage", str(ctx.exception))
+            self.assertIn("shrinks a denominator", str(ctx.exception))
+        finally:
+            local_mod.ResultWriter = original
+
+    def test_a_healthy_run_passes_the_check(self):
+        summary = self.run_once()
+        self.assertEqual(summary.written, self.plan.total_episodes)
+
+    def test_a_fully_resumed_worker_does_not_trip_it(self):
+        """Nothing attempted means nothing expected: skipping is not a shortfall."""
+        self.run_once()
+        second = self.run_once(session_id=LATER_SESSION)
+        self.assertEqual(second.written, 0)
+        self.assertGreater(second.skipped, 0)

@@ -123,11 +123,17 @@ def run_local(
                 cursor += dt.timedelta(seconds=outcome["elapsed_sec"])
                 written += 1
 
+            attempted: set[str] = set()
             for checkpoint_id, rows in sorted(by_checkpoint.items()):
                 part = f"{worker.worker_id.replace('/', '-')}-{session_id[:8]}"
                 path = writer.write_episodes(checkpoint_id, scene.scene_id, rows, part=part)
+                attempted.update(r["episode_id"] for r in rows)
                 if path:
                     parts.append(path)
+
+            # Post-condition, checked against the artifact rather than the
+            # in-memory count that the same code path produced.
+            writer.verify_written(attempted, worker_id=worker.worker_id)
 
     return RunSummary(session_id=session_id, written=written, skipped=skipped, parts=parts)
 

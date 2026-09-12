@@ -31,6 +31,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from ..schema.errors import RefractalError
+
 import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -105,6 +107,23 @@ STEPS_SCHEMA = pa.schema(
 )
 
 
+class OutputMissingError(RefractalError):
+    """A worker ran episodes and its results are not on disk.
+
+    The failure this exists for: a run that completes, reports success, and
+    writes nothing is indistinguishable from a correct run until someone tries
+    to compare — by which point the compute is spent and the session is gone.
+
+    The concrete way to get there is the harness's ``_build_recorder``, which
+    returns ``NullEpisodeRecorder`` whenever ``self._store is None``. Override the
+    recorder and not the store, and every episode runs, every episode succeeds,
+    and nothing is recorded. But the guard is written against the *symptom*
+    rather than that cause, so it also catches the variants nobody has thought of:
+    a writer pointed at the wrong prefix, a filesystem that accepted a write and
+    dropped it, a backend that forgot to flush its last batch.
+    """
+
+
 def comparison_prefix(results_uri: str, plan_id: str) -> str:
     """``comparison_id=<hex>`` -- the plan id, minus the algorithm prefix.
 
@@ -148,6 +167,36 @@ class ResultWriter:
             pq.write_table(table, handle, compression="zstd")
         self.fs.mv(staging, final)
         return final
+
+    def verify_written(self, expected_ids: set[str], *, worker_id: str) -> None:
+        """Read back what was just written and require it to be there.
+
+        Reads the artifact rather than trusting the in-memory count, because a
+        count is produced by the same code path that did the writing. Costs one
+        projected column scan per worker.
+
+        Episodes were planned, therefore rows must exist. Any shortfall is an
+        error, not a warning: a partial result silently shrinks a denominator,
+        and that is worse than a run that stops.
+        """
+        if not expected_ids:
+            return
+        found = self.completed_episode_ids()
+        missing = expected_ids - found
+        if not missing:
+            return
+        if len(missing) == len(expected_ids):
+            raise OutputMissingError(
+                f"worker {worker_id!r} ran {len(expected_ids)} episode(s) and wrote none. "
+                "The run reported success and produced no results, which is the shape of a "
+                "recorder that was never activated — check that whatever gates the recorder "
+                "is set, not just that the recorder class was overridden."
+            )
+        raise OutputMissingError(
+            f"worker {worker_id!r} ran {len(expected_ids)} episode(s) but only "
+            f"{len(expected_ids) - len(missing)} reached storage; {len(missing)} missing "
+            f"(first: {sorted(missing)[0]}). A partial result silently shrinks a denominator."
+        )
 
     def completed_episode_ids(self) -> set[str]:
         """Which episodes already have a result, for resume.

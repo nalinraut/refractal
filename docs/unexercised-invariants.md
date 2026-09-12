@@ -99,6 +99,39 @@ fail with a message saying so.
 byte-identical filename and nothing in `twine check`, `git status` or the test
 suite looks at it.
 
+## Post-conditions, for the same reason
+
+The practice above asks whether a fixture puts an invariant in position. The
+complement is to make the check run on every real execution, so it does not
+depend on anyone being in a position to ask.
+
+`ResultWriter.verify_written` is the first of these: at the end of every worker,
+**episodes were planned, therefore rows must exist**. It reads the episode ids
+back out of the part files rather than trusting the in-memory count, because a
+count is produced by the same code path that did the writing — the artifact is
+the evidence, which is the week's other recurring lesson.
+
+It exists for a specific failure and is written against the symptom rather than
+the cause. The specific failure: the harness's `_build_recorder` returns
+`NullEpisodeRecorder` whenever `self._store is None`, so a bridge that overrides
+the recorder and not the store runs every episode, succeeds on every episode, and
+records nothing. A run that completes, reports success and writes nothing is
+indistinguishable from a correct one until someone tries to compare.
+
+Written against the symptom, it also catches the variants nobody has thought of:
+a writer pointed at the wrong prefix, a filesystem that accepts a write and drops
+it, a backend that forgets its last flush. `tests/test_execute.py::TestAWorkerThatWritesNothingIsCaught`
+breaks the writer in two ways that have nothing to do with `_store`.
+
+Partial loss is treated as an error rather than a warning, because a partial
+result silently shrinks a denominator — which is the same failure as every entry
+in the table above.
+
+**The general form:** a check that only runs when someone suspects a problem is a
+check that is not there. Print the design effect on every comparison; assert
+non-empty output on every worker; put the fixture in the configuration rather
+than remembering to test it.
+
 ## Currently known to be unexercised
 
 "Unexercised" is not one condition, and the list is only useful if it says which
