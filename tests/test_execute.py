@@ -255,7 +255,7 @@ class TestAWorkerThatWritesNothingIsCaught(ExecuteCase):
             with self.assertRaises(OutputMissingError) as ctx:
                 self.run_once()
             message = str(ctx.exception)
-            self.assertIn("wrote none", message)
+            self.assertIn("wrote no", message)
             # The message must point at the gate, not just at the count.
             self.assertIn("recorder that was never activated", message)
         finally:
@@ -289,3 +289,71 @@ class TestAWorkerThatWritesNothingIsCaught(ExecuteCase):
         second = self.run_once(session_id=LATER_SESSION)
         self.assertEqual(second.written, 0)
         self.assertGreater(second.skipped, 0)
+
+    def test_an_id_that_was_never_planned(self):
+        """episode_id comes from the plan; a writer must not invent one.
+
+        Matters because the bridge is the first place ids are derived from a
+        benchmark we did not write. An id not in the plan means the scene, task,
+        scenario, seed or checkpoint did not survive the round trip.
+        """
+        import refractal.execute.local as local_mod
+
+        class ForgetfulWriter(local_mod.ResultWriter):
+            def write_episodes(self, checkpoint_id, scene_id, rows, *, part):
+                rows = [dict(r) for r in rows]
+                rows[0]["episode_id"] = "sha256:" + "ff" * 32
+                return super().write_episodes(checkpoint_id, scene_id, rows, part=part)
+
+        original = local_mod.ResultWriter
+        local_mod.ResultWriter = ForgetfulWriter
+        try:
+            with self.assertRaises(OutputMissingError) as ctx:
+                self.run_once()
+            # Reported as missing, because the planned id is absent -- which is
+            # the more actionable half of the same fact.
+            self.assertIn("missing", str(ctx.exception))
+        finally:
+            local_mod.ResultWriter = original
+
+    def test_a_duplicated_row_is_caught(self):
+        """Invisible to a set comparison, and it double-weights a scenario."""
+        import refractal.execute.local as local_mod
+
+        class DoublingWriter(local_mod.ResultWriter):
+            def write_episodes(self, checkpoint_id, scene_id, rows, *, part):
+                return super().write_episodes(
+                    checkpoint_id, scene_id, list(rows) + [dict(rows[0])], part=part
+                )
+
+        original = local_mod.ResultWriter
+        local_mod.ResultWriter = DoublingWriter
+        try:
+            with self.assertRaises(OutputMissingError) as ctx:
+                self.run_once()
+            message = str(ctx.exception)
+            self.assertIn("duplicate", message)
+            self.assertIn("weights that scenario twice", message)
+        finally:
+            local_mod.ResultWriter = original
+
+    def test_a_purely_extra_id_is_caught_as_unexpected(self):
+        """Nothing planned goes missing, so only the unexpected branch can fire."""
+        import refractal.execute.local as local_mod
+
+        class ChattyWriter(local_mod.ResultWriter):
+            def write_episodes(self, checkpoint_id, scene_id, rows, *, part):
+                extra = dict(rows[0])
+                extra["episode_id"] = "sha256:" + "ee" * 32
+                return super().write_episodes(
+                    checkpoint_id, scene_id, list(rows) + [extra], part=part
+                )
+
+        original = local_mod.ResultWriter
+        local_mod.ResultWriter = ChattyWriter
+        try:
+            with self.assertRaises(OutputMissingError) as ctx:
+                self.run_once()
+            self.assertIn("never planned", str(ctx.exception))
+        finally:
+            local_mod.ResultWriter = original

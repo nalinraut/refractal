@@ -44,6 +44,10 @@ execute = ["fsspec>=2024.2.0", "pyarrow>=15.0"]
 # refractal.compare only. Note the absence of scipy: exact McNemar is a binomial
 # tail, the bootstrap is resampling, and Cochran's Q is a permutation test.
 compare = ["pyarrow>=15.0", "fsspec>=2024.2.0"]
+# The vla-eval bridge. A PyPI version specifier, not a git ref: a PEP 508 direct
+# reference cannot appear in metadata uploaded to PyPI, and the container image
+# is where the exact commit gets pinned. See docs/harness-integration.md.
+vla-eval = ["vla-eval>=0.5.0", "fsspec>=2024.2.0", "pyarrow>=15.0"]
 # Everything, for a machine that runs the whole pipeline.
 all = ["fsspec>=2024.2.0", "pyarrow>=15.0"]
 

@@ -168,35 +168,85 @@ class ResultWriter:
         self.fs.mv(staging, final)
         return final
 
-    def verify_written(self, expected_ids: set[str], *, worker_id: str) -> None:
-        """Read back what was just written and require it to be there.
+    def episode_ids_in(self, paths: Iterable[str]) -> list[str]:
+        """Episode ids from specific part files, **with duplicates preserved**.
 
-        Reads the artifact rather than trusting the in-memory count, because a
-        count is produced by the same code path that did the writing. Costs one
-        projected column scan per worker.
+        Deliberately a list rather than a set. A set cannot see a row written
+        twice, and a doubled episode is the same failure as the cross-set
+        scenario duplication: one scenario counted twice, silently weighted
+        double in a comparison.
+        """
+        ids: list[str] = []
+        for path in paths:
+            with self.fs.open(path, "rb") as handle:
+                ids.extend(pq.read_table(handle, columns=["episode_id"])
+                           .column("episode_id").to_pylist())
+        return ids
 
-        Episodes were planned, therefore rows must exist. Any shortfall is an
-        error, not a warning: a partial result silently shrinks a denominator,
-        and that is worse than a run that stops.
+    def verify_written(
+        self, expected_ids: set[str], paths: Iterable[str], *, worker_id: str
+    ) -> None:
+        """Require the ids on disk to be exactly the ids that were planned.
+
+        Three distinct failures, and the naive version catches only the first:
+
+        * **missing** — planned and not written. The null-recorder case.
+        * **unexpected** — written and not planned. An id the writer invented,
+          which matters because ``episode_id`` is derived from things the harness
+          supplies, and the bridge is the first place those come from a benchmark
+          we did not write.
+        * **duplicated** — one id, two rows. Invisible to a set comparison, and
+          it double-weights a scenario in every downstream statistic.
+
+        The evidence comes from the part files, not from a counter incremented
+        alongside the writes: a count is produced by the same code path that did
+        the writing, so it cannot disagree with it. Verification is only worth
+        anything when the two sides come from different paths.
         """
         if not expected_ids:
             return
-        found = self.completed_episode_ids()
+
+        paths = list(paths)
+        if not paths:
+            raise OutputMissingError(
+                f"worker {worker_id!r} ran {len(expected_ids)} episode(s) and wrote no files "
+                "at all. The run reported success and produced no results, which is the shape "
+                "of a recorder that was never activated — check that whatever gates the "
+                "recorder is set, not just that the recorder class was overridden."
+            )
+
+        ids = self.episode_ids_in(paths)
+        found = set(ids)
         missing = expected_ids - found
-        if not missing:
-            return
-        if len(missing) == len(expected_ids):
+        unexpected = found - expected_ids
+        duplicated = len(ids) - len(found)
+
+        if missing and not found:
             raise OutputMissingError(
                 f"worker {worker_id!r} ran {len(expected_ids)} episode(s) and wrote none. "
                 "The run reported success and produced no results, which is the shape of a "
                 "recorder that was never activated — check that whatever gates the recorder "
                 "is set, not just that the recorder class was overridden."
             )
-        raise OutputMissingError(
-            f"worker {worker_id!r} ran {len(expected_ids)} episode(s) but only "
-            f"{len(expected_ids) - len(missing)} reached storage; {len(missing)} missing "
-            f"(first: {sorted(missing)[0]}). A partial result silently shrinks a denominator."
-        )
+        if missing:
+            raise OutputMissingError(
+                f"worker {worker_id!r} ran {len(expected_ids)} episode(s) but only "
+                f"{len(expected_ids) - len(missing)} reached storage; {len(missing)} missing "
+                f"(first: {sorted(missing)[0]}). A partial result silently shrinks a denominator."
+            )
+        if unexpected:
+            raise OutputMissingError(
+                f"worker {worker_id!r} wrote {len(unexpected)} episode id(s) that were never "
+                f"planned (first: {sorted(unexpected)[0]}). episode_id is derived from the "
+                "scene, task, scenario, seed and checkpoint; an id that is not in the plan "
+                "means one of those did not survive the round trip intact."
+            )
+        if duplicated:
+            raise OutputMissingError(
+                f"worker {worker_id!r} wrote {len(ids)} rows for {len(found)} episode(s): "
+                f"{duplicated} duplicate(s). A repeated episode_id weights that scenario twice "
+                "in every downstream statistic, which no later stage can detect."
+            )
 
     def completed_episode_ids(self) -> set[str]:
         """Which episodes already have a result, for resume.
