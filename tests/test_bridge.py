@@ -22,6 +22,8 @@ import unittest
 
 from refractal.execute.vla_eval import (
     RECORDER_SURFACE,
+    StepBuffer,
+    to_episode_row,
     BridgeError,
     check_recorder_surface,
     make_parquet_orchestrator,
@@ -107,7 +109,20 @@ class BridgeCase(unittest.TestCase):
                 sys.modules[name] = module
 
 
-class TestTheTwoMethodOverride(BridgeCase):
+class TestOverrideLogicAgainstAReproducedGate(BridgeCase):
+    """Verifies the override logic is self-consistent against a *reproduction* of
+    the harness's gate. Does **not** verify anything about the real harness.
+
+    Named this way on purpose. A green run here means "our two-method override
+    behaves correctly against the gate as we understand it", not "the real gate is
+    unchanged". Those are different claims and only the first is tested.
+
+    The specific blind spot: if a future harness *moves* the check rather than
+    changing it -- same logic, different place -- `harness_surface` fires and
+    blocks comparisons, while these tests keep passing and say nothing is wrong.
+    That division of labour is deliberate; the risk is reading the first claim as
+    the second.
+    """
     def test_overriding_only_the_recorder_records_nothing(self):
         """The failure being guarded against, demonstrated rather than described."""
         from vla_eval.orchestrator import Orchestrator
@@ -203,3 +218,81 @@ class TestWorkerSelection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEpisodeRowMapping(unittest.TestCase):
+    """Where the harness's denominator decision gets undone.
+
+    `_build_task_result` counts errored episodes as policy failures with
+    `len(episodes)` as the denominator — documented and deliberate upstream, and
+    wrong for a comparison. A crashed container is not evidence about a policy.
+    """
+
+    def _episode(self):
+        return PlannedEpisode(
+            episode_id="sha256:e", task_id="t", task_hash="sha256:t",
+            scenario_hash="sha256:s", seed=0, checkpoint_id="ckpt",
+        )
+
+    def test_a_success(self):
+        row = to_episode_row(self._episode(), {"metrics": {"success": True}, "steps": 120})
+        self.assertTrue(row.success)
+        self.assertFalse(row.is_infra_failure)
+        # Null iff success. The reference says null means a policy failure, but
+        # null is also what a success writes.
+        self.assertIsNone(row.failure_reason)
+
+    def test_a_policy_failure_names_itself(self):
+        row = to_episode_row(self._episode(), {"metrics": {"success": False}, "steps": 300})
+        self.assertFalse(row.success)
+        self.assertFalse(row.is_infra_failure)
+        self.assertEqual(row.failure_reason, "policy_failure")
+
+    def test_an_infra_failure_leaves_the_denominator(self):
+        row = to_episode_row(
+            self._episode(),
+            {"metrics": {"success": False}, "failure_reason": "server_unreachable"},
+        )
+        self.assertTrue(row.is_infra_failure)
+        self.assertEqual(row.failure_reason, "server_unreachable")
+
+    def test_a_crash_is_never_counted_as_a_success(self):
+        """Their metrics can say success while the episode also errored."""
+        row = to_episode_row(
+            self._episode(),
+            {"metrics": {"success": True}, "failure_reason": "worker_timeout"},
+        )
+        self.assertFalse(row.success)
+        self.assertTrue(row.is_infra_failure)
+
+    def test_phase_outcomes_come_across_as_pairs(self):
+        row = to_episode_row(
+            self._episode(),
+            {"metrics": {"success": False, "phase_outcomes": {"reach": True, "grasp": False},
+                         "terminal_phase": "grasp"}},
+        )
+        self.assertEqual(sorted(row.phase_outcomes), [("grasp", False), ("reach", True)])
+        self.assertEqual(row.terminal_phase, "grasp")
+
+    def test_missing_fields_do_not_raise(self):
+        """A benchmark we did not write may omit anything optional."""
+        row = to_episode_row(self._episode(), {})
+        self.assertFalse(row.success)
+        self.assertEqual(row.steps, 0)
+        self.assertEqual(row.failure_reason, "policy_failure")
+
+
+class TestStepBuffer(unittest.TestCase):
+    def test_it_accumulates_in_order_and_nothing_is_written_mid_episode(self):
+        buffer = StepBuffer()
+        for i in range(3):
+            buffer.collect("ep-1", "reward", float(i))
+        buffer.collect("ep-2", "reward", 9.0)
+        self.assertEqual(len(buffer), 2)
+        self.assertEqual([v for _, v in buffer.steps_for("ep-1")], [0.0, 1.0, 2.0])
+
+    def test_discard_frees_an_episode(self):
+        buffer = StepBuffer()
+        buffer.collect("ep-1", "reward", 1.0)
+        buffer.discard("ep-1")
+        self.assertEqual(buffer.steps_for("ep-1"), [])

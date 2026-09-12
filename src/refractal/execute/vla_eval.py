@@ -156,6 +156,77 @@ def worker_selection(episodes: list[PlannedEpisode]) -> dict[str, Any]:
     return {"tasks": sorted(task_ids), "episodes_per_task": len(episodes)}
 
 
+class StepBuffer:
+    """Accumulates recorded step fields per episode, in memory, in order.
+
+    Nothing is written from inside an episode. Buffering here keeps the
+    temp-then-rename guarantee in one place -- a recorder that wrote as it went
+    would be producing partial files that a concurrent resume could read as
+    complete.
+    """
+
+    def __init__(self) -> None:
+        self._fields: dict[str, list[tuple[str, Any]]] = {}
+
+    def collect(self, episode_id: str, name: str, value: Any) -> None:
+        self._fields.setdefault(episode_id, []).append((name, value))
+
+    def steps_for(self, episode_id: str) -> list[tuple[str, Any]]:
+        return self._fields.get(episode_id, [])
+
+    def discard(self, episode_id: str) -> None:
+        self._fields.pop(episode_id, None)
+
+    def __len__(self) -> int:
+        return len(self._fields)
+
+
+def to_episode_row(episode: PlannedEpisode, result: Mapping[str, Any]) -> EpisodeRow:
+    """Map one harness ``EpisodeResult`` onto Refractal's episode row.
+
+    **This function is where their denominator decision gets undone**, so it is
+    worth being explicit about rather than burying in a dict comprehension.
+
+    ``_build_task_result`` counts errored episodes as policy failures, with
+    ``len(episodes)`` as the denominator -- documented and deliberate upstream,
+    and wrong for a comparison. A crashed container is not evidence about a
+    policy.
+
+    So the harness's ``failure_reason`` becomes ``is_infra_failure``: it is set
+    exactly when the episode did not complete for a reason outside the policy --
+    ``server_unreachable``, a wedged container, a timeout. The distinction is kept
+    as its own column so ``compare`` can drop those from a denominator without
+    pattern-matching a string.
+
+    And a genuine policy failure names itself. The reference says a null
+    ``failure_reason`` means a real failure, but null is also what a success
+    writes, so the two would be indistinguishable; here null means success and
+    nothing else.
+    """
+    metrics = result.get("metrics") or {}
+    infra_reason = result.get("failure_reason") or None
+    success = bool(metrics.get("success", False)) and infra_reason is None
+
+    if success:
+        failure_reason = None
+    elif infra_reason is not None:
+        failure_reason = str(infra_reason)
+    else:
+        failure_reason = "policy_failure"
+
+    phases = metrics.get("phase_outcomes") or {}
+    return EpisodeRow(
+        episode=episode,
+        success=success,
+        steps=int(result.get("steps") or 0),
+        elapsed_sec=float(result.get("elapsed_sec") or 0.0),
+        failure_reason=failure_reason,
+        is_infra_failure=infra_reason is not None,
+        phase_outcomes=[(str(k), bool(v)) for k, v in phases.items()],
+        terminal_phase=metrics.get("terminal_phase"),
+    )
+
+
 def make_parquet_recorder(collect) -> type:
     """Build the recorder subclass, lazily.
 
@@ -263,6 +334,8 @@ __all__ = [
     "RECORDER_SURFACE",
     "BridgeError",
     "EpisodeRow",
+    "StepBuffer",
+    "to_episode_row",
     "check_recorder_surface",
     "make_parquet_orchestrator",
     "make_parquet_recorder",

@@ -191,6 +191,11 @@ def evaluate(
     if eligibility.duplicate_rows:
         sample = eligibility.duplicate_rows[0]
         verdict.blocking.append(
+            # Independent of execute's verify_written on purpose, and not only
+            # because compare reads directories Refractal did not write: two
+            # guards that can disagree are worth more than one. A disagreement
+            # would mean something interesting -- rows appearing between the
+            # write and the read -- rather than being redundant work.
             f"{len(eligibility.duplicate_rows)} episode(s) appear more than once in these "
             f"results (first: task {sample[0]!r}, checkpoint {sample[1]!r}, seed {sample[2]}). "
             "A repeated episode weights that scenario twice in every statistic below, and no "
