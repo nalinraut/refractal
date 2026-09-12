@@ -25,12 +25,25 @@ class TestFloatNormalisation(unittest.TestCase):
             hash_obj(normalize_params({"vial_x": interpolated})),
         )
 
-    def test_int_and_float_agree_in_scenario_params(self):
-        # Editing `vial_x: 0` to `vial_x: 0.0` is a no-op to a physicist and
-        # must be a no-op to the hash.
-        self.assertEqual(
-            hash_obj(normalize_params({"vial_x": 0})),
-            hash_obj(normalize_params({"vial_x": 0.0})),
+    def test_integers_survive_normalisation(self):
+        """Integers are already canonical, so they pass through unchanged.
+
+        This reverses an earlier decision. The old rule coerced every scenario
+        number to float on the grounds that scenario parameters are physical
+        quantities, so `0` and `0.0` are the same thing. True of a vial position,
+        false of an array index -- and it made `plan.json` print
+        `init_state_index: 3.0` for an index into a fixed list of init states.
+
+        `plan.json` exists to be read and checked, and "looks wrong but works" is
+        the category this project keeps finding real bugs in.
+        """
+        self.assertIsInstance(normalize_params({"i": 3})["i"], int)
+        self.assertIsInstance(normalize_params({"x": 3.0})["x"], float)
+        # The accepted cost: these are now different scenarios. Visible in the
+        # YAML diff and in catalog_hash, which the silent coercion was not.
+        self.assertNotEqual(
+            hash_obj(normalize_params({"friction": 1})),
+            hash_obj(normalize_params({"friction": 1.0})),
         )
 
     def test_negative_zero_folds(self):

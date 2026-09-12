@@ -60,17 +60,56 @@ ScenarioFilter = Callable[[Mapping[str, Any]], bool]
 # --------------------------------------------------------------------------
 
 
-def _linspace(lo: float, hi: float, steps: int) -> list[float]:
-    """Inclusive linear spacing. ``steps == 1`` yields ``[lo]``.
+def _is_int(x: Any) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
+def _linspace(lo: float, hi: float, steps: int) -> list[Any]:
+    """Inclusive linear spacing, preserving the authored numeric type.
 
     Written as ``lo + i * (hi - lo) / (steps - 1)`` rather than by accumulation
-    so that error does not compound along the axis, and so the endpoint is
-    exact rather than approached.
+    so error does not compound along the axis and the endpoint is exact rather
+    than approached.
+
+    **Integer preservation.** ``range: [0, 49], steps: 50`` describes indices, not
+    quantities, and ``plan.json`` should say ``init_state_index: 3`` rather than
+    ``3.0``. So when the bounds are integers *and* the spacing divides evenly,
+    the axis is computed with integer arithmetic and stays integral.
+
+    The condition is ``span % (steps - 1) == 0``, checked on integers, not a
+    tolerance on the floats afterwards. Structural rather than numerical: asking
+    whether ``2.9999999999999996`` is "close enough to an integer" would
+    eventually call a genuinely fractional grid integral, and the whole point is
+    that identity must not depend on a judgement call.
+
+    **Uniform across the parameter, never per-value.** ``range: [0, 1]`` with
+    ``steps: 3`` has integer bounds but yields ``0.5``, so the entire axis
+    becomes float. Mixing ``0`` and ``0.5`` in one parameter would make the
+    canonical form depend on which grid point you landed on.
     """
     if steps == 1:
         return [lo]
     span = hi - lo
+    if _is_int(lo) and _is_int(hi) and span % (steps - 1) == 0:
+        step = span // (steps - 1)
+        return [lo + i * step for i in range(steps)]
     return [lo + i * span / (steps - 1) for i in range(steps)]
+
+
+def _uniform_numeric(values: list[Any]) -> list[Any]:
+    """Widen a mixed int/float choice list to all-float.
+
+    Same rule as the range axis: the type is a property of the parameter, not of
+    the individual value. ``choices: [1, 2.5]`` becomes ``[1.0, 2.5]`` so the
+    canonical form does not depend on which choice was drawn.
+    """
+    numeric = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    if numeric and any(isinstance(v, float) for v in numeric):
+        return [
+            float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+            for v in values
+        ]
+    return values
 
 
 def _axis_values(spec: ParamSpec, rng: random.Random) -> list[Any]:
@@ -79,7 +118,7 @@ def _axis_values(spec: ParamSpec, rng: random.Random) -> list[Any]:
     if form == "range":
         return _linspace(spec.range[0], spec.range[1], int(spec.steps))
     if form == "choices":
-        return list(spec.choices)
+        return _uniform_numeric(list(spec.choices))
     if form == "constant":
         return [spec.value]
     if form == "random":
@@ -99,7 +138,7 @@ def _draw(spec: ParamSpec, u: float) -> Any:
     if form == "constant":
         return spec.value
     if form == "choices":
-        values = list(spec.choices)
+        values = _uniform_numeric(list(spec.choices))
         return values[min(int(u * len(values)), len(values) - 1)]
     if form == "range":
         values = _linspace(spec.range[0], spec.range[1], int(spec.steps))

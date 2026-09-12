@@ -97,5 +97,81 @@ class TestSamplingGenerators(unittest.TestCase):
             self.assertLessEqual(row["a"], 0.01)
 
 
+
+
+class TestNumericTypePreservation(unittest.TestCase):
+    """The authored type decides, and it is uniform across the parameter.
+
+    Not a new ParamSpec form the author picks: if the author chose, two catalogs
+    expressing the same grid differently would hash differently. The type follows
+    from the bounds, so there is no decision to get wrong.
+    """
+
+    def _values(self, **kw):
+        return [row["p"] for row in linspace_grid({"p": ParamSpec(**kw)}, seed=0)]
+
+    def test_integer_bounds_that_divide_evenly_stay_integers(self):
+        # The LIBERO case: init-state indices, not quantities.
+        values = self._values(range=[0, 49], steps=50)
+        self.assertTrue(all(isinstance(v, int) for v in values))
+        self.assertEqual(values[:4], [0, 1, 2, 3])
+        self.assertEqual(values[-1], 49)
+
+    def test_integer_bounds_with_a_coarser_step_still_stay_integers(self):
+        self.assertEqual(self._values(range=[0, 100], steps=5), [0, 25, 50, 75, 100])
+
+    def test_integer_bounds_that_do_not_divide_become_float_throughout(self):
+        """Uniform across the parameter, never per-value.
+
+        [0, 1] over 3 steps yields 0.5, so the whole axis is float. Mixing 0 and
+        0.5 would make the canonical form depend on which grid point you landed
+        on.
+        """
+        values = self._values(range=[0, 1], steps=3)
+        self.assertTrue(all(isinstance(v, float) for v in values))
+        self.assertEqual(values, [0.0, 0.5, 1.0])
+
+    def test_float_bounds_stay_float_even_at_integral_values(self):
+        values = self._values(range=[0.0, 2.0], steps=3)
+        self.assertTrue(all(isinstance(v, float) for v in values))
+
+    def test_the_divisibility_test_is_structural_not_a_tolerance(self):
+        """Never ask whether 2.9999999999999996 is close enough to an integer.
+
+        A tolerance would eventually call a genuinely fractional grid integral,
+        and identity must not depend on a judgement call.
+        """
+        values = self._values(range=[0, 10], steps=4)
+        self.assertTrue(all(isinstance(v, float) for v in values))
+        self.assertAlmostEqual(values[1], 10 / 3)
+
+    def test_choices_preserve_ints_and_widen_when_mixed(self):
+        self.assertTrue(all(isinstance(v, int) for v in self._values(choices=[1, 2, 3])))
+        widened = self._values(choices=[1, 2.5])
+        self.assertTrue(all(isinstance(v, float) for v in widened))
+        self.assertEqual(widened, [1.0, 2.5])
+
+    def test_constants_preserve_their_type(self):
+        self.assertIsInstance(self._values(value=0)[0], int)
+        self.assertIsInstance(self._values(value=0.0)[0], float)
+
+    def test_non_numeric_choices_are_untouched(self):
+        self.assertEqual(sorted(self._values(choices=["red", "blue"])), ["blue", "red"])
+
+    def test_sampled_axes_are_float(self):
+        rows = random_sample(
+            {"p": ParamSpec(range=[0, 10], samples=5, distribution="uniform")}, seed=1
+        )
+        self.assertTrue(all(isinstance(r["p"], float) for r in rows))
+
+    def test_an_index_axis_survives_the_whole_pipeline(self):
+        """What this change exists for: plan.json must not say 3.0 for an index."""
+        import json
+
+        rows = linspace_grid({"init_state_index": ParamSpec(range=[0, 9], steps=10)}, seed=0)
+        rendered = json.dumps(rows[3])
+        self.assertIn('"init_state_index": 3', rendered)
+        self.assertNotIn("3.0", rendered)
+
 if __name__ == "__main__":
     unittest.main()

@@ -53,12 +53,7 @@ def round_significant(x: float, digits: int = QUANT_SIG_DIGITS) -> float:
 
 
 def normalize_number(x: int | float) -> float:
-    """Coerce a scenario parameter to a canonical float.
-
-    Numbers in a scenario are physical quantities, so int and float are the same
-    kind of thing and must not produce different identities. Editing
-    ``vial_x: 0`` to ``vial_x: 0.0`` is a no-op to a physicist and must be a
-    no-op to the hash.
+    """Quantize a float so arithmetic noise cannot fork identity.
 
     ``-0.0`` folds to ``0.0``: they compare equal but ``repr`` differs, which
     would be an identity fork that no test would ever catch by inspection.
@@ -79,7 +74,22 @@ def normalize_params(value: Any, *, _path: str = "$") -> Any:
     """
     if isinstance(value, bool) or value is None or isinstance(value, str):
         return value
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
+        # Integers are already canonical. They have no 0.1-versus-0.10 problem
+        # and no accumulated-error problem, so there is nothing to normalize --
+        # and coercing them to float made `plan.json` say
+        # `init_state_index: 3.0` for what is an index into a fixed array.
+        #
+        # That reads as wrong, and "reads as wrong but works" is the category
+        # this project keeps finding real bugs in. The earlier justification was
+        # that scenario parameters are physical quantities and so int and float
+        # are the same kind of thing; true of a vial position, false of an index.
+        #
+        # Consequence, accepted deliberately: `friction: 1` and `friction: 1.0`
+        # are now different scenarios. The difference is visible in the YAML
+        # diff and in `catalog_hash`, which the previous silent coercion was not.
+        return value
+    if isinstance(value, float):
         return normalize_number(value)
     if isinstance(value, Mapping):
         out = {}
@@ -144,11 +154,12 @@ def canonical_json(value: Any) -> bytes:
     JSON has no representation for them and every library invents a different
     one.
 
-    Note the asymmetry with :func:`normalize_params`: this function *preserves*
-    the int/float distinction, because it also hashes authored data such as
-    ``predicate_args: {slot: 4}`` where ``4`` is an index and ``4.0`` would be
-    a different thing to a human reader. Scenario parameters get their ints
-    folded to floats first, by ``normalize_params``, on purpose.
+    The int/float distinction is preserved, here and in
+    :func:`normalize_params`. ``predicate_args: {slot: 4}`` is an index and
+    ``4.0`` would read as a different thing; ``init_state_index: 3`` is an index
+    too, and a generator that emitted ``3.0`` for it made ``plan.json`` --- the
+    artifact whose entire job is to be read and checked --- say something that
+    looks wrong.
     """
     out: list[str] = []
     _encode(value, out, "$")

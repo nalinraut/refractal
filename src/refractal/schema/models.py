@@ -255,7 +255,11 @@ class ParamSpec(Strict):
     | random   | ``range``, ``samples``, ``distribution``     |
     """
 
-    range: list[float] | None = None
+    #: ``int | float``, not ``float``: annotating this as float would make
+    #: pydantic coerce ``range: [0, 49]`` to ``[0.0, 49.0]`` before a generator
+    #: ever sees it, destroying the authored type that decides whether the axis
+    #: yields indices or quantities.
+    range: list[int | float] | None = None
     steps: int | None = Field(default=None, gt=0)
     choices: list[Any] | None = None
     value: Any = None

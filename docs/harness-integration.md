@@ -41,6 +41,53 @@ Every surface Refractal subclasses is byte-identical across the range —
 `model_servers/base.py`, `registry.py` and `types.py` is empty — so moving
 between them breaks nothing in §1 either way.
 
+### Measured: fp32 cannot interleave on a 32 GB card
+
+Recorded because someone will ask why the published LIBERO numbers were not
+reproduced, and the answer should be a measurement rather than a shrug.
+
+Two pi0-family LIBERO checkpoints, loaded onto an RTX 5090 (32,607 MiB total,
+31.35 GiB usable), each in its own process as two model servers would be:
+
+| dtype | `pi0_libero_finetuned_v044` | `pi05_libero_finetuned_v044` | both resident |
+|---|---|---|---|
+| bf16 | 7,344 MiB | 8,028 MiB | **15,432 MiB used, 16,675 free** |
+| fp32 | 20,912 MiB | — | **OOM on the second** |
+
+```
+OOM pi05_libero_finetuned_v044 fp32: CUDA out of memory. Tried to allocate 1.96 GiB.
+GPU 0 has a total capacity of 31.35 GiB of which 1.08 GiB is free
+```
+
+The fp32 resident figure is inflated by the measurement path, which loads bf16
+from disk and casts, so both copies live briefly; a real fp32 server would sit
+nearer its 13,359 MiB of weights. Even on that generous accounting two servers
+is ~26.7 GiB of weights plus two ~582 MiB CUDA contexts, leaving under 3 GiB for
+activations. Not viable.
+
+**So reproducing published scores and demonstrating same-session control are
+different runs.** If the published numbers are fp32 they need
+`execution_mode: serial`; `interleaved` requires bf16. Both are legitimate and
+they are not the same experiment -- which the structure already enforces, see
+below.
+
+### The 55-point failure is unrepresentable, not merely caught
+
+§8 argues that the X-VLA proprioceptive-state-source failure cannot survive into
+a Refractal comparison, because a state source is a `server_args` entry and
+`server_args` is hashed into `plan_id`. That argument was written from the
+schema. Here is the same mechanism arriving unbidden in a real decision:
+
+`torch_dtype` is a server argument. So a bf16 run and an fp32 run of the same
+catalog, the same checkpoints and the same scenarios have **different
+`plan_id`s**, land in different comparison directories, and cannot be joined. The
+dtype question above could not have produced a silently mixed comparison even if
+nobody had thought about dtype at all.
+
+That is the better example to lead with, because nobody designed it. The
+protection came from deciding once that everything affecting a measurement goes
+into the experiment identity, and then not making exceptions.
+
 ### The harness version is a render-time fact, so it must be recorded per episode
 
 The pin that actually runs episodes lives in the Dockerfile, not in
