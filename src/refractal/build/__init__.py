@@ -56,7 +56,7 @@ from ..resolve.lock import (
     filter_source_sha,
 )
 from ..schema.errors import CatalogError, RefractalError
-from ..schema.identity import scenario_hash, scene_hash
+from ..schema.identity import external_scene_ref_key, scenario_hash, scene_hash
 from ..schema.importstr import check_arity, resolve_import_string
 from ..schema.loader import Catalog, load_catalog
 from ..schema.models import ResourceShape, Scene
@@ -152,6 +152,30 @@ def build(
             version = probe.version(scene.engine)
             report.notes.append(f"probed engine_version for {scene.id!r}: {version}")
             scene = scene.model_copy(update={"engine_version": version})
+
+        if scene.is_external:
+            # The geometry lives in a wrapped benchmark. Only a probe that can
+            # import the provider knows what it is; without one there is nothing
+            # honest to record.
+            if probe is None or not hasattr(probe, "external_scene_hash"):
+                raise BuildError(
+                    f"scene {scene.id!r} is defined by {scene.external.provider!r}, so its "
+                    "hash must come from a probe that can import that provider. Run "
+                    "'refractal build' where the benchmark is installed."
+                )
+            digest = probe.external_scene_hash(scene)
+            resolved_scene_hashes[scene.id] = digest
+            report.lock.scenes.append(
+                SceneEntry(
+                    scene_id=scene.id,
+                    scene_hash=digest,
+                    model_hash=digest,
+                    engine_version=version,
+                    external=True,
+                    ref_key=external_scene_ref_key(scene),
+                )
+            )
+            continue
 
         digest = scene_hash(catalog.root, scene)
         resolved_scene_hashes[scene.id] = digest

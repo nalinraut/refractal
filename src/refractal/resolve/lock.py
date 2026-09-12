@@ -103,6 +103,12 @@ class SceneEntry(Strict):
     scene_hash: str
     model_hash: str
     engine_version: str
+    #: True when the geometry lives in a wrapped benchmark rather than this
+    #: catalog, so ``resolve`` knows the hash cannot be recomputed locally.
+    external: bool = False
+    #: For external scenes: the catalog-side identity this hash was recorded
+    #: against. Editing the provider or the ref makes the entry stale.
+    ref_key: str | None = None
 
 
 class BuildLock(Strict):
@@ -124,6 +130,47 @@ class BuildLock(Strict):
                 file=LOCK_FILENAME,
             )
         return set(entry.survivors)
+
+    def scene_entry(self, scene_id: str) -> SceneEntry | None:
+        return next((s for s in self.scenes if s.scene_id == scene_id), None)
+
+    def check_scene_fresh(self, catalog_root: Path, scene: Any) -> None:
+        """Refuse a recorded scene hash that no longer describes the scene.
+
+        Once the lock wins over computed sources -- which it must, because an
+        external scene has no local sources -- a stale entry becomes silently
+        authoritative. Editing an MJCF after building would keep planning against
+        the old geometry and joining against results from a world that no longer
+        exists. Same shape as the filter-body case: precedence is not a substitute
+        for a freshness check.
+        """
+        entry = self.scene_entry(scene.id)
+        if entry is None:
+            return
+
+        if scene.is_external:
+            from ..schema.identity import external_scene_ref_key
+
+            if entry.ref_key != external_scene_ref_key(scene):
+                raise CatalogError(
+                    f"build.lock's entry for scene {scene.id!r} was recorded against a "
+                    "different provider or ref than scenes.yaml now declares. Re-run "
+                    "'refractal build'.",
+                    file=LOCK_FILENAME,
+                )
+            return
+
+        from ..schema.identity import scene_hash as _scene_hash
+
+        current = _scene_hash(catalog_root, scene)
+        if current != entry.scene_hash:
+            raise CatalogError(
+                f"build.lock records scene_hash {entry.scene_hash[:19]}... for scene "
+                f"{scene.id!r}, but its sources now hash to {current[:19]}.... The geometry "
+                "changed since the lock was written, and the lock is what planning trusts. "
+                "Re-run 'refractal build'.",
+                file=LOCK_FILENAME,
+            )
 
     def check_filter_source(self, scenario_set: ScenarioSet) -> str | None:
         """Best-effort check that the filter's body is the one that ran.

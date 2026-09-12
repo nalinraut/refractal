@@ -56,7 +56,18 @@ def resolve(
 
     warnings = list(catalog.warnings)
     lock = load_lock(catalog.root)
-    scene_hashes = catalog.scene_hashes()
+
+    # Freshness first, then precedence. The lock wins over computed sources --
+    # it has to, for an externally-defined scene -- so a stale entry would
+    # otherwise become silently authoritative.
+    recorded: dict[str, str] = {}
+    if lock is not None:
+        for scene in catalog.scenes:
+            lock.check_scene_fresh(catalog.root, scene)
+            entry = lock.scene_entry(scene.id)
+            if entry is not None:
+                recorded[scene.id] = entry.scene_hash
+    scene_hashes = catalog.scene_hashes(recorded)
     task_hashes = task_hashes_for(catalog)
     hardware = catalog.hardware(hardware_profile)
 
@@ -178,7 +189,7 @@ def resolve(
 
     return Plan(
         plan_schema=PLAN_SCHEMA,
-        plan_id=catalog.plan_id(),
+        plan_id=catalog.plan_id(recorded),
         catalog_hash=catalog.catalog_file_hash(),
         refractal_version=__version__,
         hardware_profile=hardware_profile,

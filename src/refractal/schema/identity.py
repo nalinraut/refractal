@@ -117,6 +117,28 @@ def _scene_files(catalog_root: Path, scene: Scene) -> list[Path]:
     return files
 
 
+def external_scene_ref_key(scene: Scene) -> str:
+    """The catalog-side identity of an externally-defined scene.
+
+    Everything about the scene that this catalog asserts: which provider defines
+    it and how that provider names it. The geometry itself is hashed by
+    ``refractal build``, where the provider is installed.
+
+    Recorded so a lock entry can be checked for staleness. Editing
+    ``ref: {task_id: 3}`` to ``{task_id: 4}`` is a different scene, and the
+    recorded hash must stop being trusted.
+    """
+    assert scene.external is not None
+    return hash_obj(
+        {
+            "engine": scene.engine,
+            "engine_version": scene.engine_version,
+            "provider": scene.external.provider,
+            "ref": scene.external.ref,
+        }
+    )
+
+
 def scene_identity(catalog_root: Path, scene: Scene) -> dict[str, Any]:
     """Over *sources*, never the compiled model.
 
@@ -130,6 +152,12 @@ def scene_identity(catalog_root: Path, scene: Scene) -> dict[str, Any]:
     it just compiled, and fails loudly otherwise. That check runs where the
     engine already exists, so it is free.
     """
+    if scene.is_external:
+        raise CatalogError(
+            f"scene {scene.id!r} is externally defined, so its hash cannot be computed "
+            "from this catalog. It comes from catalog/build.lock; run 'refractal build'.",
+            file="scenes.yaml",
+        )
     return {
         "engine": scene.engine,
         "engine_version": scene.engine_version,
@@ -293,6 +321,7 @@ __all__ = [
     "scenario_identity",
     "scene_hash",
     "scene_identity",
+    "external_scene_ref_key",
     "task_hash",
     "task_identity",
 ]

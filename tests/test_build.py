@@ -171,7 +171,13 @@ class TestBuildUnblocksResolve(unittest.TestCase):
                 resolve(root, hardware_profile=HARDWARE)
             self.assertIn("stale", str(ctx.exception))
 
-    def test_editing_the_scene_also_staleness_checks(self):
+    def test_editing_the_scene_is_caught_by_the_scene_check(self):
+        """Now reported directly rather than via the filter key.
+
+        Editing a mesh invalidates both the scene hash and the filter key (which
+        contains it). The scene check runs first and names the actual cause --
+        the geometry moved -- instead of reporting a downstream consequence.
+        """
         with Temp() as root:
             tmp = Temp.__new__(Temp)
             tmp.root = root
@@ -181,7 +187,9 @@ class TestBuildUnblocksResolve(unittest.TestCase):
             asset.write_text(asset.read_text() + "\n<!-- moved a slot -->\n", encoding="utf-8")
             with self.assertRaises(CatalogError) as ctx:
                 resolve(root, hardware_profile=HARDWARE)
-            self.assertIn("stale", str(ctx.exception))
+            message = str(ctx.exception)
+            self.assertIn("The geometry changed", message)
+            self.assertIn("the lock is what planning trusts", message)
 
 
 class TestDeterminism(unittest.TestCase):
@@ -343,3 +351,106 @@ class TestFilterDiagnosis(unittest.TestCase):
         with self.assertRaises(Exception) as ctx:
             build(root)
         return ctx.exception
+
+
+class TestExternallyDefinedScenes(unittest.TestCase):
+    """Scenes whose geometry lives in a wrapped benchmark, not in this catalog.
+
+    A LIBERO scene is a BDDL file inside the installed `libero` package. There is
+    nothing catalog-local to hash, and a placeholder `model:` path would put a lie
+    in the artifact whose job is to not lie -- the catalog copied into every
+    results directory as provenance.
+    """
+
+    EXTERNAL = {
+        "id": "libero-spatial-3",
+        "engine": "mujoco",
+        "engine_version": "3.2.0",
+        "external": {
+            "provider": "vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark",
+            "ref": {"suite": "libero_spatial", "task_id": 3},
+        },
+        "resource_shape": [
+            {"hardware_profile": "rtx5090", "envs_per_process": 1, "vram_per_env_mb": 0,
+             "cpu_cores": 1, "sec_per_1k_steps": 72, "startup_sec": 3},
+        ],
+    }
+
+    class Probe:
+        """Stands in for a probe that can import the provider."""
+
+        def __init__(self, digest="sha256:" + "ab" * 32):
+            self.digest = digest
+
+        def version(self, engine):
+            return "3.2.0"
+
+        def verify(self, engine, model_path):
+            return None
+
+        def external_scene_hash(self, scene):
+            return self.digest
+
+    def _catalog(self, tmp, root):
+        tmp.edit("scenes.yaml", lambda d: d.__setitem__("scenes", [self.EXTERNAL]))
+        tmp.edit("tasks.yaml", lambda d: d.__setitem__("tasks", [{
+            **d["tasks"][0], "scene": "libero-spatial-3",
+            "predicate": "refractal.example:cube_in_bowl"}]))
+        tmp.edit("scenarios.yaml", lambda d: d.__setitem__("scenario_sets", [{
+            **d["scenario_sets"][0], "scene": "libero-spatial-3",
+            "params": {"init_state_index": {"range": [0, 9], "steps": 10}}}]))
+        tmp.edit("run.yaml", lambda d: d["run"].__setitem__("tier", "full"))
+
+    def test_plan_refuses_before_build(self):
+        """Same failure shape as a filtered catalog: consistency beats avoidance."""
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            self._catalog(tmp, root)
+            with self.assertRaises(CatalogError) as ctx:
+                resolve(root, hardware_profile=HARDWARE)
+            self.assertIn("refractal build", str(ctx.exception))
+
+    def test_build_records_the_hash_and_plan_then_works(self):
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            self._catalog(tmp, root)
+            report = build(root, hardware_profile=HARDWARE, probe=self.Probe())
+            entry = report.lock.scene_entry("libero-spatial-3")
+            self.assertTrue(entry.external)
+            self.assertIsNotNone(entry.ref_key)
+            plan = resolve(root, hardware_profile=HARDWARE)
+            self.assertEqual(plan.scenes[0].scene_hash, self.Probe().digest)
+            self.assertEqual(len(plan.scenes[0].scenarios), 10)
+
+    def test_build_without_a_capable_probe_refuses(self):
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            self._catalog(tmp, root)
+            with self.assertRaises(BuildError) as ctx:
+                build(root, hardware_profile=HARDWARE)
+            self.assertIn("where the benchmark is installed", str(ctx.exception))
+
+    def test_editing_the_ref_makes_the_lock_stale(self):
+        """task_id 3 and task_id 4 are different scenes, and the hash must stop being trusted."""
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            self._catalog(tmp, root)
+            build(root, hardware_profile=HARDWARE, probe=self.Probe())
+            tmp.edit("scenes.yaml", lambda d: d["scenes"][0]["external"]["ref"].__setitem__("task_id", 4))
+            with self.assertRaises(CatalogError) as ctx:
+                resolve(root, hardware_profile=HARDWARE)
+            self.assertIn("different provider or ref", str(ctx.exception))
+
+    def test_scene_hash_reaches_the_plan_and_would_gate_compare(self):
+        """The whole point of folding init states into scene_hash."""
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            self._catalog(tmp, root)
+            build(root, hardware_profile=HARDWARE, probe=self.Probe("sha256:" + "11" * 32))
+            first = resolve(root, hardware_profile=HARDWARE)
+            # LIBERO ships a different init-state file: the digest moves, so the
+            # scene_hash moves, so compare refuses instead of partially joining.
+            build(root, hardware_profile=HARDWARE, probe=self.Probe("sha256:" + "22" * 32))
+            second = resolve(root, hardware_profile=HARDWARE)
+            self.assertNotEqual(first.scenes[0].scene_hash, second.scenes[0].scene_hash)
+            self.assertNotEqual(first.plan_id, second.plan_id)

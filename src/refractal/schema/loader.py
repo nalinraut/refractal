@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
@@ -93,21 +93,46 @@ class Catalog:
 
     # -- identity ---------------------------------------------------------
 
-    def scene_hashes(self) -> dict[str, str]:
-        return {s.id: scene_hash(self.root, s) for s in self.scenes}
+    def scene_hashes(self, overrides: Mapping[str, str] | None = None) -> dict[str, str]:
+        """Scene hashes, with recorded ones taking precedence over computed ones.
 
-    def experiment_identity(self) -> dict[str, Any]:
+        ``overrides`` comes from ``catalog/build.lock``. The lock wins because it
+        is the only thing that *can* win for an externally-defined scene -- there
+        are no catalog-local sources to hash -- and because a recorded hash that
+        silently disagrees with the sources is a bug either way. ``resolve``
+        checks the two agree before getting here; this function only applies the
+        precedence.
+        """
+        overrides = overrides or {}
+        out: dict[str, str] = {}
+        for scene in self.scenes:
+            if scene.id in overrides:
+                out[scene.id] = overrides[scene.id]
+            elif scene.is_external:
+                raise CatalogError(
+                    f"scene {scene.id!r} is defined by {scene.external.provider!r}, so its "
+                    "hash comes from catalog/build.lock, which has no entry for it. "
+                    "Run 'refractal build'.",
+                    file="scenes.yaml",
+                )
+            else:
+                out[scene.id] = scene_hash(self.root, scene)
+        return out
+
+    def experiment_identity(
+        self, scene_hashes: Mapping[str, str] | None = None
+    ) -> dict[str, Any]:
         return experiment_identity(
             scenes=self.scenes,
             tasks=self.tasks,
             scenario_sets=self.scenario_sets,
             run=self.run,
-            scene_hashes=self.scene_hashes(),
+            scene_hashes=self.scene_hashes(scene_hashes),
         )
 
-    def plan_id(self) -> str:
+    def plan_id(self, scene_hashes: Mapping[str, str] | None = None) -> str:
         """Also the ``comparison_id``: results and the experiment share one name."""
-        return plan_id(self.experiment_identity())
+        return plan_id(self.experiment_identity(scene_hashes))
 
     def catalog_file_hash(self) -> str:
         """Digest of the catalog files as they sit on disk.
@@ -246,6 +271,8 @@ def load_catalog(root: str | Path) -> Catalog:
                 )
 
     for s in scenes:
+        if s.is_external:
+            continue
         if not (root / s.model).is_file():
             raise CatalogError(
                 f"scene {s.id!r} references model {s.model!r}, which does not exist "

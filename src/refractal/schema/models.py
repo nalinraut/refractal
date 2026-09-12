@@ -99,6 +99,32 @@ class ResourceShape(Strict):
         return self.vram_base_mb + self.vram_per_env_mb * (envs or self.envs_per_process)
 
 
+class ExternalScene(Strict):
+    """A scene defined by someone else's benchmark, not by a file in this catalog.
+
+    Wrapping a third-party benchmark means the geometry lives inside an installed
+    package -- a LIBERO scene is a BDDL file inside `libero`, not an MJCF under
+    ``catalog/assets``. There is nothing catalog-local to hash, and inventing a
+    placeholder ``model:`` path would put a lie in the one artifact whose job is
+    to not lie: the catalog copied into every results directory as provenance.
+
+    So the scene says where it comes from instead, and ``refractal build``
+    supplies its hash into the lock.
+    """
+
+    #: The benchmark class that defines this scene.
+    provider: ImportString
+    #: How that provider identifies it, e.g. ``{suite: libero_spatial, task_id: 3}``.
+    #: Part of the scene's catalog-side identity: changing it means a different
+    #: scene, and the lock goes stale.
+    ref: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check(self) -> "ExternalScene":
+        validate_import_string(self.provider)
+        return self
+
+
 class Scene(Strict):
     """The physical world. **The affinity key.**
 
@@ -110,7 +136,11 @@ class Scene(Strict):
 
     id: Id
     engine: Literal["mujoco", "mjx", "isaac"]
-    model: str
+    #: Exactly one of ``model`` and ``external`` -- enforced, not merely optional.
+    #: An optional field with no declared alternative is one people forget; a
+    #: required choice is one they make.
+    model: str | None = None
+    external: ExternalScene | None = None
     #: DEVIATION: added. ``model_hash`` is specified as covering "the engine
     #: version string", but nothing in the schema carries an engine version and
     #: ``resolve`` runs where no engine is installed to be asked. So the version
@@ -122,9 +152,19 @@ class Scene(Strict):
     resource_shape: list[ResourceShape] = Field(default_factory=list)
     description: str = ""
 
+    @property
+    def is_external(self) -> bool:
+        return self.external is not None
+
     @model_validator(mode="after")
     def _check(self) -> "Scene":
         _check_id(self.id)
+        if (self.model is None) == (self.external is None):
+            raise ValueError(
+                f"scene {self.id!r} must declare exactly one of 'model' (a file in this "
+                "catalog) or 'external' (a scene defined by a wrapped benchmark); "
+                + ("it declares both" if self.model else "it declares neither")
+            )
         seen = set()
         for shape in self.resource_shape:
             if shape.hardware_profile in seen:
@@ -430,6 +470,7 @@ class HardwareFile(ApiObject):
 
 __all__ = [
     "API_VERSION",
+    "ExternalScene",
     "ApiObject",
     "Checkpoint",
     "Device",
