@@ -395,3 +395,48 @@ class TestTypeOnlyCollisions(unittest.TestCase):
             note = next(w for w in self._two_sets(root, 1.0, 1.0).warnings if "kept once" in w)
             self.assertIn("coarse", note)
             self.assertIn("fine", note)
+
+
+class TestTheDefaultFixtureExercisesItsInvariants(unittest.TestCase):
+    """Does any fixture put each invariant in a position to fire?
+
+    A different question from "is the invariant correct", and the one that found
+    three bugs. These assert the *fixture*, not the code: if someone tidies the
+    deliberately-overlapping scenario sets out of examples/catalog, the invariant
+    goes back to being untestable by the default path and this fails.
+    """
+
+    def setUp(self):
+        self.plan = resolve(CATALOG, hardware_profile=HARDWARE)
+
+    def test_the_fixture_contains_overlapping_scenario_sets(self):
+        self.assertTrue(
+            [w for w in self.plan.warnings if "kept once" in w],
+            "examples/catalog no longer has overlapping scenario sets, so the "
+            "per-scene dedup invariant is unexercised by the default fixture",
+        )
+
+    def test_and_the_overlap_is_deduped_rather_than_doubled(self):
+        for scene in self.plan.scenes:
+            episodes = [e for w in scene.workers for e in w.episodes]
+            self.assertEqual(
+                len(episodes), len({e.episode_id for e in episodes}), scene.scene_id
+            )
+            hashes = [s.scenario_hash for s in scene.scenarios]
+            self.assertEqual(len(hashes), len(set(hashes)), scene.scene_id)
+
+    def test_the_fixture_contains_a_scene_with_two_tasks(self):
+        """Otherwise the map-not-struct phase_outcomes fix is unexercised."""
+        by_scene = {}
+        for task in load_catalog(CATALOG).tasks:
+            by_scene.setdefault(task.scene, []).append(task.id)
+        self.assertTrue(
+            any(len(v) > 1 for v in by_scene.values()),
+            "no scene has two tasks, so nothing writes differing phase sets to one file",
+        )
+
+    def test_the_fixture_contains_a_scene_with_no_declared_phases(self):
+        """The other half of that: one task with phases, one without."""
+        tasks = load_catalog(CATALOG).tasks
+        self.assertTrue(any(t.phases for t in tasks))
+        self.assertTrue(any(not t.phases for t in tasks))

@@ -18,3 +18,36 @@ scenario_sets:
       cube_x:   {range: [0.05, 0.20], samples: 24, distribution: uniform}
       cube_y:   {range: [-0.10, 0.10], samples: 24, distribution: uniform}
       bowl_yaw: {value: 0.0}
+
+  # --- deliberately overlapping, do not "tidy" ------------------------------
+  #
+  # `cube-corners` and `cube-edges` share two scenarios: (0.05, -0.10) and
+  # (0.05, +0.10). Overlapping sets are a legitimate way to express a catalog --
+  # a broad sweep plus a focused set over the cases you care about -- and the
+  # overlap must be deduplicated per *scene*, not per set.
+  #
+  # It is here because it was not. Deduplication happened inside a single
+  # scenario set, so an overlap produced the same scenario_hash twice, every
+  # derived episode_id twice, and a plan that ran and recorded 24 episodes with
+  # 12 distinct ids: correct-looking output, no error, wrong denominator.
+  #
+  # The invariant that forbids it already existed and was already tested. What
+  # was missing was any fixture in a configuration that could make it fire.
+  # `refractal plan` on this catalog now warns, and that warning is the point.
+  - id: cube-corners
+    scene: cube-bowl-v1
+    generator: refractal.generators:linspace_grid
+    generator_seed: 4242
+    params:
+      cube_x:   {choices: [0.05, 0.20]}
+      cube_y:   {choices: [-0.10, 0.10]}
+      bowl_yaw: {value: 0.0}
+
+  - id: cube-edges
+    scene: cube-bowl-v1
+    generator: refractal.generators:linspace_grid
+    generator_seed: 4242
+    params:
+      cube_x:   {choices: [0.05]}
+      cube_y:   {choices: [-0.10, 0.10]}
+      bowl_yaw: {value: 0.0}
