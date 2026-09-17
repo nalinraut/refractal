@@ -227,6 +227,36 @@ def to_episode_row(episode: PlannedEpisode, result: Mapping[str, Any]) -> Episod
     )
 
 
+def group_by_seed(episodes: list[PlannedEpisode]) -> dict[int, list[PlannedEpisode]]:
+    """One harness invocation per seed, because the harness has no seed concept.
+
+    The counter that selects init states is the same counter that would have to
+    encode a repeat. With 10 scenarios and 3 seeds in one invocation it runs
+    0..29 and reaches init states 0..29 — thirty *different* scenarios, while the
+    plan claims ten scenarios run three times each. LIBERO ships 50 init states,
+    so it does not even error.
+
+    So seeds come from the loop, not from the counter: one invocation per
+    ``(worker, checkpoint, seed)``, each with ``episodes_per_task`` equal to the
+    scenario count, and the counter maps 1:1 onto ``init_state_index``.
+
+    **What a seed means on this backend, stated because it is not what the design
+    doc means.** Refractal defines a seed as the policy's noise draw, pinned so a
+    failure is reproducible. The harness exposes no per-episode policy seeding —
+    that lives inside each model server and is server-specific. So here a seed is
+    a **repeat index**: it labels repetitions and does not make them reproducible.
+
+    Repetition still does the statistical work, separating "is this scenario
+    hard" from "did the policy get lucky", which is what the clustered bootstrap
+    consumes. It does not give deterministic replay. Recording it as though it
+    did would be the mislabelling this project exists to catch.
+    """
+    groups: dict[int, list[PlannedEpisode]] = {}
+    for episode in episodes:
+        groups.setdefault(episode.seed, []).append(episode)
+    return groups
+
+
 def check_index_contract(episodes: list[PlannedEpisode], scenarios: Mapping[str, Any]) -> None:
     """The harness indexes init states by its OWN episode counter. Refuse a
     plan where that counter would not select the scenario the plan names.
@@ -247,6 +277,18 @@ def check_index_contract(episodes: list[PlannedEpisode], scenarios: Mapping[str,
     take an explicit index -- means the work-item loop, which is inline and not a
     method.
     """
+    seeds = {e.seed for e in episodes}
+    if len(seeds) > 1:
+        # Name the cause. The index list would otherwise look like the problem,
+        # when it is a symptom of running several seeds in one invocation.
+        raise BridgeError(
+            f"this group spans {len(seeds)} seeds ({sorted(seeds)}). The harness selects "
+            "init states by a counter that knows nothing about seeds, so a single "
+            "invocation covering N scenarios x S seeds would run N*S *different* init "
+            "states rather than repeating N of them. Split by seed first — "
+            "group_by_seed() — and run one invocation per seed."
+        )
+
     wanted = sorted(
         scenarios[e.scenario_hash]["init_state_index"]
         for e in episodes
@@ -283,6 +325,11 @@ def build_eval_config(
     loop, which is inline and not a method. ``worker_selection`` refuses a worker
     spanning two tasks, because the loop can only be constrained to one.
     """
+    if len({e.seed for e in episodes}) > 1:
+        raise BridgeError(
+            "build_eval_config takes one seed's episodes; split with group_by_seed() "
+            "and run one invocation per seed. See check_index_contract for why."
+        )
     selection = worker_selection(episodes)
     external = getattr(scene, "external", None)
     if external is None:
@@ -449,6 +496,7 @@ __all__ = [
     "to_episode_row",
     "build_eval_config",
     "check_index_contract",
+    "group_by_seed",
     "check_recorder_surface",
     "rows_from_benchmark_result",
     "make_parquet_orchestrator",

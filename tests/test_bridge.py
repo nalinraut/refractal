@@ -24,6 +24,7 @@ from refractal.execute.vla_eval import (
     RECORDER_SURFACE,
     build_eval_config,
     check_index_contract,
+    group_by_seed,
     rows_from_benchmark_result,
     StepBuffer,
     to_episode_row,
@@ -430,3 +431,68 @@ class TestEvalConfig(unittest.TestCase):
                 episodes=self._episodes(1), server_url="ws://x:8000",
                 output_dir="/tmp/out", max_steps=220,
             )
+
+
+class TestSeedsComeFromTheLoopNotTheCounter(unittest.TestCase):
+    """The adjacent case the index contract implied but did not name.
+
+    The counter that selects init states is the same counter that would have to
+    encode a repeat. Ten scenarios x three seeds in one invocation runs 0..29 and
+    reaches thirty *different* init states, while the plan claims ten scenarios
+    run three times. LIBERO ships 50, so it does not even error.
+    """
+
+    def _episodes(self, scenarios, seeds):
+        return [
+            PlannedEpisode(
+                episode_id=f"sha256:e{i}s{seed}", task_id="t", task_hash="sha256:t",
+                scenario_hash=f"s{i}", seed=seed, checkpoint_id="ckpt",
+            )
+            for seed in seeds
+            for i in range(scenarios)
+        ]
+
+    def test_it_names_seeds_rather_than_blaming_the_indices(self):
+        scenarios = {f"s{i}": {"init_state_index": i} for i in range(3)}
+        with self.assertRaises(BridgeError) as ctx:
+            check_index_contract(self._episodes(3, [0, 1]), scenarios)
+        message = str(ctx.exception)
+        self.assertIn("knows nothing about seeds", message)
+        self.assertIn("group_by_seed", message)
+
+    def test_each_seed_group_satisfies_the_contract(self):
+        scenarios = {f"s{i}": {"init_state_index": i} for i in range(3)}
+        for seed, group in group_by_seed(self._episodes(3, [0, 1, 2])).items():
+            check_index_contract(group, scenarios)   # must not raise
+            self.assertEqual(len(group), 3)
+
+    def test_group_by_seed_partitions_without_loss(self):
+        episodes = self._episodes(4, [0, 1, 2])
+        groups = group_by_seed(episodes)
+        self.assertEqual(sorted(groups), [0, 1, 2])
+        self.assertEqual(sum(len(g) for g in groups.values()), len(episodes))
+
+    def test_the_config_builder_refuses_a_mixed_group_too(self):
+        """Two guards, because the caller might reach either first."""
+        scene = types.SimpleNamespace(
+            scene_id="s",
+            external=types.SimpleNamespace(provider="m:C", ref={"suite": "x", "task_id": 0}),
+        )
+        with self.assertRaises(BridgeError) as ctx:
+            build_eval_config(
+                scene=scene, episodes=self._episodes(2, [0, 1]),
+                server_url="ws://x:8000", output_dir="/tmp/out", max_steps=220,
+            )
+        self.assertIn("one seed's episodes", str(ctx.exception))
+
+    def test_episodes_per_task_is_the_scenario_count_not_the_episode_count(self):
+        scene = types.SimpleNamespace(
+            scene_id="s",
+            external=types.SimpleNamespace(provider="m:C", ref={"suite": "x", "task_id": 0}),
+        )
+        group = group_by_seed(self._episodes(5, [0, 1, 2]))[1]
+        config = build_eval_config(
+            scene=scene, episodes=group, server_url="ws://x:8000",
+            output_dir="/tmp/out", max_steps=220,
+        )
+        self.assertEqual(config["benchmarks"][0]["episodes_per_task"], 5)
