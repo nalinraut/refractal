@@ -37,6 +37,29 @@ jobs:
         run: |
           python -m refractal.cli plan examples/catalog --hardware rtx5090 -o /tmp/plan.json
 
+  harness-claims:
+    name: upstream claims still hold
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Installs whatever `[vla-eval]` resolves to, so the claims are checked
+      # against exactly what a user would get rather than against a commit
+      # someone wrote down once.
+      - run: pip install .[vla-eval]
+      - name: re-verify the claims Refractal makes about code it does not control
+        # Six claims that `harness_surface` cannot cover: that digest catches a
+        # CHANGE to files we subclass, which is a different question from "is this
+        # still absent" or "is this still a default rather than a constant".
+        #
+        # As a job rather than a checklist line because the failure it guards
+        # against is an assertion, and an assertion about someone else's code does
+        # not fail when it is wrong -- it just sits there. The localhost claim sat
+        # there for nine days and decided that multi-host was blocked upstream.
+        run: python scripts/verify_harness_claims.py
+
   seconds-test:
     name: init, plan, run, compare
     runs-on: ubuntu-latest

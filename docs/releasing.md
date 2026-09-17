@@ -62,6 +62,20 @@ Step 3 exists because of that, and the CI `seconds-test` job installs the built
 wheel rather than an editable checkout for the same reason. Two bugs have now
 been caught by looking at the artifact instead of the repo.
 
+## Moving the vla-eval pin
+
+```console
+python scripts/verify_harness_claims.py        # must exit 0
+```
+
+Six claims Refractal makes about the harness, re-checked against the installed
+version. CI runs it on every push, so a release that breaks one fails before the
+pin moves rather than after something depends on it.
+
+It is separate from `harness_surface` on purpose: the digest catches a *change*
+to files Refractal subclasses; these are claims about things being *absent* or
+*still configurable*, which a change-detector cannot express.
+
 ## Version numbers
 
 - Pre-release (`0.1.0a1`) means `pip install refractal` reports no matching
