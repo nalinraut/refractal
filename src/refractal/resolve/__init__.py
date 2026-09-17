@@ -229,6 +229,7 @@ def resolve(
     return Plan(
         plan_schema=PLAN_SCHEMA,
         plan_id=catalog.plan_id(recorded),
+        identity=catalog.experiment_identity(recorded),
         catalog_hash=catalog.catalog_file_hash(),
         refractal_version=__version__,
         hardware_profile=hardware_profile,

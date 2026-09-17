@@ -1,7 +1,18 @@
-# Unexercised invariants
+# Patterns
 
-Three bugs in this project had the same shape. Three is where a coincidence stops
-being one, so it is written down.
+Things that went wrong more than twice, and what they generalise to. Three is
+where a coincidence stops being one, so each of these is written down at the point
+it became a third instance.
+
+Five so far: invariants that were correct but unexercised, containers that did not
+match their question, assertions about code we do not control, rules applied past
+the edge of their reason, and digests recorded without their inputs.
+
+---
+
+## Invariants that were correct but unexercised
+
+Three bugs in this project had the same shape.
 
 In each case the invariant was **already correct and already tested**. What was
 missing was any fixture in a configuration that could make it fire. The test
@@ -206,6 +217,72 @@ Three answers, and picking the right one is the work:
 The cheap version of all three: **re-verify on every pin move, and record the
 date**. A claim with a date attached degrades visibly; one without looks equally
 true forever.
+
+## A rule is a compressed reason
+
+Three times now a rule has been correctly *declined* rather than followed, and
+each time the decline produced something better than compliance would have.
+
+| the rule | what it compressed | why it did not apply |
+|---|---|---|
+| quantise numbers before hashing | *arithmetic accumulates error* | LIBERO's init states are **loaded**, not computed. Nothing accumulated. Rounding would have discarded precision LIBERO chose. |
+| preserve multiplicity in identity containers | *identity questions do not care how many times a thing was listed* | `hash_file_set` asks *which files define this scene*, which is set-valued. A glob overlapping its own `model` hashed differently from one that did not. |
+| adapters do not import Refractal | *adapters are loaded by the harness, not by us* | A probe is loaded by `refractal build` — a plugin pointing the other way, which the rule never covered. |
+
+**A rule is a compressed reason, and compression is lossy at the boundary.** All
+three compressions were correct; each one dropped the condition that made it true,
+and the condition is exactly what you need at the edge.
+
+The recovery move is one question: **what was this rule for?** Not *does it
+apply* — that invites a verdict — but *what was it protecting*, which invites the
+thing that actually happens next.
+
+Because checking the reason does more than adjudicate. It tells you what the rule
+was protecting, and sometimes there is a cleaner way to protect it:
+
+- Quantisation was protecting identity against drift. Loaded values have no drift,
+  so the protection was already there.
+- Deduplication was protecting against a question the container could not answer.
+  Naming the question picked the container.
+- The import rule was protecting against Refractal-specific knowledge leaking into
+  a benchmark package. **Not hashing in the probe at all** protects that better
+  than importing `hash_obj` — one implementation of the canonicalisation instead
+  of two — and it is not reachable by deciding the rule does not cover probes.
+
+That last one is the argument for the question over the verdict. Deciding "the
+rule does not apply here" ends the thought. Asking what it was for continued it.
+
+## Record what a digest was computed from
+
+A digest answers *did something change*. It cannot answer *what changed*, and the
+second question is the one somebody actually has. Three instances:
+
+| digest | recorded beside it | the question it makes answerable |
+|---|---|---|
+| `harness_surface` | a per-file manifest, `harness/<surface>.json` | which harness file moved — `runners/live_runner.py`, as it turned out |
+| an external `scene_hash` | the facts the probe reported, in `build.lock` | which fact about the scene moved: init states, BDDL, a version |
+| `plan_id` | the experiment identity document, in `plan.json` | which field makes two runs different experiments |
+
+The third was added before it bit, because the first two predicted it. `refractal
+explain` now answers it directly:
+
+```console
+$ refractal explain before.json after.json
+  run.checkpoints[1].server_args.max_batch_size: 8 -> 32
+  run.seeds: 3 -> 5
+
+  Results under these two ids are separate comparisons and will not join.
+```
+
+Note what the first line is. `max_batch_size` is nested two levels inside
+`server_args`, and it is the class of parameter their own paper measures at 55
+percentage points. A digest comparison would have said "these differ"; this says
+which knob.
+
+**The cost is small and the alternative is a bisect.** A manifest is a few hundred
+bytes per session; an identity document is smaller than the scenario list already
+in the plan. What they replace is somebody holding two comparison directories and
+a question, months after both machines are gone.
 
 ## Currently known to be unexercised
 

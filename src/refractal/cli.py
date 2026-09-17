@@ -150,6 +150,21 @@ def cmd_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_explain(args: argparse.Namespace) -> int:
+    """Say why two plans are different experiments."""
+    from .schema.plan import explain_identity_difference, read_plan
+
+    before, after = read_plan(args.before), read_plan(args.after)
+    if before.plan_id == after.plan_id:
+        print(f"  same experiment: {before.plan_id[:26]}...")
+        return 0
+    print(f"  {before.plan_id[:26]}...\n  {after.plan_id[:26]}...\n")
+    for line in explain_identity_difference(before, after):
+        print(f"  {line}")
+    print("\n  Results under these two ids are separate comparisons and will not join.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="refractal", description=__doc__)
     parser.add_argument("--version", action="version", version=f"refractal {__version__}")
@@ -198,6 +213,13 @@ def build_parser() -> argparse.ArgumentParser:
     build_cmd.add_argument("catalog", help="path to the catalog directory")
     build_cmd.add_argument("--hardware", help="hardware profile to record shapes for")
     build_cmd.set_defaults(func=cmd_build)
+
+    explain = sub.add_parser(
+        "explain", help="why two plans are different experiments",
+        description="A plan_id says two runs differ; this says which field differs.")
+    explain.add_argument("before")
+    explain.add_argument("after")
+    explain.set_defaults(func=cmd_explain)
 
     compare = sub.add_parser(
         "compare",

@@ -108,6 +108,16 @@ class Plan(Strict):
     estimated_seconds: int
     scenes: list[PlannedScene]
     warnings: list[str] = Field(default_factory=list)
+    #: The document ``plan_id`` was computed from.
+    #:
+    #: Recorded so two plans can say *why* their ids differ. A digest tells you
+    #: something moved and nothing about what, which is fine until someone is
+    #: holding two comparison directories and a question. Third time this has come
+    #: up -- the harness surface records a per-file manifest beside its digest, an
+    #: external scene records its facts beside its hash, and now this.
+    #:
+    #: Excluded from the hash it describes, obviously: it *is* the hash's input.
+    identity: dict[str, Any] = Field(default_factory=dict)
     #: Informational, and deliberately excluded from every hash. It is also why
     #: the determinism gate compares ``plan_id`` and the scenario list rather
     #: than raw file bytes -- a timestamp cannot be byte-identical across runs.
@@ -118,6 +128,38 @@ class Plan(Strict):
 
     def write(self, path: str | Path) -> None:
         Path(path).write_text(self.to_json() + "\n", encoding="utf-8")
+
+
+def explain_identity_difference(before: Plan, after: Plan) -> list[str]:
+    """Name the fields that make two plans different experiments.
+
+    Returns one line per difference, deepest key first, so the answer to "why did
+    these not join" is a sentence rather than a bisect. Empty when the ids match.
+    """
+    if before.plan_id == after.plan_id:
+        return []
+    if not before.identity or not after.identity:
+        return [
+            "one of these plans predates identity recording, so the difference cannot "
+            "be named — only that it exists."
+        ]
+
+    lines: list[str] = []
+
+    def walk(left: Any, right: Any, path: str) -> None:
+        if isinstance(left, dict) and isinstance(right, dict):
+            for key in sorted(left.keys() | right.keys()):
+                walk(left.get(key), right.get(key), f"{path}.{key}" if path else key)
+            return
+        if isinstance(left, list) and isinstance(right, list) and len(left) == len(right):
+            for index, (a, b) in enumerate(zip(left, right)):
+                walk(a, b, f"{path}[{index}]")
+            return
+        if left != right:
+            lines.append(f"{path}: {left!r} -> {right!r}")
+
+    walk(before.identity, after.identity, "")
+    return lines or ["the identity documents differ in a way the walk did not reach"]
 
 
 def read_plan(path: str | Path) -> Plan:
@@ -152,5 +194,6 @@ __all__ = [
     "PlannedScenario",
     "PlannedScene",
     "PlannedWorker",
+    "explain_identity_difference",
     "read_plan",
 ]

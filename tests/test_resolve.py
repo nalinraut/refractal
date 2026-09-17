@@ -440,3 +440,77 @@ class TestTheDefaultFixtureExercisesItsInvariants(unittest.TestCase):
         tasks = load_catalog(CATALOG).tasks
         self.assertTrue(any(t.phases for t in tasks))
         self.assertTrue(any(not t.phases for t in tasks))
+
+
+class TestExplainingWhyTwoPlansDiffer(unittest.TestCase):
+    """A digest says something moved and nothing about what.
+
+    Third instance of the same gap: the harness surface records a per-file
+    manifest beside its digest, an external scene records its facts beside its
+    hash, and a plan records the document its id was computed from. Each one
+    turns "these did not join" from a bisect into a sentence.
+    """
+
+    def _plan(self, mutate=None):
+        with Temp() as root:
+            if mutate is not None:
+                tmp = Temp.__new__(Temp)
+                tmp.root = root
+                tmp.edit("run.yaml", mutate)
+            return resolve(root, hardware_profile=HARDWARE)
+
+    def test_identical_plans_have_nothing_to_explain(self):
+        from refractal.schema.plan import explain_identity_difference
+
+        first, second = self._plan(), self._plan()
+        self.assertEqual(first.plan_id, second.plan_id)
+        self.assertEqual(explain_identity_difference(first, second), [])
+
+    def test_it_names_the_field_that_moved(self):
+        from refractal.schema.plan import explain_identity_difference
+
+        before = self._plan()
+        after = self._plan(lambda d: d["run"].__setitem__("seeds", 5))
+        lines = explain_identity_difference(before, after)
+        self.assertEqual(lines, ["run.seeds: 3 -> 5"])
+
+    def test_it_reaches_into_server_args(self):
+        """The 55-point class: a parameter buried in a nested dict."""
+        from refractal.schema.plan import explain_identity_difference
+
+        def mutate(doc):
+            doc["run"]["checkpoints"][1]["server_args"]["max_batch_size"] = 32
+
+        lines = explain_identity_difference(self._plan(), self._plan(mutate))
+        self.assertEqual(
+            lines, ["run.checkpoints[1].server_args.max_batch_size: 8 -> 32"]
+        )
+
+    def test_it_reports_several(self):
+        from refractal.schema.plan import explain_identity_difference
+
+        def mutate(doc):
+            doc["run"]["seeds"] = 5
+            doc["run"]["tier"] = "smoke"
+
+        lines = explain_identity_difference(self._plan(), self._plan(mutate))
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(any("run.seeds" in line for line in lines))
+        self.assertTrue(any("run.tier" in line for line in lines))
+
+    def test_a_plan_without_an_identity_document_says_so(self):
+        """Honest about the limit rather than silently explaining nothing."""
+        from refractal.schema.plan import explain_identity_difference
+
+        before = self._plan()
+        after = self._plan(lambda d: d["run"].__setitem__("seeds", 5))
+        stripped = before.model_copy(update={"identity": {}})
+        lines = explain_identity_difference(stripped, after)
+        self.assertIn("predates identity recording", lines[0])
+
+    def test_the_identity_document_is_what_the_id_was_computed_from(self):
+        from refractal.schema.plan import Plan
+        from refractal.schema import hash_obj
+
+        plan = self._plan()
+        self.assertEqual(plan.plan_id, hash_obj(plan.identity))
