@@ -151,3 +151,27 @@ class TestRun(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPassthroughPredicate(unittest.TestCase):
+    """A decision recorded in the catalog, not a field someone forgot."""
+
+    def test_it_defers_to_the_benchmark(self):
+        from refractal.predicates import from_benchmark
+
+        self.assertTrue(from_benchmark({"benchmark_success": True}, {}))
+        self.assertFalse(from_benchmark({"benchmark_success": 0}, {}))
+
+    def test_a_missing_verdict_raises_rather_than_guessing(self):
+        from refractal.predicates import from_benchmark
+
+        with self.assertRaises(KeyError) as ctx:
+            from_benchmark({}, {})
+        self.assertIn("nothing to fall back to", str(ctx.exception))
+
+    def test_it_has_predicate_arity(self):
+        """A filter takes (scenario); a predicate takes (state, args)."""
+        from refractal.predicates import from_benchmark
+        from refractal.schema import check_arity
+
+        check_arity(from_benchmark, "predicate", "refractal.predicates:from_benchmark")
