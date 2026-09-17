@@ -22,6 +22,7 @@ import unittest
 
 from refractal.execute.vla_eval import (
     RECORDER_SURFACE,
+    NullRecordingStore,
     build_eval_config,
     check_index_contract,
     check_server_assignment,
@@ -65,14 +66,33 @@ def install_stand_in_harness():
         pass
 
     class Orchestrator:
-        """Reproduces the gate, and only the gate."""
+        """Reproduces the real gate, including WHERE the store is assigned.
 
-        def __init__(self):
+        This used to expose an `_init_store` method that the harness does not
+        have -- invented here, then overridden in ParquetOrchestrator, and the
+        tests passed. The harness assigns `_store` inside `run()`:
+
+            async def run(self):
+                if not self.no_save:
+                    self._store = RecordingStore(db_path_for_eval(...))
+
+        and `no_save` also decides whether `rec_cfg` is None, so the two gates are
+        coupled and no flag opens both. The stand-in now mirrors that, so an
+        override that only works against an imagined shape fails here.
+        """
+
+        def __init__(self, no_save=False):
             self._store = None
             self._sid = "sid-1"
+            self.no_save = no_save
 
-        def _init_store(self, *a, **k):
-            self._store = None  # SQLite path in the real thing; None without one
+        def run(self):
+            if not self.no_save:
+                self._store = "sqlite-store"   # what the harness would build
+            return self._store
+
+        def effective_recording_config(self, raw):
+            return None if self.no_save else {"record_step": True}
 
         def _build_recorder(self, rec_cfg, task, bench_eval_id, safe, task_idx, ep, benchmark):
             if self._store is None or rec_cfg is None:
@@ -129,6 +149,27 @@ class TestOverrideLogicAgainstAReproducedGate(BridgeCase):
     That division of labour is deliberate; the risk is reading the first claim as
     the second.
     """
+    def test_the_store_assignment_in_run_is_swallowed(self):
+        """The gate is opened where the harness actually closes it.
+
+        `run()` assigns a RecordingStore; the subclass must still see its own
+        store afterwards, or the override only works in a test.
+        """
+        orchestrator = make_parquet_orchestrator(self.recorder_cls)()
+        self.assertIsNotNone(orchestrator._store)
+        orchestrator.run()                      # assigns "sqlite-store"
+        self.assertIsInstance(orchestrator._store, NullRecordingStore)
+        orchestrator._store = None              # the finally block
+        self.assertIsInstance(orchestrator._store, NullRecordingStore)
+
+    def test_the_null_store_answers_what_the_harness_calls_on_it(self):
+        """A bare object() would have raised on the first benchmark."""
+        store = NullRecordingStore()
+        store.upsert_eval_metadata("eval", "safe", {})
+        store.upsert_episode_result()
+        store.upsert_step_rows()
+        store.close()
+
     def test_overriding_only_the_recorder_records_nothing(self):
         """The failure being guarded against, demonstrated rather than described."""
         from vla_eval.orchestrator import Orchestrator
@@ -142,8 +183,8 @@ class TestOverrideLogicAgainstAReproducedGate(BridgeCase):
                         self, rec_cfg, task, bench_eval_id, safe, ti, ep, bm)
                 return recorder_cls(episode_id=str(ep), sid="s", eid="e", eval_id=bench_eval_id)
 
-        half = HalfOverridden()
-        half._init_store()  # the base: leaves _store None
+        half = HalfOverridden(no_save=True)   # the only way to keep rec_cfg alive
+        half.run()                            # leaves _store None
         # The override is never consulted, because the gate closes first.
         recorder = Orchestrator._build_recorder(half, {"record_step": True}, {}, "ev", "s", 0, 0, None)
         self.assertIsInstance(recorder, self.NullRecorder)
@@ -151,7 +192,7 @@ class TestOverrideLogicAgainstAReproducedGate(BridgeCase):
 
     def test_overriding_both_produces_a_live_recorder(self):
         orchestrator = make_parquet_orchestrator(self.recorder_cls)()
-        orchestrator._init_store()
+        orchestrator.run()
         self.assertIsNotNone(orchestrator._store)
 
         recorder = orchestrator._build_recorder(
@@ -163,7 +204,7 @@ class TestOverrideLogicAgainstAReproducedGate(BridgeCase):
     def test_a_null_recording_config_still_yields_the_null_recorder(self):
         """Recording off is a legitimate configuration, not a failure."""
         orchestrator = make_parquet_orchestrator(self.recorder_cls)()
-        orchestrator._init_store()
+        orchestrator.run()
         self.assertIsInstance(
             orchestrator._build_recorder(None, {}, "eval-1", "safe", 0, 0, None),
             self.NullRecorder,

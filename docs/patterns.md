@@ -218,6 +218,53 @@ The cheap version of all three: **re-verify on every pin move, and record the
 date**. A claim with a date attached degrades visibly; one without looks equally
 true forever.
 
+## A stand-in tests your logic, not their code
+
+`tests/test_bridge.py` installs a module shaped like the parts of the harness the
+bridge touches, because the harness is not installed on most machines that run the
+suite. The claim boundary was stated in the test class name from the start: green
+means *the override is self-consistent against the gate as we understand it*, not
+that the real gate is unchanged.
+
+The blind spot was named at the time — "if a future harness moves the gate rather
+than changing it, `harness_surface` fires and the stand-in keeps passing." It did
+not take a future harness. **The gate had never been where the stand-in put it.**
+
+The stand-in exposed an `_init_store` method. The harness has no such method; it
+assigns the store inside `run()`:
+
+```python
+async def run(self):
+    if not self.no_save:
+        self._store = RecordingStore(db_path_for_eval(...))
+```
+
+`ParquetOrchestrator` overrode `_init_store`, the stand-in called it, every test
+passed, and against the real harness the override would have been dead code —
+producing the exact silent failure it was written to prevent. Two further things
+fell out of reading the real source:
+
+- **The gates are coupled.** `no_save=True` makes the recording config `None`,
+  which shuts the *other* gate; `no_save=False` makes `run()` build a real SQLite
+  store. No flag combination opens both, so `_store` has to become a property
+  whose setter swallows both `run()`'s assignment and the `finally` block's
+  `None`.
+- **The null store cannot be a bare `object()`.** The harness calls
+  `upsert_eval_metadata` before the loop and `close` in the `finally`. The
+  stand-in never called either, so a sentinel that would have raised on the first
+  benchmark passed every test.
+
+What this costs and what to do about it: a stand-in is still the right tool — the
+alternative is no test at all on a laptop — but **it must be built by reading the
+dependency, not by imagining its shape**, and the reading is the part that was
+skipped. The stand-in now mirrors where the assignment happens, so an override
+that only works against an imagined shape fails.
+
+The general form: a stand-in inherits every assumption its author had. It cannot
+disagree with you, which is precisely what makes it cheap and precisely what makes
+it blind. The only thing that catches a misplaced gate is reading the code the
+stand-in stands in for.
+
 ## A rule is a compressed reason
 
 Three times now a rule has been correctly *declined* rather than followed, and

@@ -520,27 +520,74 @@ def make_parquet_recorder(collect) -> type:
     return ParquetEpisodeRecorder
 
 
+class NullRecordingStore:
+    """Truthy, no-op, and not a SQLite handle.
+
+    The gate is ``self._store is None``, so something has to be there. A real
+    ``RecordingStore`` would create a SQLite file that gets written to and then
+    ignored -- a file that looks like results and is not.
+
+    It is not a bare sentinel either, which is what this was first. The harness
+    calls ``upsert_eval_metadata`` on the store before the episode loop and
+    ``close`` in the ``finally``, so ``object()`` would have raised on the first
+    benchmark. Found by reading orchestrator.py rather than by running anything:
+    the stand-in tests passed with the bare sentinel, because the stand-in did
+    not call those methods.
+    """
+
+    def upsert_eval_metadata(self, *args: Any, **kwargs: Any) -> None: ...
+    def upsert_episode_result(self, *args: Any, **kwargs: Any) -> None: ...
+    def upsert_step_rows(self, *args: Any, **kwargs: Any) -> None: ...
+    def close(self) -> None: ...
+
+
 def make_parquet_orchestrator(recorder_cls) -> type:
-    """Build the Orchestrator subclass, overriding **both** required methods.
+    """Build the Orchestrator subclass. The store override is not a method.
 
-    ``_build_recorder`` is the obvious one. The other is whatever sets
-    ``self._store``: the base returns ``NullEpisodeRecorder`` whenever the store
-    is ``None``, so overriding the recorder alone yields a run that completes,
-    reports success and records nothing.
+    ``_build_recorder`` is the obvious hook. The other gate is ``self._store``,
+    and finding where it is set turned out to matter more than expected:
 
-    A sentinel is used rather than a real ``RecordingStore`` because the gate
-    only tests for ``None``. Constructing a SQLite store to satisfy a check and
-    then never writing to it would leave a stray file that looks like results.
+    .. code-block:: python
+
+        async def run(self):
+            if not self.no_save:
+                self._store = RecordingStore(db_path_for_eval(...))
+
+    It is assigned **inside ``run()``**, not in a method there is anything to
+    override. An earlier version of this class overrode ``_init_store``, which
+    does not exist in the harness at all -- it existed only in the test
+    stand-in, where it had been invented. The stand-in passed throughout.
+
+    Worse, the two gates are coupled. ``no_save=True`` makes
+    ``_effective_recording_config`` return ``None``, which shuts the *other*
+    gate; ``no_save=False`` makes ``run()`` build a real SQLite store. There is
+    no flag combination that opens both.
+
+    So ``_store`` becomes a property: reads return the null store, and writes are
+    swallowed, including ``run()``'s assignment and the ``finally`` block's
+    ``self._store = None``. Intrusive, and the alternative is reimplementing
+    ``run()`` -- which is the method that also does render-mode setup,
+    observation-param negotiation and spec cross-validation, i.e. the three
+    things this bridge exists in order not to reimplement.
     """
     vla_eval = require_harness()
     from vla_eval.orchestrator import Orchestrator  # type: ignore
 
     class ParquetOrchestrator(Orchestrator):  # type: ignore[misc]
-        #: Truthy, unused, and not a SQLite handle. Exists only to open the gate.
-        _PARQUET_STORE = object()
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._parquet_store = NullRecordingStore()
+            super().__init__(*args, **kwargs)
 
-        def _init_store(self, *args: Any, **kwargs: Any) -> None:
-            self._store = self._PARQUET_STORE
+        @property
+        def _store(self) -> Any:
+            return self._parquet_store
+
+        @_store.setter
+        def _store(self, value: Any) -> None:
+            # Swallowed on purpose: `run()` assigns a RecordingStore here and the
+            # `finally` assigns None. Neither is wanted, and neither is
+            # preventable without reimplementing `run()`.
+            return None
 
         def _build_recorder(
             self, rec_cfg, task, bench_eval_id, benchmark_safe_name, task_idx, episode_id, benchmark
@@ -563,6 +610,7 @@ __all__ = [
     "RECORDER_SURFACE",
     "BridgeError",
     "EpisodeRow",
+    "NullRecordingStore",
     "StepBuffer",
     "to_episode_row",
     "build_eval_config",
