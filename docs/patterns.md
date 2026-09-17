@@ -158,6 +158,44 @@ Both were found by the same move, applied to the checks rather than to the code:
 break it, and require the failure to be the one you predicted. The first break
 returning `OK` is the finding.
 
+## A check that reads a downstream symptom
+
+The recorder receipt, one commit after it was written, on first contact with two
+real model servers.
+
+The reasoning was: if `_build_recorder` is never consulted, the run completes,
+reports success and records nothing — indistinguishable from a correct run until
+somebody reads the results. So the step buffer being empty is the symptom, and
+the loop refuses on it.
+
+What happened: every episode errored with `TimeoutError (act timeout=30.0s)`
+during the server's `torch.compile` warm-up, before its first step. The buffer
+was empty. The check reported that the recorder had never been consulted. It had
+been consulted twice.
+
+The error in the reasoning is one word:
+
+> a silent recorder implies an empty buffer — **not the reverse**.
+
+The check was written from the implication and used as though it were an
+equivalence. Everything downstream of a failure is a symptom of that failure and
+of every other failure that shares the symptom, so a check on a symptom fires on
+a class, not on a cause. The receipt now counts recorder *constructions*, which
+is the thing it was always trying to observe and which nothing else can produce.
+
+The general form, which is not the same as the earlier entries — those were about
+fixtures that failed to exercise a property, this one is about a check that
+exercised the wrong property, correctly:
+
+> When a check observes X to conclude Y, ask what else produces X. If the answer
+> is "anything that fails earlier", the check reports on the wrong thing and will
+> be loudest exactly when something else is already wrong.
+
+Worth noting where it *did* work: the failure surfaced immediately, loudly, and
+before anything was written. A check aimed at the wrong thing still beat no check
+— it just accused the wrong component, which cost the time it took to read the
+server log.
+
 ## Enforced where it can be
 
 `tests/test_resolve.py::TestTheDefaultFixtureExercisesItsInvariants` asserts the
