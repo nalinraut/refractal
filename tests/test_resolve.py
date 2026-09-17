@@ -50,6 +50,45 @@ class TestPlanShape(unittest.TestCase):
             self.assertEqual(len(ids), scene.episode_count)
             self.assertEqual(len(set(ids)), scene.episode_count)
 
+    def test_the_plan_is_executable_without_the_catalog(self):
+        """Everything a backend hands to a runner has to survive the compile.
+
+        `refractal plan` exists so `refractal run` needs nothing but plan.json.
+        Three fields were missing when the vla-eval backend became the first
+        consumer that needed a scene's *content* rather than only its identity:
+        the step limit, the benchmark provider and the suite ref. The local
+        backend never noticed because it simulates.
+
+        `max_steps` in particular is already inside `task_hash`, so its absence
+        was invisible to every identity test while making the plan unrunnable.
+        """
+        for scene in self.plan.scenes:
+            for worker in scene.workers:
+                for episode in worker.episodes:
+                    self.assertGreater(episode.max_steps, 0, episode.episode_id)
+
+    def test_the_step_limit_matches_the_task_it_came_from(self):
+        """A number handed to a runner that differs from the one in task_hash
+        would make the recorded identity a lie about what ran."""
+        from refractal.schema import load_catalog
+
+        catalog = load_catalog(CATALOG)
+        by_id = {t.id: t.max_steps for t in catalog.tasks}
+        for scene in self.plan.scenes:
+            for worker in scene.workers:
+                for episode in worker.episodes:
+                    self.assertEqual(episode.max_steps, by_id[episode.task_id])
+
+    def test_an_external_scene_reference_survives_the_compile(self):
+        """The example catalog is local, so `external` is None here -- which is
+        the point: it is carried through rather than synthesised, so a local
+        scene stays None and a LIBERO scene arrives with its provider."""
+        from refractal.schema import load_catalog
+
+        catalog = load_catalog(CATALOG)
+        for scene in self.plan.scenes:
+            self.assertEqual(scene.external, catalog.scene(scene.scene_id).external)
+
     def test_episodes_are_self_describing(self):
         """A worker must be runnable from its assignment alone.
 

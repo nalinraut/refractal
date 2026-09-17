@@ -564,3 +564,44 @@ An agent reviewing 1,704 papers *as published methodology* means agent-driven
 work is load-bearing in how the leaderboard exists at all: the 657-result
 artifact is not something the team did by hand and mentioned an agent helped
 with. See [design-part-12-revised.md](design-part-12-revised.md).
+
+## 9. What the loop found in the plan schema
+
+Writing `run_vla_eval` needed three things from `plan.json` that were not in it:
+
+| field | where it went | why it was absent |
+|---|---|---|
+| `max_steps` | `PlannedEpisode` | already inside `task_hash`, so no identity test could see it missing |
+| `external.provider` | `PlannedScene` | covered by `scene_hash` via `external_scene_ref_key` |
+| `external.ref` | `PlannedScene` | same — the suite and task id are in the lock |
+
+One root cause, worth stating once rather than as three patches: **the plan was
+shaped by the local backend, whose executor needs nothing but identity.** It
+simulates, so a scenario's parameters and an episode's hashes are the whole input.
+The vla-eval backend is the first consumer that needs a scene's *content* — a step
+limit to pass, a benchmark class to name, a suite to select — and found all three
+absent at once.
+
+All three were already *covered* by a hash. That is why nothing caught it: every
+identity test passed, `plan_id` was correct, and the plan was unrunnable. A digest
+proves two plans agree about a field; it does not make the field available to
+whoever has to act on it.
+
+The rule the compile has to satisfy, which the design doc implies and did not
+state:
+
+> `refractal plan` compiles the catalog away, so anything an executor needs has
+> to survive the compile. Being inside a hash is not surviving the compile.
+
+None of the three is new identity — `plan_id` is unchanged by all of this, and the
+`examples/catalog` plan still hashes to what it did. They are the same information
+in an executable form.
+
+### The check this suggests, not yet written
+
+There is no test that a plan is *sufficient* for a backend, only that it is
+correct. The honest version would be a backend-agnostic assertion — for each
+backend, the set of fields it reads from a plan, checked against the plan schema
+— and it would have caught all three before the loop did. Recorded here rather
+than built, because the second backend is what makes the shape of it clear and
+there are two.

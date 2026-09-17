@@ -38,7 +38,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from .errors import CatalogError, RefractalError
-from .models import Checkpoint, ResourceShape, Strict
+from .models import Checkpoint, ExternalScene, ResourceShape, Strict
 
 #: Bump by hand, and only when the format changes in a way older readers cannot
 #: survive. See the module docstring for why this is not derived.
@@ -64,6 +64,16 @@ class PlannedEpisode(Strict):
     scenario_hash: str
     seed: int
     checkpoint_id: str
+    #: The task's step limit, copied in so the plan is executable on its own.
+    #: It is already inside ``task_hash``, so this is a restatement rather than a
+    #: new degree of freedom -- but a backend has to hand a number to the harness,
+    #: and reaching back into the catalog to find it would make `refractal run`
+    #: need the catalog that `refractal plan` already compiled away.
+    #:
+    #: Required, not defaulted. ``Task.max_steps`` defaults to 400, so the planner
+    #: always has a real value; a default here would let a plan that never recorded
+    #: one hand 400 to a harness and produce a run that looks fine.
+    max_steps: int = Field(gt=0)
 
 
 class PlannedWorker(Strict):
@@ -85,6 +95,19 @@ class PlannedScene(Strict):
     scene_id: str
     scene_hash: str
     engine: str
+    #: Carried through from the catalog when the scene is externally defined, so a
+    #: backend can name the benchmark that owns this scene without the catalog.
+    #:
+    #: Same reason as ``PlannedEpisode.max_steps``, and the same root cause: the
+    #: plan was shaped by the local backend, whose executor needs nothing but
+    #: identity. The vla-eval backend is the first consumer that needs the scene's
+    #: *content*, and found three things absent. ``refractal plan`` compiles the
+    #: catalog away, so anything an executor needs has to survive the compile.
+    #:
+    #: Not identity: ``scene_hash`` already covers the provider and ref, via
+    #: ``external_scene_ref_key`` and the lock. This is the same information in an
+    #: executable form.
+    external: ExternalScene | None = None
     resource_shape: ResourceShape
     #: **The expanded list, not the generator spec.** A generator whose
     #: implementation drifts would otherwise make the provenance a lie.

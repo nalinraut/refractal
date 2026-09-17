@@ -53,6 +53,7 @@ def _row(
         "session_id": session_id,
         "worker_id": worker.worker_id,
         "execution_mode": execution_mode,
+        "server_url": None,  # nothing was served; the local backend simulates
         "harness_version": harness_version,
         "harness_surface": harness_surface,
         "success": outcome["success"],

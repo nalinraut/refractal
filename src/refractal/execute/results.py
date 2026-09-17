@@ -63,6 +63,13 @@ EPISODES_SCHEMA = pa.schema(
         pa.field("session_id", pa.string(), nullable=False),
         pa.field("worker_id", pa.string(), nullable=False),
         pa.field("execution_mode", pa.string(), nullable=False),
+        # Which model server answered. Provenance by the two-question test: the
+        # same checkpoint served from two addresses is the same checkpoint (the
+        # args that would change that are already in `plan_id`), so this must
+        # never gate a join. It is here because a self-comparison -- two arms
+        # pointed at one server -- is preventable before a run and otherwise
+        # unreconstructable after it, and `artifact_uri` is for artifacts.
+        pa.field("server_url", pa.string()),
         # Two columns, one of each kind. `harness_version` is provenance: human
         # readable, never gates. `harness_surface` is a precondition: a digest
         # over only the harness modules Refractal depends on, so it stays

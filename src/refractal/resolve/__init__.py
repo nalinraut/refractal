@@ -223,6 +223,7 @@ def resolve(
                 scene_id=scene.id,
                 scene_hash=scene_hashes[scene.id],
                 engine=scene.engine,
+                external=scene.external,
                 resource_shape=demand.shape,
                 scenarios=kept_by_scene[scene.id],
                 workers=workers,

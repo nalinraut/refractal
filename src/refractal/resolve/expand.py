@@ -214,6 +214,7 @@ def expand_episodes(
                             ),
                             task_id=task.id,
                             task_hash=th,
+                            max_steps=task.max_steps,
                             scenario_hash=scenario.scenario_hash,
                             seed=seed,
                             checkpoint_id=checkpoint.id,

@@ -243,6 +243,7 @@ class TestRecorderSurface(BridgeCase):
 class TestWorkerSelection(unittest.TestCase):
     def _episode(self, task_id, seed=0):
         return PlannedEpisode(
+            max_steps=300,
             episode_id=f"sha256:{task_id}{seed}", task_id=task_id, task_hash="sha256:t",
             scenario_hash="sha256:s", seed=seed, checkpoint_id="ckpt",
         )
@@ -277,6 +278,7 @@ class TestEpisodeRowMapping(unittest.TestCase):
 
     def _episode(self):
         return PlannedEpisode(
+            max_steps=300,
             episode_id="sha256:e", task_id="t", task_hash="sha256:t",
             scenario_hash="sha256:s", seed=0, checkpoint_id="ckpt",
         )
@@ -357,6 +359,7 @@ class TestTheIndexContract(unittest.TestCase):
     def _episodes(self, hashes):
         return [
             PlannedEpisode(
+                max_steps=300,
                 episode_id=f"sha256:{h}", task_id="t", task_hash="sha256:t",
                 scenario_hash=h, seed=0, checkpoint_id="ckpt",
             )
@@ -398,6 +401,7 @@ class TestResultMapping(unittest.TestCase):
     def _episodes(self, n):
         return [
             PlannedEpisode(
+                max_steps=300,
                 episode_id=f"sha256:e{i}", task_id="t", task_hash="sha256:t",
                 scenario_hash=f"s{i}", seed=0, checkpoint_id="ckpt",
             )
@@ -442,6 +446,7 @@ class TestEvalConfig(unittest.TestCase):
     def _episodes(self, n, task="t"):
         return [
             PlannedEpisode(
+                max_steps=300,
                 episode_id=f"sha256:e{i}", task_id=task, task_hash="sha256:t",
                 scenario_hash=f"s{i}", seed=0, checkpoint_id="ckpt",
             )
@@ -488,6 +493,7 @@ class TestSeedsComeFromTheLoopNotTheCounter(unittest.TestCase):
     def _episodes(self, scenarios, seeds):
         return [
             PlannedEpisode(
+                max_steps=300,
                 episode_id=f"sha256:e{i}s{seed}", task_id="t", task_hash="sha256:t",
                 scenario_hash=f"s{i}", seed=seed, checkpoint_id="ckpt",
             )

@@ -177,6 +177,16 @@ class StepBuffer:
     def discard(self, episode_id: str) -> None:
         self._fields.pop(episode_id, None)
 
+    def clear(self) -> None:
+        """Drop everything buffered.
+
+        Until ``steps.parquet`` lands, the runner calls this after each harness
+        invocation: the buffer's only job today is to prove the recorder override
+        took effect, and holding every step of every episode for the whole run to
+        prove that would be a memory leak wearing a receipt.
+        """
+        self._fields.clear()
+
     def __len__(self) -> int:
         return len(self._fields)
 

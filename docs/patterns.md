@@ -97,6 +97,67 @@ scene 'cube-bowl-v1': scenario set 'cube-edges' produces a scenario already
 produced by 'cube-corners' ({'cube_x': 0.05, 'cube_y': -0.1, ...}); kept once.
 ```
 
+## The discriminator the code under test destroys
+
+Two more instances of the fixture-that-exercised-nothing shape turned up while
+writing the vla-eval loop, and both are worth recording because the *mechanism*
+was new. In neither case was the fixture missing the case. In both, the fixture
+had the case and something downstream erased it.
+
+**The truncated discriminator.** Resume in the vla-eval backend is
+group-granular — the harness counts episodes from zero, so a partly-done group
+re-runs in full. That makes part-file naming load-bearing: a session-stamped name
+leaves the old file beside the new one and puts two rows under one `episode_id`,
+which `compare` blocks on as a duplicate. So part names are deterministic per
+`(worker, checkpoint, seed)` and a re-run replaces the file.
+
+The test for it re-ran a completed group and asserted three rows, not six. Then,
+following the practice of breaking the thing a check checks, the part name was
+reverted to the session-stamped version it exists to reject —
+
+```
+--- with a session-stamped part name (the version I rejected) ---
+Ran 2 tests in 0.103s
+OK
+```
+
+The two sessions were named `session-one` and `session-two`. The rejected scheme
+appends `session_id[:8]`. Both truncate to `session-`, so the part names collided
+anyway and the second run overwrote the first exactly as the correct scheme does.
+The fixture *had* two distinct sessions; the code under test truncated the
+distinction away. Renamed to `aaaa-first` / `bbbb-second`, the break produces what
+it should:
+
+```
+AssertionError: 6 != 3 : expected 3 rows, got 6:
+  ['...-0-0-pi0', '...-0-0-pi0', '...-1-0-pi0', '...-1-0-pi0', ...]
+```
+
+**The mutation inside a per-item filter.** The same test file's helper selected
+which servers to pass:
+
+```python
+{k: v for k, v in all_servers.items() if k in kwargs.pop("only", all_servers)}
+```
+
+`pop` is in the comprehension's `if`, so it runs once per server. The first
+iteration consumed `only` and every later one fell back to the default — the
+full map. The filter passed everything through, and the missing-server test ran
+against a complete server map and reported that no error was raised. Which was
+true, and not what it claimed to be testing.
+
+The generalisation, which the earlier entry gets only half of:
+
+> A fixture can carry the distinction and still exercise nothing, because
+> something between the fixture and the assertion collapses it. Truncation,
+> rounding, a `set` where a list was needed, a mutation inside a loop. So the
+> check is not "does the fixture differ" but "does the assertion fail when the
+> implementation is wrong" — which is only answerable by making it wrong.
+
+Both were found by the same move, applied to the checks rather than to the code:
+break it, and require the failure to be the one you predicted. The first break
+returning `OK` is the finding.
+
 ## Enforced where it can be
 
 `tests/test_resolve.py::TestTheDefaultFixtureExercisesItsInvariants` asserts the

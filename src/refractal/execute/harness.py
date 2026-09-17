@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 #: Modules Refractal subclasses, calls, or exchanges messages with. Everything
 #: else in the harness -- 20 benchmark packages, 18 model servers, the
@@ -187,8 +187,25 @@ def describe_installed_harness() -> tuple[str, str, dict[str, str]]:
         return LOCAL, LOCAL, {}
 
     version = getattr(vla_eval, "__version__", "unknown")
-    root = Path(vla_eval.__file__).parent
+    root = _package_root(vla_eval)
+    if root is None:
+        # Importable but not on disk: a namespace package with no location, or a
+        # module assembled in memory. The version is still true, so it is
+        # reported; the surface digest is not computable, and saying so beats
+        # both an AttributeError and a fabricated digest that would then gate
+        # comparisons against runs where it was real.
+        return f"vla-eval {version}", "unlocatable", {}
     return f"vla-eval {version}", surface_digest(root), surface_manifest(root)
+
+
+def _package_root(module: Any) -> Path | None:
+    """Where a package's files are, tolerating packages that have no files."""
+    location = getattr(module, "__file__", None)
+    if location:
+        return Path(location).parent
+    for entry in getattr(module, "__path__", []) or []:
+        return Path(entry)
+    return None
 
 
 __all__ = [

@@ -1,9 +1,13 @@
 """``refractal`` command line.
 
-Only ``plan`` exists so far, which is the point: the step-1 gate is that
-``refractal plan catalog/`` runs on a bare laptop -- no Docker, no GPU, no
-simulator -- prints what the run will cost, and writes a plan you can read
-before spending anything.
+``plan`` still sets the tone: it runs on a bare laptop -- no Docker, no GPU, no
+simulator -- prints what the run will cost, and writes a plan you can read before
+spending anything.
+
+Everything else is arranged so that stays true. ``build`` is the only verb that
+needs an engine, ``run --backend vla-eval`` is the only one that needs the harness
+and a GPU, and both import their dependencies inside the branch that uses them.
+``compare`` reads Parquet and needs neither.
 """
 
 from __future__ import annotations
@@ -82,14 +86,72 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _servers(pairs: list[str] | None) -> dict[str, str]:
+    """Parse ``--server ckpt=url`` into the mapping the bridge preflights.
+
+    Split on the *first* ``=`` only: a URL may contain one in a query string, and
+    silently truncating it would point an arm at the wrong server -- which is the
+    failure the whole pairing design exists to make unrepresentable.
+    """
+    def bad(message: str) -> "SystemExit":
+        # Exit 2, matching argparse's own usage-error code and every other
+        # refusal in this CLI. `SystemExit(str)` would print and exit 1.
+        print(f"error: {message}", file=sys.stderr)
+        return SystemExit(2)
+
+    servers: dict[str, str] = {}
+    for pair in pairs or []:
+        name, sep, url = pair.partition("=")
+        if not sep or not name or not url:
+            raise bad(f"--server takes checkpoint=url, got {pair!r}")
+        if name in servers:
+            raise bad(f"--server {name} given twice")
+        servers[name] = url
+    return servers
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     import uuid
 
-    from .execute import run_local
     from .schema.plan import read_plan
 
     plan = read_plan(args.plan)
     session_id = args.session_id or uuid.uuid4().hex
+
+    if args.backend == "vla-eval":
+        from .execute.vla_eval import BridgeError
+        from .execute.vla_eval_runner import run_vla_eval
+
+        try:
+            summary = run_vla_eval(
+                plan,
+                args.results,
+                _servers(args.server),
+                catalog_root=args.catalog,
+                session_id=session_id,
+                output_dir=args.harness_output,
+                resume=not args.no_resume,
+            )
+        except BridgeError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"  session {summary.session_id[:8]}  {summary.invocations} harness "
+            f"invocation(s), {summary.written} episode(s) written, "
+            f"{summary.skipped} already done"
+        )
+        print(f"  next:  refractal compare {args.results} {plan.plan_id}")
+        return 0
+
+    from .execute import run_local
+
+    if args.server:
+        print(
+            "error: --server applies to --backend vla-eval; the local backend "
+            "simulates and contacts nothing.",
+            file=sys.stderr,
+        )
+        return 2
     summary = run_local(
         plan,
         args.results,
@@ -197,8 +259,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("-o", "--results", default="./results", help="results URI")
     run_cmd.add_argument("--catalog", help="catalog to copy in as provenance")
     run_cmd.add_argument(
-        "--backend", choices=("local",), default="local",
-        help="only 'local' exists so far; compose and k8s are later steps")
+        "--backend", choices=("local", "vla-eval"), default="local",
+        help="'local' simulates; 'vla-eval' drives the harness against running "
+             "model servers. Compose and k8s are renderers over the latter, later")
+    run_cmd.add_argument(
+        "--server", action="append", metavar="CKPT=URL",
+        help="model server for a checkpoint, e.g. --server pi0=http://localhost:8000. "
+             "Repeat once per checkpoint. Every checkpoint in the plan needs one, and "
+             "two checkpoints sharing a URL is refused -- that is a self-comparison")
+    run_cmd.add_argument(
+        "--harness-output", default="./vla-eval-output",
+        help="scratch directory for the harness's own outputs. Not the results URI: "
+             "Refractal's results go to --results as Parquet")
     run_cmd.add_argument("--session-id", help="fixed session id, for reproducible tests")
     run_cmd.add_argument("--no-resume", action="store_true",
                          help="re-run episodes that already have results")
