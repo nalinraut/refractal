@@ -138,6 +138,25 @@ def worker_selection(episodes: list[PlannedEpisode]) -> dict[str, Any]:
     than fighting it, a Refractal worker is constrained to one task's episodes and
     described the way the harness already understands.
 
+    **"The harness's own terms" means its task names, not ours.** The work-item
+    loop filters like this::
+
+        tasks = benchmark.get_tasks()
+        if cfg.tasks:
+            tasks = [t for t in tasks if t.get("suite") in cfg.tasks
+                                      or t.get("name") in cfg.tasks]
+
+    and LIBERO's ``get_tasks`` sets ``name = task.language``. So the selector is
+    the instruction string. Sending ``task_id`` -- which this returned first --
+    matches nothing, leaves ``tasks`` empty, and runs zero episodes. That fails
+    loudly, because ``rows_from_benchmark_result`` refuses a short result, but it
+    fails after the servers are warm rather than before anything is spent.
+
+    Filtering by name also gets the right *index*: after the filter there is one
+    task, so the harness's ``episode_idx`` counts ``0..episodes_per_task-1``
+    against that task's own init states -- which is the contract
+    ``check_index_contract`` checks.
+
     Returns the config fragment, and raises if the assignment cannot be expressed
     -- which is the honest failure. Silently running a superset would corrupt the
     denominator; silently running a subset would lose episodes the plan promised.
@@ -153,7 +172,21 @@ def worker_selection(episodes: list[PlannedEpisode]) -> dict[str, Any]:
             "one task per worker for this backend, or the assignment cannot be expressed "
             "without re-running episodes that belong to another worker."
         )
-    return {"tasks": sorted(task_ids), "episodes_per_task": len(episodes)}
+    instructions = {e.instruction for e in episodes}
+    if len(instructions) != 1:
+        # One task id with two instructions cannot happen through `resolve`, but
+        # it can through a hand-written plan -- and it would select two tasks
+        # from one worker, which is the thing the check above exists to prevent.
+        raise BridgeError(
+            f"task {sorted(task_ids)[0]!r} carries {len(instructions)} different "
+            f"instructions ({sorted(instructions)}). The harness selects tasks by their "
+            "instruction, so this would select more than one."
+        )
+    return {
+        "tasks": sorted(instructions),
+        "episodes_per_task": len(episodes),
+        "task_ids": sorted(task_ids),
+    }
 
 
 class StepBuffer:
@@ -428,7 +461,11 @@ def build_eval_config(
                 "episodes_per_task": selection["episodes_per_task"],
                 "tasks": selection["tasks"],
                 "max_steps": max_steps,
-                "params": dict(external.ref),
+                # `params`, not `ref`. The ref identifies the scene -- LIBERO's
+                # `task_id` lives there -- and the harness does
+                # `benchmark_cls(**params)`, where an identifying key that is not
+                # a constructor argument raises TypeError.
+                "params": dict(getattr(external, "params", None) or {}),
                 # Recording on: the gate is `rec_cfg is None or self._store is
                 # None`, and ParquetOrchestrator moves the second. Leaving this
                 # unset would close the first and record nothing.

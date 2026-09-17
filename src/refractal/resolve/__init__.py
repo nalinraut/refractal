@@ -50,6 +50,7 @@ def resolve(
     pack_below_startup_sec: int = 30,
     created_at: str | None = None,
     invocations_per_worker: int | None = None,
+    workers_per_scene: int | None = None,
 ) -> Plan:
     """Compile a catalog into a plan.
 
@@ -180,7 +181,11 @@ def resolve(
     # --- placement -------------------------------------------------------
     budgets, server_placement = budget_model_servers(hardware, catalog.run.checkpoints)
     allocation = allocate_workers(
-        demands, hardware, budgets, pack_below_startup_sec=pack_below_startup_sec
+        demands,
+        hardware,
+        budgets,
+        pack_below_startup_sec=pack_below_startup_sec,
+        workers_per_scene=workers_per_scene,
     )
     warnings.extend(allocation.warnings)
     cpusets = assign_cpusets(demands, allocation, hardware)

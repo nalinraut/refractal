@@ -154,8 +154,21 @@ def allocate_workers(
     budgets: list[DeviceBudget],
     *,
     pack_below_startup_sec: int = 30,
+    workers_per_scene: int | None = None,
 ) -> Allocation:
-    """Greedy makespan allocation, bounded by CPU, RAM, VRAM and useful ceiling."""
+    """Greedy makespan allocation, bounded by CPU, RAM, VRAM and useful ceiling.
+
+    ``workers_per_scene`` caps the split. It exists because a backend can require
+    that one worker own a scene's whole scenario range: the vla-eval harness
+    counts episodes from zero within a task, so a worker holding init states 5..9
+    would run 0..4 while every row claimed 5..9. ``check_index_contract`` refuses
+    that, which means the *default* plan for a LIBERO catalog is unrunnable on
+    that backend -- measured: 12 of 16 groups refused.
+
+    A cap does not change ``plan_id``. Worker layout is placement, not identity:
+    the same experiment split four ways and one way is the same experiment, which
+    is why the same catalog can target a backend that shards and one that cannot.
+    """
     allocation = Allocation()
     if not demands:
         return allocation
@@ -163,6 +176,7 @@ def allocate_workers(
     cpu_free = hardware.cpu_cores
     mem_free = hardware.memory_mb
     max_workers = hardware.max_workers or 10**6
+    per_scene_cap = workers_per_scene or 10**6
 
     for demand in demands:
         allocation.workers[demand.scene_id] = 0
@@ -200,7 +214,8 @@ def allocate_workers(
         candidates = [
             d
             for d in demands
-            if allocation.workers[d.scene_id] < d.useful_worker_ceiling()
+            if allocation.workers[d.scene_id]
+            < min(d.useful_worker_ceiling(), per_scene_cap)
         ]
         if not candidates:
             break

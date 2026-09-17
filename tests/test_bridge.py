@@ -244,14 +244,27 @@ class TestWorkerSelection(unittest.TestCase):
     def _episode(self, task_id, seed=0):
         return PlannedEpisode(
             max_steps=300,
+            instruction="put the bowl on the plate",
             episode_id=f"sha256:{task_id}{seed}", task_id=task_id, task_hash="sha256:t",
             scenario_hash="sha256:s", seed=seed, checkpoint_id="ckpt",
         )
 
     def test_one_task_is_expressible(self):
+        """`tasks` carries the instruction; `task_ids` carries ours.
+
+        Both, because they answer different questions. The harness filters on the
+        instruction, and a reader of the config needs to know which Refractal task
+        that was -- a language string is not something you can look up in a
+        catalog.
+        """
         episodes = [self._episode("libero-3", s) for s in range(10)]
         self.assertEqual(
-            worker_selection(episodes), {"tasks": ["libero-3"], "episodes_per_task": 10}
+            worker_selection(episodes),
+            {
+                "tasks": ["put the bowl on the plate"],
+                "episodes_per_task": 10,
+                "task_ids": ["libero-3"],
+            },
         )
 
     def test_two_tasks_in_one_worker_is_refused_rather_than_approximated(self):
@@ -279,6 +292,7 @@ class TestEpisodeRowMapping(unittest.TestCase):
     def _episode(self):
         return PlannedEpisode(
             max_steps=300,
+            instruction="put the bowl on the plate",
             episode_id="sha256:e", task_id="t", task_hash="sha256:t",
             scenario_hash="sha256:s", seed=0, checkpoint_id="ckpt",
         )
@@ -360,6 +374,7 @@ class TestTheIndexContract(unittest.TestCase):
         return [
             PlannedEpisode(
                 max_steps=300,
+                instruction="put the bowl on the plate",
                 episode_id=f"sha256:{h}", task_id="t", task_hash="sha256:t",
                 scenario_hash=h, seed=0, checkpoint_id="ckpt",
             )
@@ -402,6 +417,7 @@ class TestResultMapping(unittest.TestCase):
         return [
             PlannedEpisode(
                 max_steps=300,
+                instruction="put the bowl on the plate",
                 episode_id=f"sha256:e{i}", task_id="t", task_hash="sha256:t",
                 scenario_hash=f"s{i}", seed=0, checkpoint_id="ckpt",
             )
@@ -435,18 +451,79 @@ class TestResultMapping(unittest.TestCase):
         self.assertIn("must not be written as though it completed", str(ctx.exception))
 
 
+class TestRefAndParamsAreDifferentJobs(unittest.TestCase):
+    """`ref` says which scene; `params` says how to build it.
+
+    One field did both at first, and `build_eval_config` passed the whole thing
+    to the provider -- which raises, because LIBERO's `task_id` identifies a task
+    and is not a constructor argument of the benchmark that owns it.
+    """
+
+    def _scene(self, **kwargs):
+        from refractal.schema.models import ExternalScene
+
+        base = {"provider": "pkg.mod:Bench", "ref": {}, "params": {}}
+        base.update(kwargs)
+        return ExternalScene.model_validate(base)
+
+    def test_a_key_in_both_is_allowed_when_it_agrees(self):
+        """LIBERO's `suite` genuinely belongs in both, so the rule cannot be
+        "no key appears twice"."""
+        scene = self._scene(
+            ref={"suite": "libero_spatial", "task_id": 3},
+            params={"suite": "libero_spatial", "send_state": True},
+        )
+        self.assertEqual(scene.ref["suite"], scene.params["suite"])
+
+    def test_a_key_in_both_that_disagrees_is_refused(self):
+        with self.assertRaises(Exception) as ctx:
+            self._scene(
+                ref={"suite": "libero_spatial"}, params={"suite": "libero_object"}
+            )
+        self.assertIn("disagree", str(ctx.exception))
+
+    def test_params_participate_in_scene_identity(self):
+        """`send_state: false` against a checkpoint trained with proprioception
+        is the parameter that moved X-VLA on LIBERO from 97.8% to 42%. Two runs
+        that disagree about it must not join."""
+        from refractal.schema.identity import external_scene_ref_key
+        from refractal.schema.models import Scene
+
+        def scene(params):
+            return Scene.model_validate({
+                "id": "libero-0",
+                "engine": "mujoco",
+                "engine_version": "3.2.0",
+                "external": {"provider": "pkg.mod:Bench",
+                             "ref": {"suite": "s", "task_id": 0},
+                             "params": params},
+                "resource_shape": [{
+                    "hardware_profile": "h", "envs_per_process": 1,
+                    "vram_per_env_mb": 0, "cpu_cores": 1,
+                    "sec_per_1k_steps": 10.0, "startup_sec": 1,
+                }],
+            })
+
+        self.assertNotEqual(
+            external_scene_ref_key(scene({"send_state": True})),
+            external_scene_ref_key(scene({"send_state": False})),
+        )
+
+
 class TestEvalConfig(unittest.TestCase):
     class Scene:
         scene_id = "libero-spatial-0"
         external = types.SimpleNamespace(
             provider="vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark",
             ref={"suite": "libero_spatial", "task_id": 0},
+            params={"suite": "libero_spatial", "send_state": True},
         )
 
     def _episodes(self, n, task="t"):
         return [
             PlannedEpisode(
                 max_steps=300,
+                instruction="put the bowl on the plate",
                 episode_id=f"sha256:e{i}", task_id=task, task_hash="sha256:t",
                 scenario_hash=f"s{i}", seed=0, checkpoint_id="ckpt",
             )
@@ -460,8 +537,14 @@ class TestEvalConfig(unittest.TestCase):
         )
         benchmark = config["benchmarks"][0]
         self.assertEqual(benchmark["episodes_per_task"], 10)
-        self.assertEqual(benchmark["tasks"], ["t"])
-        self.assertEqual(benchmark["params"]["suite"], "libero_spatial")
+        # The selector is the INSTRUCTION, not our task id: the harness filters
+        # `get_tasks()` on `name`, which LIBERO sets to `task.language`.
+        self.assertEqual(benchmark["tasks"], ["put the bowl on the plate"])
+        self.assertEqual(benchmark["subname"], "libero_spatial")
+        # `params` comes from `external.params`, never from `ref` -- `ref` holds
+        # `task_id`, which is not a constructor argument and would raise.
+        self.assertEqual(benchmark["params"], {"suite": "libero_spatial", "send_state": True})
+        self.assertNotIn("task_id", benchmark["params"])
         self.assertEqual(config["server"]["url"], "ws://pi0:8000")
 
     def test_recording_is_enabled_or_the_other_gate_stays_shut(self):
@@ -494,6 +577,7 @@ class TestSeedsComeFromTheLoopNotTheCounter(unittest.TestCase):
         return [
             PlannedEpisode(
                 max_steps=300,
+                instruction="put the bowl on the plate",
                 episode_id=f"sha256:e{i}s{seed}", task_id="t", task_hash="sha256:t",
                 scenario_hash=f"s{i}", seed=seed, checkpoint_id="ckpt",
             )

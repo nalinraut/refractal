@@ -122,6 +122,54 @@ class TestPlanShape(unittest.TestCase):
             self.assertEqual(a, b)
 
 
+class TestWorkerCapIsPlacementNotIdentity(unittest.TestCase):
+    """A backend can require that one worker own a scene's whole range.
+
+    vla-eval counts episodes from zero within a task, so a worker holding init
+    states 5..9 runs 0..4 while every row claims 5..9. Measured on the LIBERO
+    catalog's default plan: 12 of 16 groups refused by `check_index_contract`.
+    Without that guard the run would have completed and recorded 30 of 40
+    episodes against the wrong scenario -- the positional-identity bug this
+    project exists to prevent, produced by the planner's own default output.
+    """
+
+    def test_capping_workers_does_not_change_plan_id(self):
+        """The cap has to be free of identity, or a catalog could not target both
+        a backend that shards and one that cannot without becoming two
+        experiments."""
+        split = resolve(CATALOG, hardware_profile=HARDWARE)
+        single = resolve(CATALOG, hardware_profile=HARDWARE, workers_per_scene=1)
+        self.assertGreater(max(len(s.workers) for s in split.scenes), 1)
+        self.assertEqual([len(s.workers) for s in single.scenes],
+                         [1] * len(single.scenes))
+        self.assertEqual(split.plan_id, single.plan_id)
+
+    def test_capping_loses_no_episodes(self):
+        split = resolve(CATALOG, hardware_profile=HARDWARE)
+        single = resolve(CATALOG, hardware_profile=HARDWARE, workers_per_scene=1)
+
+        def ids(plan):
+            return sorted(e.episode_id for s in plan.scenes
+                          for w in s.workers for e in w.episodes)
+
+        self.assertEqual(ids(split), ids(single))
+
+    def test_one_worker_owns_a_contiguous_zero_based_range(self):
+        """The property the cap exists to produce, asserted on the thing that
+        consumes it rather than on the worker count."""
+        plan = resolve(CATALOG, hardware_profile=HARDWARE, workers_per_scene=1)
+        for scene in plan.scenes:
+            params = {s.scenario_hash: s.params for s in scene.scenarios}
+            for worker in scene.workers:
+                for checkpoint in {e.checkpoint_id for e in worker.episodes}:
+                    hashes = {e.scenario_hash for e in worker.episodes
+                              if e.checkpoint_id == checkpoint}
+                    self.assertEqual(
+                        hashes, set(params),
+                        "a capped worker must own every scenario on its scene",
+                    )
+
+
 class TestWorkerCountIsCapacityBound(unittest.TestCase):
     """The correction to `workers = ceil(episodes / envs_per_process)`."""
 

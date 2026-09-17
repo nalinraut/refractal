@@ -35,6 +35,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         args.catalog,
         hardware_profile=args.hardware,
         pack_below_startup_sec=args.pack_below_startup_sec,
+        workers_per_scene=args.workers_per_scene,
     )
 
     for scene in plan.scenes:
@@ -201,7 +202,21 @@ def cmd_build(args: argparse.Namespace) -> int:
     """Establish the facts that need an engine, and write catalog/build.lock."""
     from .build import build as build_catalog
 
-    report = build_catalog(args.catalog, hardware_profile=args.hardware)
+    probe = None
+    if args.probe:
+        # Resolved here and nowhere else. An externally-defined scene has no
+        # catalog-local model to hash, so the facts that identify it can only come
+        # from the package that owns it -- and `build` is the one verb allowed to
+        # require that package be installed.
+        from .schema.importstr import resolve_import_string
+
+        try:
+            probe = resolve_import_string(args.probe)()
+        except Exception as exc:
+            print(f"error: could not load probe {args.probe!r}: {exc}", file=sys.stderr)
+            return 2
+
+    report = build_catalog(args.catalog, hardware_profile=args.hardware, probe=probe)
     for line in report.summary_lines():
         print(line)
     for note in report.notes:
@@ -237,6 +252,11 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--hardware", required=True, help="hardware profile id, e.g. rtx5090")
     plan.add_argument("-o", "--output", default="plan.json")
     plan.add_argument("-v", "--verbose", action="store_true", help="show per-worker placement")
+    plan.add_argument(
+        "--workers-per-scene", type=int, default=None, metavar="N",
+        help="cap workers per scene. Use 1 for --backend vla-eval: the harness counts "
+             "episodes from zero within a task, so a worker holding a later slice of the "
+             "scenario range would run the wrong init states. Does not change plan_id")
     plan.add_argument(
         "--pack-below-startup-sec",
         type=int,
@@ -284,6 +304,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build_cmd.add_argument("catalog", help="path to the catalog directory")
     build_cmd.add_argument("--hardware", help="hardware profile to record shapes for")
+    build_cmd.add_argument(
+        "--probe", metavar="module:Class",
+        help="probe supplying facts only an installed engine can answer, e.g. "
+             "refractal_libero.probe:LiberoProbe. Required for externally-defined "
+             "scenes, whose geometry lives in someone else's package")
     build_cmd.set_defaults(func=cmd_build)
 
     explain = sub.add_parser(

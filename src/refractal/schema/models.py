@@ -117,7 +117,61 @@ class ExternalScene(Strict):
     #: How that provider identifies it, e.g. ``{suite: libero_spatial, task_id: 3}``.
     #: Part of the scene's catalog-side identity: changing it means a different
     #: scene, and the lock goes stale.
+    #:
+    #: **Location only.** This says which scene; it is not passed to the provider.
     ref: dict[str, Any] = Field(default_factory=dict)
+    #: Constructor arguments for the provider, e.g.
+    #: ``{send_state: true, num_steps_wait: 10}``.
+    #:
+    #: Separate from ``ref`` because one field cannot do both jobs. ``ref`` held
+    #: both at first, and a backend passed the whole thing to the provider --
+    #: which raises, because ``task_id`` identifies a LIBERO task and is not a
+    #: constructor argument of the benchmark that owns it.
+    #:
+    #: Both are hashed into the scene's identity, and for the same reason: these
+    #: change what the policy observes. ``send_state: false`` against a checkpoint
+    #: trained with proprioception is the parameter that moved X-VLA on LIBERO
+    #: from 97.8% to 42% (arXiv 2603.13966v2 SS III-B). Two runs that disagree
+    #: about it are not one experiment.
+    #:
+    #: The split is the same distinction as everywhere else here: what a thing
+    #: *is* versus what is needed to *make* it. Conflating them is the shape of
+    #: the original bug -- ``(task_name, 7)`` is a location standing in for an
+    #: identity -- one level up.
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _ref_and_params_must_agree(self) -> "ExternalScene":
+        """A key in both must mean the same thing in both.
+
+        Some keys legitimately appear twice: LIBERO's ``suite`` both identifies
+        the scene and is a constructor argument of the benchmark that owns it. So
+        the split cannot be "no key appears in both" -- it has to be "a key in
+        both agrees".
+
+        Without this, ``ref: {suite: libero_spatial}`` with
+        ``params: {suite: libero_object}`` is a scene whose identity says one
+        suite and whose execution uses another. That is not a mistake anyone would
+        make deliberately, and it is exactly the kind that survives a review
+        because both halves read correctly on their own.
+        """
+        conflicting = {
+            key: (self.ref[key], self.params[key])
+            for key in self.ref.keys() & self.params.keys()
+            if self.ref[key] != self.params[key]
+        }
+        if conflicting:
+            detail = "; ".join(
+                f"{key}: ref={ref!r} params={param!r}"
+                for key, (ref, param) in sorted(conflicting.items())
+            )
+            raise ValueError(
+                f"external scene ref and params disagree -- {detail}. A key in both must "
+                "mean the same thing in both: the identity would record one value and the "
+                "run would use the other."
+            )
+        return self
+
 
     @model_validator(mode="after")
     def _check(self) -> "ExternalScene":

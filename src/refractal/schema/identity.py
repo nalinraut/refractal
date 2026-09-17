@@ -135,6 +135,10 @@ def external_scene_ref_key(scene: Scene) -> str:
             "engine_version": scene.engine_version,
             "provider": scene.external.provider,
             "ref": scene.external.ref,
+            # Hashed for the same reason `ref` is: these decide what the policy
+            # sees. A run with `send_state: false` is not comparable with one
+            # without it, and must not join.
+            "params": scene.external.params,
         }
     )
 

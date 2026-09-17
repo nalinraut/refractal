@@ -74,6 +74,14 @@ class PlannedEpisode(Strict):
     #: always has a real value; a default here would let a plan that never recorded
     #: one hand 400 to a harness and produce a run that looks fine.
     max_steps: int = Field(gt=0)
+    #: The task's instruction, carried for the same reason as ``max_steps``: it is
+    #: inside ``task_hash`` and a backend needs it to act.
+    #:
+    #: Specifically, vla-eval selects tasks by natural-language name --
+    #: ``get_tasks()`` returns ``name = task.language`` and the config filters on
+    #: it -- so the instruction *is* the selector. Sending a Refractal task id
+    #: instead matches nothing, which runs zero episodes.
+    instruction: str = Field(min_length=1)
 
 
 class PlannedWorker(Strict):

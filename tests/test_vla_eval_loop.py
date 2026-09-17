@@ -95,6 +95,7 @@ def make_plan(*, scenarios=3, seeds=(0,), checkpoints=("pi0", "pi05"), scenes=("
                 seed=seed,
                 checkpoint_id=ckpt,
                 max_steps=300,
+                instruction="put the bowl on the plate",
             )
             for ckpt in checkpoints
             for seed in seeds
@@ -106,8 +107,12 @@ def make_plan(*, scenarios=3, seeds=(0,), checkpoints=("pi0", "pi05"), scenes=("
                 scene_id=scene_id,
                 scene_hash=f"sha256:{scene_id}",
                 engine="mujoco",
-                external=ExternalScene(provider=PROVIDER, ref={"suite": "libero_spatial",
-                                                               "task_id": 0}),
+                external=ExternalScene(
+                    provider=PROVIDER,
+                    ref={"suite": "libero_spatial", "task_id": 0},
+                    params={"suite": "libero_spatial", "send_state": True,
+                            "send_wrist_image": True},
+                ),
                 resource_shape=ResourceShape(hardware_profile="alienware", envs_per_process=1,
                                              vram_per_env_mb=0, cpu_cores=2,
                                              sec_per_1k_steps=10.0, startup_sec=5),
@@ -417,6 +422,134 @@ class TestTheServerFlag(unittest.TestCase):
         for bad in ("pi0", "pi0=", "=ws://h", ""):
             with self.subTest(bad), self.assertRaises(SystemExit):
                 _servers([bad])
+
+
+class TestAPlanRoundTripsIntoARunnableConfig(unittest.TestCase):
+    """The invariant nothing held, and the one that would have caught all three
+    missing fields before the loop did.
+
+    Every other test on the plan asks whether it is *correct*: does `plan_id`
+    move when it should, does an episode id decompose, do two catalogs agree.
+    None of them asks whether it is *sufficient* -- whether a backend handed
+    only plan.json can construct the thing it has to hand to a runner.
+
+    Those are different questions, and the distinction is the finding:
+    `max_steps`, the benchmark provider and the suite ref were all inside a hash,
+    so identity was intact and the plan was unrunnable. Being inside a digest is
+    not the same as surviving the compile.
+
+    So this reads a plan back off disk -- not a Plan object held in memory, which
+    could carry a field the serialiser drops -- and drives it all the way to a
+    harness config, asserting on the config rather than on the plan.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def _round_trip(self, plan):
+        """Write, read back, and build a config from what came off disk."""
+        from refractal.execute.vla_eval import build_eval_config, group_by_seed
+        from refractal.execute.vla_eval_runner import _max_steps
+        from refractal.schema.plan import read_plan
+
+        path = self.tmp / "plan.json"
+        plan.write(path)
+        reloaded = read_plan(path)
+
+        configs = []
+        for scene in reloaded.scenes:
+            for worker in scene.workers:
+                for checkpoint in sorted({e.checkpoint_id for e in worker.episodes}):
+                    for_ckpt = [e for e in worker.episodes if e.checkpoint_id == checkpoint]
+                    for seed, group in sorted(group_by_seed(for_ckpt).items()):
+                        configs.append(
+                            build_eval_config(
+                                scene=scene,
+                                episodes=group,
+                                server_url="ws://stand-in:8000",
+                                output_dir=str(self.tmp / "out"),
+                                max_steps=_max_steps(group),
+                            )
+                        )
+        return reloaded, configs
+
+    def test_an_external_plan_reaches_a_complete_harness_config(self):
+        from test_vla_eval_loop import make_plan  # this module, by name
+
+        plan = make_plan(scenarios=3, seeds=(0, 1), checkpoints=("pi0", "pi05"))
+        _, configs = self._round_trip(plan)
+        self.assertEqual(len(configs), 4)
+        for config in configs:
+            benchmark = config["benchmarks"][0]
+            # Every key the harness needs, named individually. A loop over
+            # `benchmark.keys()` would pass on a config that had them all set to
+            # None, which is the failure mode being guarded.
+            self.assertTrue(benchmark["benchmark"], "no provider to import")
+            self.assertTrue(benchmark["subname"], "no suite to select")
+            self.assertGreater(benchmark["episodes_per_task"], 0)
+            self.assertGreater(benchmark["max_steps"], 0, "no step limit")
+            self.assertTrue(benchmark["tasks"], "no task to constrain the loop to")
+            self.assertTrue(benchmark["params"].get("suite"), "no suite in params")
+            self.assertNotIn(
+                "task_id", benchmark["params"],
+                "ref keys must not reach the constructor; task_id would raise TypeError",
+            )
+            self.assertTrue(config["server"]["url"])
+            self.assertTrue(config["output_dir"])
+
+    def test_the_step_limit_survives_serialisation(self):
+        """It is the field that was missing, and it is an int inside a hash --
+        the kind of thing a serialiser can drop without any identity test
+        noticing."""
+        from test_vla_eval_loop import make_plan
+
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        reloaded, configs = self._round_trip(plan)
+        self.assertEqual(configs[0]["benchmarks"][0]["max_steps"], 300)
+        for scene in reloaded.scenes:
+            for worker in scene.workers:
+                for episode in worker.episodes:
+                    self.assertEqual(episode.max_steps, 300)
+
+    def test_a_local_scene_is_refused_with_a_reason_not_a_None_field(self):
+        """A plan of local scenes is a perfectly valid plan that this backend
+        cannot run. It has to say so, rather than building a config whose
+        provider is None and failing inside the harness."""
+        from refractal.execute.vla_eval import BridgeError
+        from test_vla_eval_loop import make_plan
+
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        object.__setattr__(plan.scenes[0], "external", None)
+        with self.assertRaises(BridgeError) as ctx:
+            self._round_trip(plan)
+        self.assertIn("externally-defined", str(ctx.exception))
+
+    def test_the_compiled_example_catalog_is_checked_too(self):
+        """The round trip above uses a hand-built plan, which can only contain
+        fields whoever wrote it remembered. This one comes out of `resolve`, so a
+        field the planner stops populating fails here even though the fixture
+        would still carry it."""
+        from refractal.resolve import resolve
+
+        catalog = Path(__file__).resolve().parents[1] / "examples" / "catalog"
+        plan = resolve(catalog, hardware_profile="rtx5090")
+        path = self.tmp / "compiled.json"
+        plan.write(path)
+
+        from refractal.schema.plan import read_plan
+
+        reloaded = read_plan(path)
+        for scene in reloaded.scenes:
+            for worker in scene.workers:
+                for episode in worker.episodes:
+                    self.assertGreater(
+                        episode.max_steps, 0,
+                        f"{episode.episode_id} lost its step limit through the compile",
+                    )
+        # The example catalog is local, so this backend must refuse it -- and the
+        # refusal is the assertion: it proves the plan reached the point of being
+        # rejected for the right reason rather than for a missing field.
+        self.assertTrue(all(s.external is None for s in reloaded.scenes))
 
 
 if __name__ == "__main__":
