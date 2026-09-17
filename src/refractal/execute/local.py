@@ -89,8 +89,11 @@ def run_local(
     started_at = started_at or dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
     writer = ResultWriter(results_uri, plan.plan_id)
 
+    # Always: a results directory that cannot say what produced it is not
+    # provenance, it is a pile of Parquet.
+    writer.write_plan(plan.to_json())
     if catalog_root is not None:
-        writer.copy_provenance(plan.to_json(), catalog_root)
+        writer.copy_catalog(catalog_root)
 
     already = writer.completed_episode_ids() if resume else set()
     written = skipped = 0

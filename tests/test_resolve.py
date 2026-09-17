@@ -514,3 +514,36 @@ class TestExplainingWhyTwoPlansDiffer(unittest.TestCase):
 
         plan = self._plan()
         self.assertEqual(plan.plan_id, hash_obj(plan.identity))
+
+    def test_explain_accepts_a_results_directory(self):
+        """The plan is copied in as provenance; using it should not need the layout."""
+        import tempfile
+
+        from refractal.execute import run_local
+        from refractal.schema.plan import read_plan
+
+        with Temp() as root, tempfile.TemporaryDirectory() as results:
+            plan = resolve(root, hardware_profile=HARDWARE)
+            run_local(plan, results, session_id="0" * 32, catalog_root=str(root))
+            # a results root with one comparison in it
+            self.assertEqual(read_plan(results).plan_id, plan.plan_id)
+            # and the comparison directory itself
+            comparison = next(Path(results).glob("comparison_id=*"))
+            self.assertEqual(read_plan(comparison).plan_id, plan.plan_id)
+
+    def test_an_ambiguous_results_root_lists_the_comparisons(self):
+        import tempfile
+
+        from refractal.execute import run_local
+        from refractal.schema.plan import read_plan
+
+        with Temp() as root, tempfile.TemporaryDirectory() as results:
+            run_local(resolve(root, hardware_profile=HARDWARE), results,
+                      session_id="0" * 32)
+            tmp = Temp.__new__(Temp); tmp.root = root
+            tmp.edit("run.yaml", lambda d: d["run"].__setitem__("seeds", 5))
+            run_local(resolve(root, hardware_profile=HARDWARE), results,
+                      session_id="1" * 32)
+            with self.assertRaises(CatalogError) as ctx:
+                read_plan(results)
+            self.assertIn("holds 2 comparisons", str(ctx.exception))

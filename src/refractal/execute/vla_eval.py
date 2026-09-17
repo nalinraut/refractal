@@ -227,6 +227,117 @@ def to_episode_row(episode: PlannedEpisode, result: Mapping[str, Any]) -> Episod
     )
 
 
+def check_index_contract(episodes: list[PlannedEpisode], scenarios: Mapping[str, Any]) -> None:
+    """The harness indexes init states by its OWN episode counter. Refuse a
+    plan where that counter would not select the scenario the plan names.
+
+    This is the sharpest thing in the bridge and it is easy to miss. The harness
+    runs ``ep in range(cfg.episodes_per_task)`` and hands ``episode_idx = ep`` to
+    the benchmark, which does ``initial_states[episode_idx]``. Refractal's
+    scenario says which init state it means, in ``init_state_index``.
+
+    Those are two different numbers that happen to coincide when a catalog uses
+    ``range: [0, N-1]``. If it uses ``[5, 14]``, the harness still counts 0..9 and
+    runs init states 0..9 while every recorded row claims 5..14 — a comparison
+    built on scenarios that were never executed, with nothing anywhere
+    disagreeing.
+
+    So it is checked rather than assumed, and it fails loudly rather than
+    quietly running the wrong thing. The alternative -- teaching the harness to
+    take an explicit index -- means the work-item loop, which is inline and not a
+    method.
+    """
+    wanted = sorted(
+        scenarios[e.scenario_hash]["init_state_index"]
+        for e in episodes
+        if e.scenario_hash in scenarios
+    )
+    if len(wanted) != len(episodes):
+        raise BridgeError(
+            "some episodes reference scenarios that are not in the plan's scenario list, "
+            "so their init-state index cannot be checked against the harness's counter."
+        )
+    expected = list(range(len(wanted)))
+    if wanted != expected:
+        raise BridgeError(
+            f"this worker's init_state_index values are {wanted[:6]}"
+            f"{'...' if len(wanted) > 6 else ''}, but the harness selects init states by its "
+            f"own episode counter, which will run {expected[:6]}"
+            f"{'...' if len(expected) > 6 else ''}. Every row would claim a scenario that was "
+            "never executed. Use `range: [0, N-1]` for init_state_index, or run a subset by "
+            "narrowing the tier rather than by offsetting the index."
+        )
+
+
+def build_eval_config(
+    *,
+    scene: Any,
+    episodes: list[PlannedEpisode],
+    server_url: str,
+    output_dir: str,
+    max_steps: int,
+) -> dict[str, Any]:
+    """The vla-eval config for one worker against one checkpoint.
+
+    Expressed in the harness's own terms rather than by overriding its work-item
+    loop, which is inline and not a method. ``worker_selection`` refuses a worker
+    spanning two tasks, because the loop can only be constrained to one.
+    """
+    selection = worker_selection(episodes)
+    external = getattr(scene, "external", None)
+    if external is None:
+        raise BridgeError(
+            f"scene {scene.scene_id if hasattr(scene, 'scene_id') else scene!r} is not an "
+            "externally-defined scene, so there is no provider to name as the benchmark."
+        )
+    return {
+        "server": {"url": server_url},
+        "output_dir": output_dir,
+        "benchmarks": [
+            {
+                "benchmark": external.provider,
+                "subname": dict(external.ref).get("suite"),
+                "episodes_per_task": selection["episodes_per_task"],
+                "tasks": selection["tasks"],
+                "max_steps": max_steps,
+                "params": dict(external.ref),
+                # Recording on: the gate is `rec_cfg is None or self._store is
+                # None`, and ParquetOrchestrator moves the second. Leaving this
+                # unset would close the first and record nothing.
+                "recording": {"record_step": True, "record_video": False},
+            }
+        ],
+    }
+
+
+def rows_from_benchmark_result(
+    result: Mapping[str, Any], episodes: list[PlannedEpisode]
+) -> list[EpisodeRow]:
+    """Map the harness's aggregate back onto the plan's episodes, positionally.
+
+    Positional because that is the only correspondence available: the harness
+    stamps ``episode_id`` with its own integer counter, which is the index this
+    bridge just checked against ``init_state_index``. The check is what makes the
+    position meaningful; without it this would be guessing.
+    """
+    by_index: dict[int, Mapping[str, Any]] = {}
+    for task in result.get("tasks") or []:
+        for episode in task.get("episodes") or []:
+            index = episode.get("episode_id")
+            if isinstance(index, int):
+                by_index[index] = episode
+
+    missing = [i for i in range(len(episodes)) if i not in by_index]
+    if missing:
+        raise BridgeError(
+            f"the harness returned {len(by_index)} episode result(s) for "
+            f"{len(episodes)} planned episode(s); {len(missing)} have no result "
+            f"(first index {missing[0]}). A plan that asked for work it did not get back "
+            "must not be written as though it completed."
+        )
+    return [to_episode_row(episode, by_index[i]) for i, episode in enumerate(episodes)]
+
+
 def make_parquet_recorder(collect) -> type:
     """Build the recorder subclass, lazily.
 
@@ -336,7 +447,10 @@ __all__ = [
     "EpisodeRow",
     "StepBuffer",
     "to_episode_row",
+    "build_eval_config",
+    "check_index_contract",
     "check_recorder_surface",
+    "rows_from_benchmark_result",
     "make_parquet_orchestrator",
     "make_parquet_recorder",
     "require_harness",

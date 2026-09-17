@@ -162,6 +162,36 @@ def explain_identity_difference(before: Plan, after: Plan) -> list[str]:
     return lines or ["the identity documents differ in a way the walk did not reach"]
 
 
+def locate_plan(target: str | Path) -> Path:
+    """Resolve a plan file, a results directory, or a comparison directory.
+
+    The plan is copied into every results directory as provenance, so someone
+    holding results from three months ago has the plan whether or not they still
+    have the file they planned from. Requiring them to know the layout to use it
+    would waste the copy.
+
+    That is also the case where this is most needed: two ids differ, one plan is
+    to hand and the other is inside a results tree.
+    """
+    target = Path(target)
+    if target.is_file():
+        return target
+    if (target / "plan.json").is_file():
+        return target / "plan.json"
+    comparisons = sorted(target.glob("comparison_id=*/plan.json"))
+    if len(comparisons) == 1:
+        return comparisons[0]
+    if len(comparisons) > 1:
+        ids = [p.parent.name for p in comparisons]
+        raise CatalogError(
+            f"{target} holds {len(ids)} comparisons; name one of them instead: {ids}"
+        )
+    raise CatalogError(
+        f"no plan at {target}: expected a plan.json, a directory containing one, or a "
+        "results directory with a single comparison_id=... in it"
+    )
+
+
 def read_plan(path: str | Path) -> Plan:
     """Load a plan, refusing an unrecognised ``plan_schema`` before anything else.
 
@@ -169,6 +199,7 @@ def read_plan(path: str | Path) -> Plan:
     future version produces a heap of confusing field errors; refusing on the
     version produces one sentence that says what to do.
     """
+    path = locate_plan(path)
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise CatalogError("plan.json must contain an object", file=str(path))
@@ -195,5 +226,6 @@ __all__ = [
     "PlannedScene",
     "PlannedWorker",
     "explain_identity_difference",
+    "locate_plan",
     "read_plan",
 ]

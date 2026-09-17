@@ -300,12 +300,25 @@ class ResultWriter:
                 out[Path(path).stem] = json.loads(handle.read().decode("utf-8"))
         return out
 
-    def copy_provenance(self, plan_json: str, catalog_root: str) -> None:
-        """Results and the definitions that produced them travel together."""
+    def write_plan(self, plan_json: str) -> None:
+        """Always, independent of whether a catalog was supplied.
+
+        Separate from ``copy_catalog`` because they answer different questions and
+        one is much cheaper. The plan is what makes a results directory
+        interpretable at all -- it carries the identity document, so the directory
+        can say why it is a different experiment from another one. The catalog is
+        the fuller provenance.
+
+        They used to be one call, which meant a run without a catalog produced
+        results that could not explain themselves. Found by trying to read a plan
+        back out of a results tree.
+        """
         self.fs.makedirs(self.prefix, exist_ok=True)
         with self.fs.open(f"{self.prefix}/plan.json", "wb") as handle:
             handle.write(plan_json.encode("utf-8"))
 
+    def copy_catalog(self, catalog_root: str) -> None:
+        """Results and the definitions that produced them travel together."""
         import os
 
         for dirpath, _, filenames in os.walk(catalog_root):

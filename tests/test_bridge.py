@@ -22,6 +22,9 @@ import unittest
 
 from refractal.execute.vla_eval import (
     RECORDER_SURFACE,
+    build_eval_config,
+    check_index_contract,
+    rows_from_benchmark_result,
     StepBuffer,
     to_episode_row,
     BridgeError,
@@ -296,3 +299,134 @@ class TestStepBuffer(unittest.TestCase):
         buffer.collect("ep-1", "reward", 1.0)
         buffer.discard("ep-1")
         self.assertEqual(buffer.steps_for("ep-1"), [])
+
+
+class TestTheIndexContract(unittest.TestCase):
+    """The sharpest thing in the bridge, and the easiest to miss.
+
+    The harness runs `ep in range(episodes_per_task)` and hands `episode_idx = ep`
+    to the benchmark, which does `initial_states[episode_idx]`. Refractal's
+    scenario says which init state it means. Those are two different numbers that
+    coincide only when a catalog uses `range: [0, N-1]`.
+    """
+
+    def _episodes(self, hashes):
+        return [
+            PlannedEpisode(
+                episode_id=f"sha256:{h}", task_id="t", task_hash="sha256:t",
+                scenario_hash=h, seed=0, checkpoint_id="ckpt",
+            )
+            for h in hashes
+        ]
+
+    def _scenarios(self, indices):
+        return {f"s{i}": {"init_state_index": i} for i in indices}
+
+    def test_a_zero_based_contiguous_range_is_accepted(self):
+        check_index_contract(
+            self._episodes([f"s{i}" for i in range(5)]), self._scenarios(range(5))
+        )
+
+    def test_an_offset_range_is_refused(self):
+        """[5, 14] would run init states 0..9 while every row claims 5..14."""
+        with self.assertRaises(BridgeError) as ctx:
+            check_index_contract(
+                self._episodes([f"s{i}" for i in range(5, 10)]),
+                self._scenarios(range(5, 10)),
+            )
+        message = str(ctx.exception)
+        self.assertIn("never executed", message)
+        self.assertIn("range: [0, N-1]", message)
+
+    def test_a_gap_is_refused(self):
+        with self.assertRaises(BridgeError):
+            check_index_contract(
+                self._episodes(["s0", "s1", "s3"]), self._scenarios([0, 1, 3])
+            )
+
+    def test_an_unknown_scenario_is_refused_rather_than_skipped(self):
+        with self.assertRaises(BridgeError) as ctx:
+            check_index_contract(self._episodes(["s0", "s9"]), self._scenarios([0]))
+        self.assertIn("cannot be checked", str(ctx.exception))
+
+
+class TestResultMapping(unittest.TestCase):
+    def _episodes(self, n):
+        return [
+            PlannedEpisode(
+                episode_id=f"sha256:e{i}", task_id="t", task_hash="sha256:t",
+                scenario_hash=f"s{i}", seed=0, checkpoint_id="ckpt",
+            )
+            for i in range(n)
+        ]
+
+    def _result(self, outcomes):
+        return {
+            "tasks": [
+                {
+                    "episodes": [
+                        {"episode_id": i, "metrics": {"success": ok}, "steps": 100}
+                        for i, ok in enumerate(outcomes)
+                    ]
+                }
+            ]
+        }
+
+    def test_results_map_onto_planned_episodes_in_order(self):
+        rows = rows_from_benchmark_result(
+            self._result([True, False, True]), self._episodes(3)
+        )
+        self.assertEqual([r.success for r in rows], [True, False, True])
+        self.assertEqual([r.episode.episode_id for r in rows],
+                         ["sha256:e0", "sha256:e1", "sha256:e2"])
+
+    def test_a_short_result_is_refused_not_padded(self):
+        """Work asked for and not returned must not be written as completed."""
+        with self.assertRaises(BridgeError) as ctx:
+            rows_from_benchmark_result(self._result([True, False]), self._episodes(3))
+        self.assertIn("must not be written as though it completed", str(ctx.exception))
+
+
+class TestEvalConfig(unittest.TestCase):
+    class Scene:
+        scene_id = "libero-spatial-0"
+        external = types.SimpleNamespace(
+            provider="vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark",
+            ref={"suite": "libero_spatial", "task_id": 0},
+        )
+
+    def _episodes(self, n, task="t"):
+        return [
+            PlannedEpisode(
+                episode_id=f"sha256:e{i}", task_id=task, task_hash="sha256:t",
+                scenario_hash=f"s{i}", seed=0, checkpoint_id="ckpt",
+            )
+            for i in range(n)
+        ]
+
+    def test_it_speaks_the_harness_dialect(self):
+        config = build_eval_config(
+            scene=self.Scene(), episodes=self._episodes(10),
+            server_url="ws://pi0:8000", output_dir="/tmp/out", max_steps=220,
+        )
+        benchmark = config["benchmarks"][0]
+        self.assertEqual(benchmark["episodes_per_task"], 10)
+        self.assertEqual(benchmark["tasks"], ["t"])
+        self.assertEqual(benchmark["params"]["suite"], "libero_spatial")
+        self.assertEqual(config["server"]["url"], "ws://pi0:8000")
+
+    def test_recording_is_enabled_or_the_other_gate_stays_shut(self):
+        """`rec_cfg is None` closes the gate just as surely as `_store is None`."""
+        config = build_eval_config(
+            scene=self.Scene(), episodes=self._episodes(3),
+            server_url="ws://x:8000", output_dir="/tmp/out", max_steps=220,
+        )
+        self.assertTrue(config["benchmarks"][0]["recording"]["record_step"])
+
+    def test_a_non_external_scene_is_refused(self):
+        with self.assertRaises(BridgeError):
+            build_eval_config(
+                scene=types.SimpleNamespace(scene_id="local", external=None),
+                episodes=self._episodes(1), server_url="ws://x:8000",
+                output_dir="/tmp/out", max_steps=220,
+            )
