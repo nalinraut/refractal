@@ -515,6 +515,15 @@ def make_parquet_recorder(collect) -> type:
     step field, so nothing is written to disk from inside an episode. Buffering
     and writing are the caller's job, which keeps the atomic temp-then-rename
     guarantee in one place.
+
+    The returned class counts its own instantiations in ``constructed``. That is
+    the receipt for the injection working -- and it has to be separate from
+    whether anything was *collected*, because an episode that dies before its
+    first step records nothing while the injection was fine. The first real run
+    against two pi0 servers did exactly that: every episode timed out during
+    torch.compile warm-up, the step buffer was empty, and a check that read the
+    buffer reported the recorder had never been consulted. It had been consulted
+    twice.
     """
     vla_eval = require_harness()
     from vla_eval.recording import EpisodeRecorder  # type: ignore
@@ -522,7 +531,12 @@ def make_parquet_recorder(collect) -> type:
     class ParquetEpisodeRecorder(EpisodeRecorder):  # type: ignore[misc]
         """Matches the recorder surface; writes nothing itself."""
 
+        #: How many times the harness asked for one. Zero means `_build_recorder`
+        #: was never consulted, which is the failure the override exists to avoid.
+        constructed = 0
+
         def __init__(self, episode_id: str, sid: str, eid: str, eval_id: str) -> None:
+            type(self).constructed += 1
             # Deliberately does not call super().__init__: the base sets up a
             # SQLite store this recorder has no use for.
             self._episode_id = episode_id

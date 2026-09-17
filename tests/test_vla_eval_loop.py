@@ -41,11 +41,15 @@ PROVIDER = "vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark"
 class FakeHarness:
     """Satisfies the ``invoke`` contract and records what it was asked to do."""
 
-    def __init__(self, *, successes=None, short_by=0, silent=False):
+    def __init__(self, *, successes=None, short_by=0, silent=False, steps_per_episode=1):
         self.configs: list[dict] = []
         self.successes = successes
         self.short_by = short_by
+        #: `silent` means the recorder is never CONSTRUCTED -- the injection
+        #: failing. `steps_per_episode=0` means it is constructed and records
+        #: nothing -- an episode dying at step 0. Different failures.
         self.silent = silent
+        self.steps_per_episode = steps_per_episode
 
     def __call__(self, config, recorder_cls):
         self.configs.append(dict(config))
@@ -57,7 +61,8 @@ class FakeHarness:
                 recorder = recorder_cls(
                     episode_id=str(index), sid="sid", eid=f"e{index}", eval_id="ev"
                 )
-                recorder.record_step(reward=1.0)
+                for _ in range(self.steps_per_episode):
+                    recorder.record_step(reward=1.0)
         episodes = []
         for index in range(count - self.short_by):
             ok = True if self.successes is None else self.successes[index % len(self.successes)]
@@ -334,9 +339,24 @@ class TestWhatItRefuses(LoopCase):
         with self.assertRaises(BridgeError) as ctx:
             self.run_loop(plan, FakeHarness(silent=True), only=("pi0",))
         message = str(ctx.exception)
-        self.assertIn("never called", message)
+        self.assertIn("never constructed", message)
         self.assertIn("_store is None", message)
         self.assertEqual(self.rows(plan), [], "nothing may be written after that")
+
+    def test_episodes_that_die_before_their_first_step_are_not_a_silent_recorder(self):
+        """The distinction the first real run forced.
+
+        Every episode timed out during the server's torch.compile warm-up, so the
+        step buffer was empty -- and the check, which read the buffer, reported
+        that the recorder had never been consulted. It had been consulted twice.
+        "Nothing was recorded" and "the injection failed" are different, and only
+        the second is a bridge problem.
+        """
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        # Constructs recorders, records no steps: an episode that dies at step 0.
+        summary = self.run_loop(plan, FakeHarness(steps_per_episode=0), only=("pi0",))
+        self.assertEqual(summary.written, 2)
+        self.assertEqual(len(self.rows(plan)), 2)
 
     def test_a_short_result_writes_nothing_at_all(self):
         """Not even the episodes that did come back. A partially written group

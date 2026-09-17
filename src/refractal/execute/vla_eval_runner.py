@@ -227,13 +227,8 @@ def run_vla_eval(
                         max_steps=_max_steps(group),
                     )
                     # steps.parquet is deferred until after the first real run,
-                    # so nothing drains this buffer. It is wired up anyway because
-                    # an EMPTY buffer is the one symptom of the failure the
-                    # recorder override exists to avoid: if `_build_recorder` is
-                    # never consulted, the run completes, reports success and
-                    # records nothing -- indistinguishable from a correct run
-                    # until somebody reads the results. So the buffer is the
-                    # injection's receipt, checked below.
+                    # so nothing drains this buffer. The receipt for the injection
+                    # is `recorder_cls.constructed`, not the buffer -- see below.
                     buffer = StepBuffer()
                     recorder_cls = make_parquet_recorder(buffer.collect)
 
@@ -245,14 +240,13 @@ def run_vla_eval(
                     # asked for, before anything is written. A short run must not
                     # be recorded as though it completed.
                     outcomes = rows_from_benchmark_result(result, group)
-                    if not len(buffer):
+                    if not recorder_cls.constructed:
                         raise BridgeError(
-                            "the harness ran "
-                            f"{len(group)} episode(s) and the injected recorder was never "
-                            "called, so `_build_recorder` was not consulted. The run would "
-                            "have completed, reported success and recorded no steps. Check "
-                            "whether the recorder gate in orchestrator.py still reads "
-                            "`self._store is None` -- "
+                            f"the harness ran {len(group)} episode(s) and never constructed "
+                            "the injected recorder, so `_build_recorder` was not consulted. "
+                            "The run would have completed, reported success and recorded "
+                            "nothing. Check whether the recorder gate in orchestrator.py "
+                            "still reads `self._store is None` -- "
                             "scripts/verify_harness_claims.py checks exactly this."
                         )
                     buffer.clear()
