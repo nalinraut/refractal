@@ -201,3 +201,23 @@ measurement. A design effect needs repeats; that is what `seeds: 3` buys.
 p=0.50, because with two concordant-direction pairs there is nothing to test.
 The note says to read the 2x2 before acting, which is right, and it is the case
 the note was written for — arriving unprompted on the first real data.
+
+## The measurement run
+
+120 episodes: 2 scenes x 10 init states x 3 replicates x 2 arms, one worker per
+scene, servers warm, `quat_no_antipodal: true`.
+
+Per-group success (each group is one scene, one arm, one replicate, 10 init
+states) came out with a shape worth naming before the statistics:
+
+* **pi0 varies across replicates** — 80%, 60%, 50% on the same ten init states.
+  Same scene, same task, same starting configurations, three runs. That spread is
+  the flow-matching noise draw, and it is the thing a design effect is built to
+  account for.
+* **pi05 does not vary** — 10/10 in every group.
+
+Which sets up the one asymmetry that matters for reading the output: the paired
+difference has real variance contributed by one arm and none by the other. A
+design effect computed on that is measuring pi0's stochasticity, not a shared
+scenario effect, and an ICC for pi05 is estimated on a column with no variance at
+all.
