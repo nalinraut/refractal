@@ -192,7 +192,27 @@ def build(
                     "define the scene. Refractal hashes it — a probe that returns a digest "
                     "would be a second implementation of the canonicalisation."
                 )
-            digest = hash_obj(facts)
+            # The probe's facts AND the catalog's own assertions. The facts alone
+            # were the first version, and they are not enough: they describe what
+            # LIBERO contains, not how this catalog asks for it. `external.params`
+            # carries the benchmark's constructor arguments -- which cameras are
+            # sent, whether proprioception is sent, which of two quaternion
+            # conventions the state uses -- and those decide what the policy
+            # observes.
+            #
+            # Measured: `quat_no_antipodal` moves pi0 on one LIBERO task from 0/8
+            # to 2/4. Under the facts-only digest, a run with it and a run without
+            # it had the SAME scene_hash and the same plan_id, so they would have
+            # joined into one comparison and been averaged. That is the exact
+            # failure this project exists to make unrepresentable, sitting inside
+            # the identity scheme itself.
+            #
+            # Caught by checking plan_id after adding the flag rather than by the
+            # test, which asserted on `external_scene_ref_key` -- the helper --
+            # while the build hashed something else.
+            digest = hash_obj(
+                {"facts": facts, "catalog_ref": external_scene_ref_key(scene)}
+            )
             resolved_scene_hashes[scene.id] = digest
             report.lock.scenes.append(
                 SceneEntry(

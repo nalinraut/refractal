@@ -63,3 +63,84 @@ consulted twice.
 
 "Nothing was recorded" and "the injection failed" are different, and only the
 second is a bridge problem. The receipt now counts recorder *constructions*.
+
+## The loop works
+
+Smoke, 4 episodes, 2 harness invocations, warm servers:
+
+```
+  pi0   2d9030fe8b9c success=False steps= 220    9.3s infra=False reason=policy_failure
+  pi0   bee8e5a8e5bf success=False steps= 220    8.3s infra=False reason=policy_failure
+  pi05  2d9030fe8b9c success=True  steps=  74    3.6s infra=False reason=None
+  pi05  bee8e5a8e5bf success=True  steps=  76    3.2s infra=False reason=None
+```
+
+Everything the design asks for is in the rows: distinct `episode_id`s, Hive
+partitioning by checkpoint and scene, deterministic part names, `server_url`
+naming which server answered, `harness_version` and `harness_surface` both
+populated, and `is_infra_failure=False` with `failure_reason="policy_failure"` —
+so the denominator logic has a real case to work on rather than a simulated one.
+
+Both failures hit the 220-step cap, which is `MAX_STEP_MAPPING["libero_spatial"]`
+and matches the catalog's `max_steps`.
+
+## The thing worth being careful about
+
+pi0 at 0/2 against pi05 at 2/2 is the shape of a result, and on two episodes it
+is not one. It is also the exact ambiguity this project exists to resolve: "pi0
+is worse here" and "pi0 is misconfigured here" produce identical rows.
+
+What has been ruled out by reading rather than by hoping:
+
+* Both checkpoints declare the same `input_features`, `n_action_steps: 50`,
+  `chunk_size: 50` and `empty_cameras: 1`. The two arms are configured
+  identically — same `image_keys`, same `state_key`, same `chunk_size: 10`
+  override — so nothing here advantages one over the other.
+* Both get `send_wrist_image: true` and `send_state: true`, which the harness
+  defaults to false and which both checkpoints need.
+
+What is not ruled out: that `chunk_size: 10` against a checkpoint trained with
+50 costs pi0 more than pi05. The harness's own configs differ on exactly this
+point — `pi05_libero.yaml` sets 10, `pi0.yaml` sets null — which is a hint, not
+an answer.
+
+## It was the state convention, and it is in `scene_hash`
+
+pi0 on the same task and the same eight init states:
+
+| configuration | success |
+|---|---|
+| `chunk_size: 10` (the catalog's) | **0.0% (0/8)** |
+| `chunk_size: 50` (the policy's own default) | **0.0% (0/8)** |
+| `quat_no_antipodal: true` | **50.0% (2/4)** |
+
+`LIBEROBenchmark` converts the end-effector quaternion to axis-angle for the
+proprioceptive state, and ships two implementations of that conversion:
+
+```python
+self._quat_to_aa = _quat_to_axisangle_robosuite if quat_no_antipodal else quat_to_axisangle
+```
+
+`_quat_to_axisangle_robosuite` does no antipodal normalisation; the default does.
+A quaternion and its negation are the same rotation, so both are "correct" — and
+they hand the policy different numbers. The flag defaults to `False` and appears
+in none of the shipped configs.
+
+This is the 97.8%-to-42% failure from arXiv 2603.13966v2 SS III-B, which the
+catalog cites as the reason `server_args` are in `plan_id` — reproduced here at
+full strength, from the other side: not a server argument but a benchmark one.
+A working policy reads as a 0% policy, and the run completes, reports cleanly,
+and writes 8 rows that say `policy_failure`.
+
+The important part for the design: `quat_no_antipodal` is a benchmark
+constructor argument, so in this catalog it lives in `external.params`, which is
+hashed into `scene_hash`. A run with it and a run without it have different scene
+hashes and land in different comparison directories. The mismatch is not merely
+detectable — it is unrepresentable as a single comparison. That is the property
+the whole identity scheme is for, and this is the first time it has been load
+bearing against a real failure rather than a constructed one.
+
+What it does not settle: 50% on four episodes is not 96%, and this is not the
+reference environment. There may be more wrong. But the difference between 0/8
+and 2/4 is not a small-sample artefact, and "pi0 is worse than pi05" would have
+been the wrong conclusion to draw from the first run.

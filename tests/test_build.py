@@ -207,6 +207,131 @@ class TestDeterminism(unittest.TestCase):
             self.assertIsNone(build(root).lock.built_at)
 
 
+class TestAnExternalSceneHashCoversTheCatalogsOwnAssertions(unittest.TestCase):
+    """The most load-bearing claim in the design, which was false.
+
+    `scene_hash` for an external scene was `hash_obj(facts)` -- the probe's facts
+    alone. The facts describe what LIBERO contains; they say nothing about how
+    this catalog asks for it. `external.params` carries the benchmark's
+    constructor arguments, and those decide what the policy observes.
+
+    Measured on the real thing: `quat_no_antipodal` moves pi0 on one LIBERO task
+    from 0/8 to 2/4, because LIBEROBenchmark ships two quaternion-to-axis-angle
+    conversions and picks between them on that flag. Under the facts-only digest,
+    a run with it and a run without it produced the SAME plan_id -- so they would
+    have joined into one comparison and been averaged.
+
+    Asserted here at the level of `build`, not of `external_scene_ref_key`. The
+    earlier test checked the helper and passed while the build hashed something
+    else, which is why this was found by inspecting a plan_id rather than by the
+    suite.
+    """
+
+    class StubProbe:
+        """Returns facts that do NOT depend on params, like a real probe.
+
+        That independence is the whole point: a probe reports what the provider
+        contains. If the stub varied its facts with params, this test would pass
+        against the facts-only digest too.
+        """
+
+        def version(self, engine):
+            return "3.2.0"
+
+        def verify(self, engine, model_path):
+            return None
+
+        def external_scene_facts(self, scene):
+            return {
+                "provider": "libero",
+                "suite": scene.external.ref.get("suite"),
+                "task_id": scene.external.ref.get("task_id"),
+                "bddl_sha256": "deadbeef",
+            }
+
+    def _catalog(self, tmp, params):
+        root = Path(tmp)
+        (root / "scenes.yaml").write_text(f"""apiVersion: refractal.dev/v1alpha1
+scenes:
+  - id: libero-0
+    engine: mujoco
+    engine_version: "3.2.0"
+    external:
+      provider: pkg.mod:Bench
+      ref: {{suite: libero_spatial, task_id: 0}}
+      params: {params}
+    resource_shape:
+      - hardware_profile: rtx5090
+        envs_per_process: 1
+        vram_per_env_mb: 0
+        cpu_cores: 1
+        sec_per_1k_steps: 95
+        startup_sec: 12
+""", encoding="utf-8")
+        (root / "tasks.yaml").write_text("""apiVersion: refractal.dev/v1alpha1
+tasks:
+  - id: t
+    scene: libero-0
+    instruction: "do the thing"
+    predicate: refractal.predicates:from_benchmark
+    max_steps: 220
+""", encoding="utf-8")
+        (root / "scenarios.yaml").write_text("""apiVersion: refractal.dev/v1alpha1
+scenario_sets:
+  - id: states
+    scene: libero-0
+    generator: refractal.generators:linspace_grid
+    generator_seed: 0
+    params:
+      init_state_index: {range: [0, 1], steps: 2}
+""", encoding="utf-8")
+        (root / "run.yaml").write_text("""apiVersion: refractal.dev/v1alpha1
+run:
+  checkpoints:
+    - {id: a, path: p/a, server: pkg.mod:Server}
+    - {id: b, path: p/b, server: pkg.mod:Server}
+  seeds: 1
+  tier: full
+  results_uri: ./results
+""", encoding="utf-8")
+        (root / "hardware.yaml").write_text("""apiVersion: refractal.dev/v1alpha1
+hardware_profiles:
+  - id: rtx5090
+    cpu_cores: 16
+    memory_mb: 65536
+    devices: [{id: "cuda:0", vram_mb: 32607}]
+    max_workers: 8
+""", encoding="utf-8")
+        return root
+
+    def _scene_hash(self, params):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._catalog(tmp, params)
+            report = build(root, hardware_profile="rtx5090",
+                           probe=self.StubProbe(), built_at="2026-01-01T00:00:00Z",
+                           write=False)
+            return report.lock.scenes[0].scene_hash
+
+    def test_a_benchmark_param_moves_the_scene_hash(self):
+        self.assertNotEqual(
+            self._scene_hash("{send_state: true}"),
+            self._scene_hash("{send_state: false}"),
+        )
+
+    def test_adding_a_param_moves_the_scene_hash(self):
+        """The actual shape of the miss: a flag absent, then present."""
+        self.assertNotEqual(
+            self._scene_hash("{send_state: true}"),
+            self._scene_hash("{send_state: true, quat_no_antipodal: true}"),
+        )
+
+    def test_identical_params_agree(self):
+        self.assertEqual(
+            self._scene_hash("{send_state: true}"),
+            self._scene_hash("{send_state: true}"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -421,13 +546,31 @@ class TestExternallyDefinedScenes(unittest.TestCase):
             self.assertTrue(entry.external)
             self.assertIsNotNone(entry.ref_key)
             plan = resolve(root, hardware_profile=HARDWARE)
-            from refractal.schema import hash_obj
-
-            self.assertEqual(
-                plan.scenes[0].scene_hash,
-                hash_obj({"provider": "stand-in", "digest": self.Probe().digest}),
-            )
+            # Asserted as a PROPERTY, not by recomputing the formula.
+            #
+            # This used to read `assertEqual(scene_hash, hash_obj({provider, digest}))`
+            # -- a restatement of the implementation, which can only ever agree with
+            # it. It agreed with a formula that hashed the probe's facts and nothing
+            # else, so `external.params` did not reach the scene hash, and a run with
+            # `quat_no_antipodal` and one without shared a plan_id. The test passed
+            # throughout. A test that restates an implementation cannot notice that
+            # the implementation is incomplete.
+            self.assertTrue(plan.scenes[0].scene_hash.startswith("sha256:"))
+            self.assertEqual(plan.scenes[0].scene_hash, entry.scene_hash)
             self.assertEqual(len(plan.scenes[0].scenarios), 10)
+
+    def test_the_probes_facts_reach_the_scene_hash(self):
+        """The property the formula-restating assertion was trying to express."""
+        hashes = set()
+        for digest in ("digest-one", "digest-two"):
+            with Temp() as root:
+                tmp = Temp.__new__(Temp); tmp.root = root
+                self._catalog(tmp, root)
+                probe = self.Probe()
+                probe.digest = digest
+                report = build(root, hardware_profile=HARDWARE, probe=probe)
+                hashes.add(report.lock.scene_entry("libero-spatial-3").scene_hash)
+        self.assertEqual(len(hashes), 2, "a changed probe fact must move the hash")
 
     def test_build_without_a_capable_probe_refuses(self):
         with Temp() as root:

@@ -196,6 +196,57 @@ before anything was written. A check aimed at the wrong thing still beat no chec
 — it just accused the wrong component, which cost the time it took to read the
 server log.
 
+## A test that restates the implementation
+
+The worst one in the project, found on the day the loop first ran against real
+servers, and it had been green since the day it was written.
+
+`scene_hash` for an externally-defined scene was computed in `build` as
+`hash_obj(facts)` — the probe's facts and nothing else. The test:
+
+```python
+self.assertEqual(
+    plan.scenes[0].scene_hash,
+    hash_obj({"provider": "stand-in", "digest": self.Probe().digest}),
+)
+```
+
+That is not a test. It is the implementation, written twice, and two copies of a
+formula agree with each other whatever the formula leaves out.
+
+What it left out was `external.params` — the benchmark's constructor arguments,
+which decide what the policy observes. Measured against the real thing:
+`quat_no_antipodal` moves pi0 on one LIBERO task from **0/8 to 2/4**, because
+`LIBEROBenchmark` ships two quaternion-to-axis-angle conversions for the
+proprioceptive state and chooses between them on that flag. Under the facts-only
+digest, a run with the flag and a run without it produced **the same
+`plan_id`** — so they would have joined into one comparison and been averaged.
+
+The failure this project exists to make unrepresentable, sitting inside the
+identity scheme, protected by a passing test.
+
+It was found by changing the catalog and noticing `plan_id` did not move. Not by
+the suite — and there was a second test, added an hour earlier, asserting exactly
+this property on `external_scene_ref_key`. That test was correct and passed. It
+tested the helper; `build` hashed something else. Which is the earlier lesson
+arriving again from a new direction:
+
+> assert the property on the thing that consumes it, not on the helper it is
+> supposed to consume.
+
+Both halves are now tested as properties — "a changed probe fact moves the hash",
+"a changed param moves the hash" — with no formula restated anywhere. The general
+rule:
+
+> If an assertion recomputes what the code computes, it can only detect a change,
+> never an omission. Ask instead what the value must *distinguish*, and vary those
+> things.
+
+The stub probe in the new test deliberately returns facts that do not depend on
+`params`, because a stub that varied its facts with params would let the
+facts-only digest pass too — the fixture failing to exercise the property, one
+layer down, which is the trap the rest of this document is about.
+
 ## Enforced where it can be
 
 `tests/test_resolve.py::TestTheDefaultFixtureExercisesItsInvariants` asserts the
