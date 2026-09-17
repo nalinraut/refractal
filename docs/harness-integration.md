@@ -441,11 +441,14 @@ which makes filing them cheap — and every one that lands moves work off
 Refractal's side of the boundary permanently. Standing candidates, in the order
 worth filing:
 
-1. **`_build_recorder` has no config hook** (§1), despite `NullEpisodeRecorder`
-   proving the seam exists. File this one first: it would remove the subclass
-   from Refractal entirely, and it is a smaller ask than the others because it
-   changes no semantics, only where the recorder class comes from. Flag that the
-   `self._store` gate has to move with it or the hook is inert.
+1. **`_store` is unreachable, so `_build_recorder` cannot be used** — drafted and
+   ready to file at [upstream-issues/recorder-injection.md](upstream-issues/recorder-injection.md).
+   Supersedes the earlier "no config hook" framing, which named a design gap;
+   this names the mechanism (`no_save` controls both gate conditions in opposite
+   directions, and `_store` is assigned inside `run()` so there is nothing to
+   override), and carries the property-setter workaround as evidence the seam is
+   wanted. An issue with a mechanism and a working-but-ugly workaround can be
+   answered with five lines; one with a design opinion gets a discussion.
 2. **`db_path` plumbed to every model server with no caller** (§1).
 3. **`_ALL_RECORD_FIELDS` looseness** (§6) — largest ask, since it changes what
    the field means.

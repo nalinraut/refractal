@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 
 #: Modules Refractal subclasses, calls, or exchanges messages with. Everything
 #: else in the harness -- 20 benchmark packages, 18 model servers, the
@@ -52,6 +52,59 @@ SURFACE = (
     "runners",           # the EPISODE_START payload
     "protocol",          # the wire format
 )
+
+#: What Refractal assumes about each surface file, so a digest change can say
+#: what is at risk rather than only that something moved.
+#:
+#: A hash tells a reader something changed. It cannot tell them that the bridge
+#: swallows an assignment the base class makes deliberately, or that
+#: `worker_selection` exists because a loop is inline. Neither is reconstructable
+#: from a digest, and both are the first thing you would want to know.
+SURFACE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "orchestrator.py": (
+        "`_build_recorder` is an overridable method (there is no config hook)",
+        "`_store` is ASSIGNED INSIDE `run()`, and ParquetOrchestrator swallows that "
+        "assignment with a property setter. If a future version constructs the store "
+        "and hands it to a helper instead of assigning, the setter never fires: the "
+        "property still returns the null store and the bridge appears to work, but any "
+        "code reading `self._store` expecting what it just built gets the wrong type. "
+        "THE MOST INTRUSIVE ASSUMPTION IN THE BRIDGE -- check this one first.",
+        "`no_save` couples both recorder gates, so the property is the only way to open "
+        "them together",
+        "the work-item loop is inline, not a method -- `worker_selection` expresses a "
+        "worker's assignment in harness terms rather than overriding it",
+        "spec cross-validation is inline in `_run_benchmark_inner`, which is why the "
+        "bridge subclasses rather than driving episodes itself",
+        "`episode_idx = ep`, the harness's own counter -- `check_index_contract` exists "
+        "because that counter selects init states",
+    ),
+    "recording.py": (
+        "`EpisodeRecorder` is a plain class, not a frozen ABC, so it can be subclassed",
+        "`NullEpisodeRecorder` is what a shut gate returns",
+        "the recorder surface is exactly RECORDER_SURFACE, including `is_active`",
+        "the harness calls `upsert_eval_metadata` and `close` on the store, which is why "
+        "NullRecordingStore is a null object rather than a sentinel",
+    ),
+    "registry.py": ("`resolve_import_string` resolves 'module:Name' at runtime",),
+    "types.py": ("`Task` is a plain dict, so a scenario dict drops straight in",),
+    "runners": (
+        "`run_episode(benchmark, task, conn, max_steps=, recorder=)` is the unit",
+        "EPISODE_START carries db_path, which our recorder returns empty",
+    ),
+    "protocol": ("the WebSocket+msgpack wire format is the harness's, not ours",),
+}
+
+
+def dependencies_for(changed_files: Iterable[str]) -> list[str]:
+    """What Refractal assumes about the files that changed."""
+    out: list[str] = []
+    for path in sorted(set(changed_files)):
+        top = path.split("/", 1)[0]
+        key = path if path in SURFACE_DEPENDENCIES else top
+        for assumption in SURFACE_DEPENDENCIES.get(key, ()):
+            out.append(f"{key}: {assumption}")
+    return out
+
 
 #: What the local backend records. Nothing talks to the harness there, and
 #: saying so is more honest than recording a version that never ran.
@@ -141,7 +194,9 @@ def describe_installed_harness() -> tuple[str, str, dict[str, str]]:
 __all__ = [
     "LOCAL",
     "SURFACE",
+    "SURFACE_DEPENDENCIES",
     "compare_manifests",
+    "dependencies_for",
     "describe_installed_harness",
     "surface_digest",
     "surface_manifest",

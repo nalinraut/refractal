@@ -787,6 +787,33 @@ class TestTheBlockMessageNamesTheChangedFiles(unittest.TestCase):
         self.assertIn("runners/live_runner.py", verdict.blocking[0])
         self.assertIn("before waiving", verdict.blocking[0])
 
+    def test_it_names_what_refractal_assumes_about_the_changed_file(self):
+        """A file name is not enough; the assumption at risk is the useful part.
+
+        "The bridge swallows an assignment the base class makes deliberately" is
+        not reconstructable from a hash, and it is the first thing a reader needs.
+        """
+        verdict = evaluate(
+            build_units(self._rows(["s1", "s2"]), checkpoints=[A, B]), [A, B],
+            resamples=100, seed=1,
+            surface_manifests={
+                "s1": {"orchestrator.py": "a"},
+                "s2": {"orchestrator.py": "b"},
+            },
+        )
+        message = verdict.blocking[0]
+        self.assertIn("What Refractal assumes about them", message)
+        self.assertIn("ASSIGNED INSIDE `run()`", message)
+        self.assertIn("MOST INTRUSIVE ASSUMPTION", message)
+
+    def test_a_file_with_no_recorded_assumptions_still_names_itself(self):
+        verdict = evaluate(
+            build_units(self._rows(["s1", "s2"]), checkpoints=[A, B]), [A, B],
+            resamples=100, seed=1,
+            surface_manifests={"s1": {"unknown.py": "a"}, "s2": {"unknown.py": "b"}},
+        )
+        self.assertIn("unknown.py", verdict.blocking[0])
+
     def test_without_manifests_it_says_so_rather_than_staying_silent(self):
         verdict = evaluate(
             build_units(self._rows(["s1", "s2"]), checkpoints=[A, B]), [A, B],

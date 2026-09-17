@@ -218,7 +218,7 @@ The cheap version of all three: **re-verify on every pin move, and record the
 date**. A claim with a date attached degrades visibly; one without looks equally
 true forever.
 
-## A stand-in tests your logic, not their code
+## Naming a limitation is not respecting it
 
 `tests/test_bridge.py` installs a module shaped like the parts of the harness the
 bridge touches, because the harness is not installed on most machines that run the
@@ -254,16 +254,37 @@ fell out of reading the real source:
   stand-in never called either, so a sentinel that would have raised on the first
   benchmark passed every test.
 
-What this costs and what to do about it: a stand-in is still the right tool — the
-alternative is no test at all on a laptop — but **it must be built by reading the
-dependency, not by imagining its shape**, and the reading is the part that was
-skipped. The stand-in now mirrors where the assignment happens, so an override
-that only works against an imagined shape fails.
+### The part worth keeping
 
-The general form: a stand-in inherits every assumption its author had. It cannot
-disagree with you, which is precisely what makes it cheap and precisely what makes
-it blind. The only thing that catches a misplaced gate is reading the code the
-stand-in stands in for.
+The mechanics above are specific to one harness. This is not:
+
+**The limitation was written into the test class name, and writing it down
+produced the feeling of having handled it.** The class is called
+`TestOverrideLogicAgainstAReproducedGate`, its docstring says green means the
+override is self-consistent *against the gate as we understand it* and not that
+the real gate is unchanged, and it names the exact failure mode — a gate that
+moved rather than changed. Then the reading that sentence was warning about did
+not happen.
+
+That is worse than not having named it. An unnamed assumption is an oversight
+somebody might trip over. A named one carries a receipt, and the receipt is what
+stops anybody looking again — including its author, who now remembers *having
+thought about it* rather than what was concluded.
+
+So the test for a named limitation is not "is it documented" but **what would
+have to happen for this to be checked, and has that happened?** For a stand-in:
+somebody has to read the dependency. Writing "this does not verify the real gate"
+is not that reading, and is easily mistaken for it.
+
+Secondary, and still general: a stand-in inherits every assumption its author
+had. It cannot disagree with you, which is exactly what makes it cheap and
+exactly what makes it blind.
+
+Made mechanical where it can be: `SURFACE_DEPENDENCIES` in
+`execute/harness.py` records what Refractal assumes about each surface file, and
+`compare` prints those assumptions when a surface change blocks a comparison —
+with the `_store` property flagged as the most intrusive one, to be checked
+first. A hash says something moved; this says what is at risk.
 
 ## A rule is a compressed reason
 

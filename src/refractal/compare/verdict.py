@@ -416,9 +416,22 @@ def _name_changed_files(
     parts = [f"{kind}: {', '.join(files)}" for kind, files in diff.items() if files]
     if not parts:
         return " The recorded manifests are identical, which should not happen."
+
+    from ..execute.harness import dependencies_for
+
+    moved = [f for files in diff.values() for f in files]
+    assumptions = dependencies_for(moved)
+    detail = " Files that differ — " + "; ".join(parts) + "."
+    if assumptions:
+        # Naming the file is not enough. "The bridge swallows an assignment the
+        # base class makes deliberately" is not reconstructable from a hash, and
+        # it is the first thing a reader needs.
+        detail += " What Refractal assumes about them:\n      - " + "\n      - ".join(
+            assumptions
+        )
     return (
-        " Files that differ — " + "; ".join(parts) + ". Check whether any of them is on a "
-        "path these results depend on before waiving."
+        detail
+        + "\n    Check whether any of those assumptions still holds before waiving."
     )
 
 
