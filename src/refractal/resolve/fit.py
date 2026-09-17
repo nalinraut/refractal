@@ -53,6 +53,19 @@ class SceneDemand:
     #: is an upper bound: it assumes every episode runs to the step limit, which
     #: only happens when nothing ever succeeds early.
     max_steps: int
+    #: How many times a worker pays ``startup_sec``.
+    #:
+    #: Not once. A backend that can only address one checkpoint and one seed per
+    #: invocation -- which the vla-eval bridge is, because the harness has no seed
+    #: concept and one server per run -- pays scene construction once per
+    #: (checkpoint x seed). Measured on the LIBERO catalog: 12 workers x 2
+    #: checkpoints x 12s = 288s of env construction against a plan that estimated
+    #: 95s for the whole run.
+    #:
+    #: A cost estimate whose only job is to be right before you spend, being 3x
+    #: low on its dominant term, is the estimate failing at the one thing it is
+    #: for.
+    invocations_per_worker: int = 1
 
     def batch_seconds(self) -> float:
         """Wall-clock for one full batch of ``envs_per_process`` episodes."""
@@ -67,7 +80,12 @@ class SceneDemand:
             return math.inf
         per_worker_episodes = math.ceil(self.episodes / workers)
         batches = math.ceil(per_worker_episodes / self.shape.envs_per_process)
-        return self.shape.startup_sec + batches * self.batch_seconds()
+        startup = self.shape.startup_sec * self.invocations_per_worker
+        return startup + batches * self.batch_seconds()
+
+    def startup_cost(self, workers: int) -> float:
+        """Total scene-construction time across all of this scene's workers."""
+        return workers * self.shape.startup_sec * self.invocations_per_worker
 
 
 @dataclass
@@ -193,6 +211,20 @@ def allocate_workers(
         for demand in candidates:
             device = affordable(demand)
             if device is None:
+                continue
+            # Refuse a worker that costs more startup than the wall clock it
+            # saves. Without this the allocator keeps adding workers while
+            # makespan still falls by anything at all, and on a scene with
+            # expensive construction it buys seconds with minutes.
+            current = allocation.workers[demand.scene_id]
+            gain = demand.makespan(current) - demand.makespan(current + 1)
+            added_startup = demand.shape.startup_sec * demand.invocations_per_worker
+            if current > 0 and gain < added_startup:
+                allocation.warnings.append(
+                    f"scene {demand.scene_id!r}: stopped at {current} worker(s) -- one more "
+                    f"would save {gain:.0f}s of wall clock and cost {added_startup:.0f}s of "
+                    "scene construction"
+                )
                 continue
             allocation.workers[demand.scene_id] += 1
             cpu_free -= demand.shape.cpu_cores

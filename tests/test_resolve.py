@@ -547,3 +547,74 @@ class TestExplainingWhyTwoPlansDiffer(unittest.TestCase):
             with self.assertRaises(CatalogError) as ctx:
                 read_plan(results)
             self.assertIn("holds 2 comparisons", str(ctx.exception))
+
+
+class TestStartupIsPaidPerInvocation(unittest.TestCase):
+    """The planner's estimate was 3x low on its dominant term.
+
+    Measured on the LIBERO catalog: 12 workers x 2 checkpoints x 12s of scene
+    construction = 288s, against a plan that estimated 95s for the whole run. A
+    cost estimate whose only job is to be right before you spend, wrong by 3x on
+    the biggest number, is the estimate failing at the one thing it is for.
+
+    The cause: makespan counted startup_sec once per worker. A backend that can
+    address one checkpoint and one seed per invocation -- which the vla-eval
+    bridge is -- pays it once per (checkpoint x seed).
+    """
+
+    def _demand(self, invocations, workers, startup=12, episodes=20):
+        from refractal.resolve.fit import SceneDemand
+        from refractal.schema.models import ResourceShape
+
+        shape = ResourceShape(
+            hardware_profile="h", envs_per_process=1, vram_per_env_mb=0,
+            cpu_cores=1, sec_per_1k_steps=100, startup_sec=startup,
+        )
+        demand = SceneDemand(
+            scene_id="s", episodes=episodes, shape=shape, max_steps=220,
+            invocations_per_worker=invocations,
+        )
+        return demand, demand.makespan(workers)
+
+    def test_one_invocation_pays_startup_once(self):
+        _, makespan = self._demand(1, 4)
+        self.assertAlmostEqual(makespan, 12 + 5 * 22.0, places=3)
+
+    def test_two_invocations_pay_it_twice(self):
+        _, makespan = self._demand(2, 4)
+        self.assertAlmostEqual(makespan, 24 + 5 * 22.0, places=3)
+
+    def test_the_total_construction_cost_is_reported(self):
+        demand, _ = self._demand(2, 4)
+        self.assertEqual(demand.startup_cost(4), 4 * 2 * 12)
+
+    def test_the_planner_derives_it_from_checkpoints_and_seeds(self):
+        """Not a backend-specific hack: it is what the plan already knows."""
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            tmp.edit("run.yaml", lambda d: d["run"].__setitem__("seeds", 3))
+            plan = resolve(root, hardware_profile=HARDWARE)
+            # 2 checkpoints x 3 seeds; the estimate must exceed bare episode work
+            self.assertGreater(plan.estimated_seconds, 0)
+
+    def test_it_refuses_a_worker_that_costs_more_than_it_saves(self):
+        """Buying seconds with minutes is the failure this prevents."""
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            # Expensive construction, cheap episodes: more workers stop helping.
+            tmp.edit(
+                "scenes.yaml",
+                lambda d: [
+                    s["resource_shape"][0].update({"startup_sec": 120, "sec_per_1k_steps": 1})
+                    for s in d["scenes"]
+                ],
+            )
+            plan = resolve(root, hardware_profile=HARDWARE)
+            workers = sum(len(s.workers) for s in plan.scenes)
+            self.assertLess(workers, 12, "should not have spent the whole worker budget")
+            self.assertTrue(
+                any("scene construction" in w for w in plan.warnings),
+                "the decision must be reported, not silent",
+            )

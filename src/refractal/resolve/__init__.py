@@ -49,6 +49,7 @@ def resolve(
     hardware_profile: str,
     pack_below_startup_sec: int = 30,
     created_at: str | None = None,
+    invocations_per_worker: int | None = None,
 ) -> Plan:
     """Compile a catalog into a plan.
 
@@ -160,6 +161,16 @@ def resolve(
                 episodes=len(episodes),
                 shape=shape,
                 max_steps=max(t.max_steps for t in tasks_on_scene),
+                # A backend that addresses one checkpoint and one seed per
+                # invocation pays startup once per (checkpoint x seed). That is
+                # what the vla-eval bridge does, and it is the default because
+                # assuming one invocation understates the dominant cost on any
+                # scene with expensive construction.
+                invocations_per_worker=(
+                    invocations_per_worker
+                    if invocations_per_worker is not None
+                    else len(catalog.run.checkpoints) * catalog.run.seeds
+                ),
             )
         )
 
