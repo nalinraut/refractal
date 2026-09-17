@@ -214,6 +214,23 @@ self.assertEqual(
 That is not a test. It is the implementation, written twice, and two copies of a
 formula agree with each other whatever the formula leaves out.
 
+**This is the canonical form, and it is canonical because it survives review.**
+The other entries in this document describe tests that were weak — a fixture that
+overlapped nothing, a discriminator truncated away, a `pop` in the wrong place.
+Each of those is findable by reading carefully enough, and each was found that
+way eventually.
+
+`assertEqual(value, recompute_the_formula())` is not weak. It is *structurally
+incapable* of the thing it appears to do, and no amount of care in reading
+catches that — because the reading it invites is exactly the one that confirms
+it. A reviewer checks the expected value against the implementation, sees that
+they agree, and concludes the code is correct. They are right that the two agree.
+Agreement was never in question. What is in question is whether the formula
+covers what it needs to cover, and a copy of the formula cannot speak to that.
+
+So it is not a mistake to be more careful about. It is a shape to refuse
+outright.
+
 What it left out was `external.params` — the benchmark's constructor arguments,
 which decide what the policy observes. Measured against the real thing:
 `quat_no_antipodal` moves pi0 on one LIBERO task from **0/8 to 2/4**, because
