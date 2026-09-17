@@ -168,3 +168,36 @@ What it does not settle: 50% on four episodes is not 96%, and this is not the
 reference environment. There may be more wrong. But the difference between 0/8
 and 2/4 is not a small-sample artefact, and "pi0 is worse than pi05" would have
 been the wrong conclusion to draw from the first run.
+
+## `compare` on real rows
+
+Exercised on the smoke results before the measurement run, because a path that
+has never run on real data is not a path:
+
+```
+  libero-spatial-0 / libero-spatial-0-task   (2 scenarios)
+    rates:  pi0: 0.0%   pi05: 100.0%    (baseline pi0)
+                        pi05 fails   pi05 succeeds
+      pi0 fails                0             2
+      pi0 succeeds             0             0
+    design effect on the paired difference: 1.00 (observed Var 0.00000 vs
+      binomial 0.00000, 0 scenarios, 0.0 seeds each)
+    pi0 -> pi05: +1.000 [+1.000, +1.000]  p=0.0004 holm=0.0004
+      McNemar p=0.5000  -> improved
+      note: 2 scenarios is below 200, ...
+      note: the rate moved but few scenarios flipped their majority
+        (McNemar p=0.500). A uniform shift, not a set of scenarios breaking --
+        read the 2x2 before acting.
+```
+
+Two things worth noting in that output.
+
+**"0 scenarios, 0.0 seeds each"** is correct and is the argument for the
+measurement run. With one replicate per scenario there is no within-cell
+variance to estimate, so the design effect is 1.00 by construction rather than by
+measurement. A design effect needs repeats; that is what `seeds: 3` buys.
+
+**The McNemar note fires.** The rate moved by a full 100 points and McNemar says
+p=0.50, because with two concordant-direction pairs there is nothing to test.
+The note says to read the 2x2 before acting, which is right, and it is the case
+the note was written for — arriving unprompted on the first real data.
