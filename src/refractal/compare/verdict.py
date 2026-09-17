@@ -49,7 +49,7 @@ make the gate's calibration depend on a second test's power.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from .pairing import Dichotomy, Eligibility, Unit
 from .variance import VarianceReport, measure_variance
@@ -169,6 +169,7 @@ def evaluate(
     seed: int = 0,
     correct: bool = True,
     allow_harness_mismatch: bool = False,
+    surface_manifests: Mapping[str, Mapping[str, str]] | None = None,
 ) -> Verdict:
     """Compare k checkpoints against a baseline, correcting across the family."""
     checkpoints = list(checkpoints or eligibility.checkpoints)
@@ -216,6 +217,12 @@ def evaluate(
         # was written against were a docs edit, a pin bump and a data refresh.
         # Hence a gate with an explicit override rather than an identity.
         surfaces = ", ".join(sorted(eligibility.harness_surfaces))
+        # Name the files when we can. A digest says "something you depend on
+        # moved" and leaves the reader to find out what -- which is a five-minute
+        # `git diff` only if they still have both versions, and whoever reads a
+        # comparison months later does not. The gate stays the digest; this makes
+        # its verdict actionable rather than merely correct.
+        detail = _name_changed_files(eligibility.harness_surfaces, surface_manifests)
         versions = ", ".join(sorted(eligibility.harness_versions)) or "unknown"
         if allow_harness_mismatch:
             verdict.overrides.append(
@@ -228,7 +235,7 @@ def evaluate(
                 "the harness modules Refractal depends on, so it did not move for a docs "
                 "edit or a data refresh -- something behavioural changed. Re-run under one "
                 "surface, or pass --allow-harness-mismatch if you know the difference does "
-                "not affect these results."
+                f"not affect these results.{detail}"
             )
 
     if verdict.blocking:
@@ -342,6 +349,32 @@ def evaluate(
         )
 
     return verdict
+
+
+def _name_changed_files(
+    surfaces: set[str], manifests: Mapping[str, Mapping[str, str]] | None
+) -> str:
+    """Turn two surface digests into a file list, when the manifests are on disk."""
+    if not manifests or len(surfaces) != 2:
+        return (
+            " No surface manifests were recorded for this comparison, so the changed "
+            "files cannot be named — the run that produced these results did not write one."
+        )
+    first, second = sorted(surfaces)
+    before, after = manifests.get(first), manifests.get(second)
+    if before is None or after is None:
+        return " A surface manifest is missing, so the changed files cannot be named."
+
+    from ..execute.harness import compare_manifests
+
+    diff = compare_manifests(before, after)
+    parts = [f"{kind}: {', '.join(files)}" for kind, files in diff.items() if files]
+    if not parts:
+        return " The recorded manifests are identical, which should not happen."
+    return (
+        " Files that differ — " + "; ".join(parts) + ". Check whether any of them is on a "
+        "path these results depend on before waiving."
+    )
 
 
 def _pattern_label(pattern: tuple[bool, ...], checkpoints: Sequence[str]) -> str:

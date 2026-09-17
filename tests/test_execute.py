@@ -357,3 +357,50 @@ class TestAWorkerThatWritesNothingIsCaught(ExecuteCase):
             self.assertIn("never planned", str(ctx.exception))
         finally:
             local_mod.ResultWriter = original
+
+
+class TestSurfaceManifests(ExecuteCase):
+    """The digest gates; the manifest makes its verdict actionable.
+
+    Moving the pin from 35f1200 to v0.6.0 moved the surface digest for a
+    five-line change in `runners/live_runner.py`, which Refractal does not use.
+    The right response was not to narrow the digest -- `runners/` is on the
+    surface because async execution would make that file load-bearing at once --
+    but to make the block name the file.
+    """
+
+    def test_a_manifest_round_trips(self):
+        from refractal.execute import ResultWriter
+
+        writer = ResultWriter(self.results, self.plan.plan_id)
+        manifest = {"orchestrator.py": "aaaa", "runners/sync_runner.py": "bbbb"}
+        writer.record_harness_manifest("surface-1", manifest)
+        self.assertEqual(writer.read_harness_manifests(), {"surface-1": manifest})
+
+    def test_recording_the_same_surface_twice_is_idempotent(self):
+        """Written once per surface, not once per session."""
+        from refractal.execute import ResultWriter
+
+        writer = ResultWriter(self.results, self.plan.plan_id)
+        writer.record_harness_manifest("surface-1", {"a.py": "1"})
+        writer.record_harness_manifest("surface-1", {"a.py": "1"})
+        self.assertEqual(len(writer.read_harness_manifests()), 1)
+
+    def test_an_empty_manifest_writes_nothing(self):
+        """The local backend has no harness, so there is nothing honest to record."""
+        from refractal.execute import ResultWriter
+
+        writer = ResultWriter(self.results, self.plan.plan_id)
+        writer.record_harness_manifest("none/local-backend", {})
+        self.assertEqual(writer.read_harness_manifests(), {})
+
+    def test_the_diff_names_the_changed_file(self):
+        from refractal.execute.harness import compare_manifests
+
+        self.assertEqual(
+            compare_manifests(
+                {"orchestrator.py": "a", "runners/live_runner.py": "x"},
+                {"orchestrator.py": "a", "runners/live_runner.py": "y"},
+            ),
+            {"changed": ["runners/live_runner.py"], "added": [], "removed": []},
+        )

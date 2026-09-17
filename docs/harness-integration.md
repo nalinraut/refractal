@@ -4,7 +4,62 @@ What Refractal relies on in `allenai/vla-evaluation-harness`, verified against
 the source rather than the README. Anything here that stops being true is a
 broken build, so re-check it when moving the pin.
 
-## The pin — not as simple as "take HEAD"
+## The pin — resolved by v0.6.0
+
+**Superseded, 2026-09-17.** `vla-eval 0.6.0` is on PyPI and is the first release
+carrying both `dc2c4ba` and `0865d42`, so `vla-eval>=0.6.0` is an ordinary
+version specifier. Refractal stays publishable and no Dockerfile needs to pin a
+commit. The analysis below is kept because the reasoning still applies the next
+time a needed fix is unreleased.
+
+### Moving to v0.6.0 moved the surface digest, correctly
+
+`21d9df40b066005a` → `8ab641f163c18d05`, and the changed file is:
+
+```
+src/vla_eval/runners/live_runner.py | 6 +-----
+```
+
+Refractal uses `SyncEpisodeRunner`, so this change does not affect it — but that
+is a conclusion reached in five minutes, not a reason to narrow the digest.
+`runners/` is on the surface because switching to async execution would make
+`live_runner.py` load-bearing immediately; the digest covers what could be
+depended on, not what happens to be used this week. A digest narrowed to today's
+usage goes quiet on the one change that matters.
+
+So the gate fired correctly and its *verdict* was over-strong. The fix is that
+the block message now names the changed files rather than two hashes — see
+"surface manifests" below. The hooks in §1 were re-verified at v0.6.0 and are
+unchanged, including the `self._store is None` gate the bridge depends on.
+
+### Server addresses are not host-pinned
+
+Checked in the same pass, because it decides whether a run can be multi-host.
+`EvalConfig.url` is a *default*, not a constant:
+
+```python
+url: str = "ws://localhost:8000"     # config.py:53
+url=data.get("url", cls.url)         # overridable from YAML
+```
+
+The other `localhost` occurrences are a docstring example and `--network host`
+help text. Addressing a model server by hostname works today with no upstream
+change, so `refractal-design.md`'s claim that the address is hardcoded is stale.
+
+### Surface manifests
+
+The digest is what belongs in a column; it is not enough to act on. Every run
+also records a per-file manifest at
+`comparison_id=…/harness/<surface>.json`, once per surface rather than per row,
+and `compare` diffs the two when it blocks:
+
+> Files that differ — changed: runners/live_runner.py. Check whether any of them
+> is on a path these results depend on before waiving.
+
+A `git diff` answers the same question only while you still have both versions
+to hand, which whoever reads a comparison months later does not.
+
+## Appendix: the pre-0.6.0 pin analysis
 
 `v0.5.0` **is** `4aeb436`; the tag points at it exactly. So PyPI's
 `vla-eval==0.5.0` contains none of the five later commits, and both fixes that

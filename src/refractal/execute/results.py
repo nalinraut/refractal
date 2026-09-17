@@ -27,8 +27,10 @@ Polars read the directory as one table regardless.
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable
 
 from ..schema.errors import RefractalError
@@ -266,6 +268,37 @@ class ResultWriter:
                 table = pq.read_table(handle, columns=["episode_id"])
             done.update(table.column("episode_id").to_pylist())
         return done
+
+    def record_harness_manifest(self, surface: str, manifest: dict[str, str]) -> None:
+        """Store the per-file surface digests for this run, once.
+
+        Keyed by the surface digest, so two sessions on the same harness write
+        one file and a comparison spanning two surfaces has both to diff. Written
+        once per session rather than per row because it is provenance, not data.
+        """
+        if not manifest:
+            return
+        directory = f"{self.prefix}/harness"
+        self.fs.makedirs(directory, exist_ok=True)
+        target = f"{directory}/{surface}.json"
+        if self.fs.exists(target):
+            return
+        staging = f"{directory}/.tmp-{uuid.uuid4().hex}.json"
+        with self.fs.open(staging, "wb") as handle:
+            handle.write(json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"))
+        self.fs.mv(staging, target)
+
+    def read_harness_manifests(self) -> dict[str, dict[str, str]]:
+        """Every recorded surface manifest, by digest. Empty when none were written."""
+        try:
+            paths = self.fs.glob(f"{self.prefix}/harness/*.json")
+        except FileNotFoundError:
+            return {}
+        out: dict[str, dict[str, str]] = {}
+        for path in paths:
+            with self.fs.open(path, "rb") as handle:
+                out[Path(path).stem] = json.loads(handle.read().decode("utf-8"))
+        return out
 
     def copy_provenance(self, plan_json: str, catalog_root: str) -> None:
         """Results and the definitions that produced them travel together."""

@@ -755,3 +755,33 @@ class TestDuplicateRowsBlock(unittest.TestCase):
         # wrote, compare verifies what it reads.
         eligibility = build_units(self._rows(duplicate=True), checkpoints=[A, B], min_seeds=2)
         self.assertTrue(eligibility.duplicate_rows)
+
+
+class TestTheBlockMessageNamesTheChangedFiles(unittest.TestCase):
+    """A digest says something moved and leaves the reader to find out what."""
+
+    def _rows(self, surfaces):
+        rows = rows_for(success_rate=0.6, salt="sm")
+        for i, row in enumerate(rows):
+            row["harness_surface"] = surfaces[i % len(surfaces)]
+        return rows
+
+    def test_with_manifests_it_names_the_file(self):
+        verdict = evaluate(
+            build_units(self._rows(["s1", "s2"]), checkpoints=[A, B]), [A, B],
+            resamples=100, seed=1,
+            surface_manifests={
+                "s1": {"orchestrator.py": "a", "runners/live_runner.py": "x"},
+                "s2": {"orchestrator.py": "a", "runners/live_runner.py": "y"},
+            },
+        )
+        self.assertEqual(verdict.exit_code, 2)
+        self.assertIn("runners/live_runner.py", verdict.blocking[0])
+        self.assertIn("before waiving", verdict.blocking[0])
+
+    def test_without_manifests_it_says_so_rather_than_staying_silent(self):
+        verdict = evaluate(
+            build_units(self._rows(["s1", "s2"]), checkpoints=[A, B]), [A, B],
+            resamples=100, seed=1,
+        )
+        self.assertIn("did not write one", verdict.blocking[0])

@@ -108,7 +108,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_compare(args: argparse.Namespace) -> int:
     """Exit code is the gate. 0 clean, 1 regression, 2 unanswerable."""
     from .compare import build_units, evaluate, render
-    from .execute import read_episodes
+    from .execute import ResultWriter, read_episodes
 
     rows = read_episodes(args.results, args.plan_id).to_pylist()
     if not rows:
@@ -129,6 +129,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         resamples=args.resamples,
         correct=not args.no_correction,
         allow_harness_mismatch=args.allow_harness_mismatch,
+        surface_manifests=ResultWriter(args.results, args.plan_id).read_harness_manifests(),
     )
     print(render(verdict))
     return verdict.exit_code

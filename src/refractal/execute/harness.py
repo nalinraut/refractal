@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Mapping
 
 #: Modules Refractal subclasses, calls, or exchanges messages with. Everything
 #: else in the harness -- 20 benchmark packages, 18 model servers, the
@@ -55,6 +56,47 @@ SURFACE = (
 #: What the local backend records. Nothing talks to the harness there, and
 #: saying so is more honest than recording a version that never ran.
 LOCAL = "none/local-backend"
+
+
+def surface_manifest(package_root: str | Path) -> dict[str, str]:
+    """Per-file digests of the surface, so a change can be *named*.
+
+    The digest alone answers "did something move" and forces whoever reads the
+    block to go and find out what. That question is usually five minutes of
+    ``git diff`` -- but only if you still have the two versions to hand, which
+    whoever reads a comparison months later does not.
+
+    A manifest costs a few hundred bytes per session and turns the answer into a
+    file list. The gate stays the digest, because that is what belongs in a
+    column; this is what makes the gate's verdict actionable rather than merely
+    correct.
+    """
+    root = Path(package_root)
+    entries: dict[str, str] = {}
+    for name in sorted(SURFACE):
+        target = root / name
+        paths = (
+            sorted(p for p in target.rglob("*.py") if p.is_file())
+            if target.is_dir()
+            else ([target] if target.is_file() else [])
+        )
+        if not paths:
+            entries[name] = "absent"
+            continue
+        for path in paths:
+            entries[str(path.relative_to(root).as_posix())] = hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()[:16]
+    return entries
+
+
+def compare_manifests(before: Mapping[str, str], after: Mapping[str, str]) -> dict[str, list[str]]:
+    """Which surface files changed, appeared or vanished between two runs."""
+    return {
+        "changed": sorted(k for k in before.keys() & after.keys() if before[k] != after[k]),
+        "added": sorted(after.keys() - before.keys()),
+        "removed": sorted(before.keys() - after.keys()),
+    }
 
 
 def surface_digest(package_root: str | Path) -> str:
@@ -79,7 +121,7 @@ def surface_digest(package_root: str | Path) -> str:
     return hasher.hexdigest()[:16]
 
 
-def describe_installed_harness() -> tuple[str, str]:
+def describe_installed_harness() -> tuple[str, str, dict[str, str]]:
     """``(harness_version, harness_surface)`` for whatever is importable here.
 
     Called at container startup, where the harness exists. Falls back to the
@@ -89,11 +131,18 @@ def describe_installed_harness() -> tuple[str, str]:
     try:
         import vla_eval  # type: ignore
     except ImportError:
-        return LOCAL, LOCAL
+        return LOCAL, LOCAL, {}
 
     version = getattr(vla_eval, "__version__", "unknown")
     root = Path(vla_eval.__file__).parent
-    return f"vla-eval {version}", surface_digest(root)
+    return f"vla-eval {version}", surface_digest(root), surface_manifest(root)
 
 
-__all__ = ["LOCAL", "SURFACE", "describe_installed_harness", "surface_digest"]
+__all__ = [
+    "LOCAL",
+    "SURFACE",
+    "compare_manifests",
+    "describe_installed_harness",
+    "surface_digest",
+    "surface_manifest",
+]
