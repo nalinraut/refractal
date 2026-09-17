@@ -109,6 +109,13 @@ class SceneEntry(Strict):
     #: For external scenes: the catalog-side identity this hash was recorded
     #: against. Editing the provider or the ref makes the entry stale.
     ref_key: str | None = None
+    #: For external scenes: the document the hash was computed over.
+    #:
+    #: Recorded so a changed scene_hash can be *explained* rather than merely
+    #: observed -- diff two locks and the field that moved is right there. Same
+    #: reason the harness surface records a per-file manifest and not only a
+    #: digest: a digest says something changed and leaves you to find out what.
+    facts: dict[str, Any] = Field(default_factory=dict)
 
 
 class BuildLock(Strict):

@@ -388,8 +388,10 @@ class TestExternallyDefinedScenes(unittest.TestCase):
         def verify(self, engine, model_path):
             return None
 
-        def external_scene_hash(self, scene):
-            return self.digest
+        def external_scene_facts(self, scene):
+            # A document, not a digest: Refractal hashes it, so there is exactly
+            # one implementation of the canonicalisation.
+            return {"provider": "stand-in", "digest": self.digest}
 
     def _catalog(self, tmp, root):
         tmp.edit("scenes.yaml", lambda d: d.__setitem__("scenes", [self.EXTERNAL]))
@@ -419,7 +421,12 @@ class TestExternallyDefinedScenes(unittest.TestCase):
             self.assertTrue(entry.external)
             self.assertIsNotNone(entry.ref_key)
             plan = resolve(root, hardware_profile=HARDWARE)
-            self.assertEqual(plan.scenes[0].scene_hash, self.Probe().digest)
+            from refractal.schema import hash_obj
+
+            self.assertEqual(
+                plan.scenes[0].scene_hash,
+                hash_obj({"provider": "stand-in", "digest": self.Probe().digest}),
+            )
             self.assertEqual(len(plan.scenes[0].scenarios), 10)
 
     def test_build_without_a_capable_probe_refuses(self):
@@ -429,6 +436,28 @@ class TestExternallyDefinedScenes(unittest.TestCase):
             with self.assertRaises(BuildError) as ctx:
                 build(root, hardware_profile=HARDWARE)
             self.assertIn("where the benchmark is installed", str(ctx.exception))
+
+    def test_a_probe_that_returns_a_digest_instead_of_facts_is_refused(self):
+        """Hashing happens in one place; a probe that hashes is a second one."""
+
+        class HashingProbe(self.Probe):
+            def external_scene_facts(self, scene):
+                return "sha256:" + "cd" * 32  # a digest, not a document
+
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            self._catalog(tmp, root)
+            with self.assertRaises(BuildError) as ctx:
+                build(root, hardware_profile=HARDWARE, probe=HashingProbe())
+            self.assertIn("second implementation of the canonicalisation", str(ctx.exception))
+
+    def test_the_facts_are_recorded_so_a_changed_hash_can_be_explained(self):
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            self._catalog(tmp, root)
+            report = build(root, hardware_profile=HARDWARE, probe=self.Probe())
+            entry = report.lock.scene_entry("libero-spatial-3")
+            self.assertEqual(entry.facts["provider"], "stand-in")
 
     def test_editing_the_ref_makes_the_lock_stale(self):
         """task_id 3 and task_id 4 are different scenes, and the hash must stop being trusted."""

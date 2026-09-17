@@ -56,6 +56,7 @@ from ..resolve.lock import (
     filter_source_sha,
 )
 from ..schema.errors import CatalogError, RefractalError
+from ..schema.canonical import hash_obj
 from ..schema.identity import external_scene_ref_key, scenario_hash, scene_hash
 from ..schema.importstr import check_arity, resolve_import_string
 from ..schema.loader import Catalog, load_catalog
@@ -77,6 +78,26 @@ class EngineProbe(Protocol):
     def version(self, engine: str) -> str: ...
 
     def verify(self, engine: str, model_path: Path) -> None: ...
+
+
+class ExternalSceneProbe(Protocol):
+    """Supplies the facts that define a scene living inside a wrapped benchmark.
+
+    Returns a **document, not a digest**. Hashing is Refractal's job and happens
+    in exactly one place: a probe that hashed for itself would be a second
+    implementation of the canonicalisation, and two implementations of one rule
+    is how identities fork silently.
+
+    It also means the facts can be recorded in the lock alongside the hash, so a
+    changed ``scene_hash`` can be explained rather than merely observed -- the
+    same reason the harness surface records a manifest and not only a digest.
+
+    And it leaves a probe with nothing to import from Refractal. A probe is a
+    plugin *into* Refractal, unlike an adapter, which vla-eval loads and which
+    genuinely never touches it -- but nothing here needs it to depend on us.
+    """
+
+    def external_scene_facts(self, scene: Scene) -> dict[str, Any]: ...
 
 
 class ShapeProber(Protocol):
@@ -157,13 +178,21 @@ def build(
             # The geometry lives in a wrapped benchmark. Only a probe that can
             # import the provider knows what it is; without one there is nothing
             # honest to record.
-            if probe is None or not hasattr(probe, "external_scene_hash"):
+            if probe is None or not hasattr(probe, "external_scene_facts"):
                 raise BuildError(
                     f"scene {scene.id!r} is defined by {scene.external.provider!r}, so its "
-                    "hash must come from a probe that can import that provider. Run "
+                    "facts must come from a probe that can import that provider. Run "
                     "'refractal build' where the benchmark is installed."
                 )
-            digest = probe.external_scene_hash(scene)
+            facts = probe.external_scene_facts(scene)
+            if not isinstance(facts, dict) or not facts:
+                raise BuildError(
+                    f"the probe returned {type(facts).__name__} for scene {scene.id!r}; "
+                    "external_scene_facts must return a non-empty dict of the facts that "
+                    "define the scene. Refractal hashes it — a probe that returns a digest "
+                    "would be a second implementation of the canonicalisation."
+                )
+            digest = hash_obj(facts)
             resolved_scene_hashes[scene.id] = digest
             report.lock.scenes.append(
                 SceneEntry(
@@ -173,6 +202,7 @@ def build(
                     engine_version=version,
                     external=True,
                     ref_key=external_scene_ref_key(scene),
+                    facts=facts,
                 )
             )
             continue
@@ -328,6 +358,7 @@ __all__ = [
     "BuildReport",
     "DeclaredProbe",
     "EngineProbe",
+    "ExternalSceneProbe",
     "ShapeProber",
     "build",
 ]
