@@ -321,6 +321,28 @@ def evaluate(
                     f"(McNemar p={contrast.mcnemar.p_value:.3f}). A uniform shift, not a set "
                     "of scenarios breaking -- read the 2x2 before acting."
                 )
+            # An arm pinned at 0% or 100% on every episode. Not a degenerate
+            # comparison -- the contrast is real and the interval is honest -- but
+            # the measurement is one-sided in a way the numbers do not show.
+            #
+            # Added after a real run put pi0.5 at 60/60. `compare` printed
+            # "within-cell ICC 0.000, between-scenario Var 0.00000", which is the
+            # receipt, and said nothing about what it implies: a further
+            # improvement to that arm cannot be observed, and the interval's bound
+            # on that side is set by arithmetic rather than by evidence.
+            for arm, label in ((contrast.baseline, "baseline"),
+                               (contrast.candidate, "candidate")):
+                rate = task.rates.get(arm)
+                if rate is None or 0.0 < rate < 1.0:
+                    continue
+                contrast.notes.append(
+                    f"{arm} ({label}) is at {rate:.0%} on every episode of this task. The "
+                    "contrast is real, but this arm has no room to move: a change that "
+                    f"{'improved' if rate == 1.0 else 'worsened'} it could not be measured "
+                    "here, and the interval's bound on that side comes from the ceiling, "
+                    "not from the data. Widen the task set before reading it as a limit "
+                    "on the difference."
+                )
 
     tested = {(baseline, c) for c in candidates}
     verdict.untested_pairs = [

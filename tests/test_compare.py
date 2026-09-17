@@ -290,6 +290,74 @@ class TestBorderlineRealDifference(unittest.TestCase):
         self.assertGreater(rate_b, rate_a)
 
 
+class TestACeilingIsNamed(unittest.TestCase):
+    """An arm pinned at 0% or 100% on every episode.
+
+    Added after a real run put pi0.5 at 60/60 on both tasks. `compare` printed
+    "within-cell ICC 0.000, between-scenario Var 0.00000" -- the receipt -- and
+    said nothing about what it implies: a further improvement to that arm cannot
+    be observed, and the interval's bound on that side is arithmetic rather than
+    evidence.
+
+    Not a block. The contrast is real and the interval is honest about what it
+    measured. It is a limit on what the measurement could have shown, which is
+    the kind of thing a reader takes from the absence of a note.
+    """
+
+    def _rows(self, baseline_rate, candidate_rate, scenarios=8, seeds=3):
+        rows = []
+        for scenario in range(scenarios):
+            for seed in range(seeds):
+                for checkpoint, rate in (("base", baseline_rate), ("cand", candidate_rate)):
+                    # Deterministic, so the fixture's rates are exactly the ones
+                    # asked for rather than approximately.
+                    index = scenario * seeds + seed
+                    success = index < round(rate * scenarios * seeds)
+                    rows.append({
+                        "episode_id": f"{checkpoint}-{scenario}-{seed}",
+                        "scenario_hash": f"sha256:s{scenario}",
+                        "scene_id": "scene", "scene_hash": "sha256:scene",
+                        "task_id": "task", "task_hash": "sha256:task",
+                        "checkpoint_id": checkpoint, "seed": seed,
+                        "session_id": "s", "worker_id": "w",
+                        "execution_mode": "interleaved",
+                        "harness_version": "v", "harness_surface": "d",
+                        "success": success, "phase_outcomes": [],
+                        "terminal_phase": None,
+                        "failure_reason": None if success else "policy_failure",
+                        "is_infra_failure": False, "steps": 10, "elapsed_sec": 1.0,
+                        "started_at": None, "ended_at": None, "artifact_uri": None,
+                    })
+        return rows
+
+    def _notes(self, baseline_rate, candidate_rate):
+        eligibility = build_units(
+            self._rows(baseline_rate, candidate_rate), checkpoints=["base", "cand"]
+        )
+        verdict = evaluate(eligibility, ["base", "cand"], baseline="base", resamples=200)
+        return " | ".join(
+            n for task in verdict.tasks for c in task.contrasts for n in c.notes
+        )
+
+    def test_an_arm_at_the_ceiling_is_named(self):
+        notes = self._notes(0.5, 1.0)
+        self.assertIn("at 100% on every episode", notes)
+        self.assertIn("no room to move", notes)
+
+    def test_an_arm_at_the_floor_is_named(self):
+        """0% is the same problem pointing down: a change that made it worse
+        could not be measured."""
+        notes = self._notes(0.0, 0.5)
+        self.assertIn("at 0% on every episode", notes)
+        self.assertIn("worsened", notes)
+
+    def test_two_arms_in_the_interior_get_no_ceiling_note(self):
+        """The break test: if this also produced the note, the note would be
+        decoration rather than a finding."""
+        notes = self._notes(0.375, 0.75)
+        self.assertNotIn("no room to move", notes)
+
+
 if __name__ == "__main__":
     unittest.main()
 

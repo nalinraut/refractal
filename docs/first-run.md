@@ -221,3 +221,71 @@ difference has real variance contributed by one arm and none by the other. A
 design effect computed on that is measuring pi0's stochasticity, not a shared
 scenario effect, and an ICC for pi05 is estimated on a column with no variance at
 all.
+
+## The number
+
+120 episodes, 0 infra failures, 120 distinct `episode_id`s, one harness surface,
+each arm answered by its own server. `refractal compare` exit 0.
+
+| task | pi0 | pi0.5 | design effect | pi0 ICC | pi0.5 ICC | reading |
+|---|---|---|---|---|---|---|
+| spatial-0 | 63.3% | 100% | **1.65** | **0.245** | 0.000 | clustering load-bearing |
+| spatial-1 | 86.7% | 100% | **0.67** | 0.000 | 0.000 | clustering not load-bearing |
+
+```
+  libero-spatial-0 (10 scenarios)
+    design effect on the paired difference: 1.65
+      (observed Var 0.10988 vs binomial 0.06667, 10 scenarios, 3.0 seeds each)
+      pi0: within-cell ICC 0.245, between-scenario Var 0.04321
+      pi05: within-cell ICC 0.000, between-scenario Var 0.00000
+    pi0 -> pi05: +0.367 [+0.167, +0.567]  p=0.0004 holm=0.0008  McNemar p=0.2500
+
+  libero-spatial-1 (10 scenarios)
+    design effect on the paired difference: 0.67
+      (observed Var 0.02963 vs binomial 0.04444, ...)
+    pi0 -> pi05: +0.133 [+0.033, +0.233]  p=0.0136 holm=0.0136  McNemar p=1.0000
+```
+
+### What this settles about the statistics
+
+The design effect is measured against real within-scenario stochasticity for the
+first time — pi0's flow-matching noise draw, with nothing seeding it. Before this
+every design effect in the project came from a simulation whose clustering was
+put there on purpose.
+
+**1.65 on spatial-0.** Above the 1.25 threshold, so the "clustering is
+load-bearing" message fires, and it is earned: pi0's within-cell ICC is 0.245 and
+its between-scenario variance 0.043. An unclustered test on this contrast would
+be anti-conservative by roughly that factor in variance.
+
+**0.67 on spatial-1, below 1.** The case worth having. Observed Var(dᵢ) is
+*lower* than the binomial reference, so the naive test here is **conservative**,
+and `compare` says clustering is not load-bearing rather than warning. The
+mechanism is the covariance between arms, not the marginals: with pi0.5 constant,
+dᵢ = 1 − pi0ᵢ, and pi0's per-scenario outcomes on this task are more homogeneous
+than binomial — ICC 0.000, between-scenario Var 0.000.
+
+The same estimator produced both numbers from the same run and gave the correct
+reading of each. That is the strongest statement available about the statistics
+doc: not that it is right in principle, but that its two opposite conclusions both
+arrived, on real data, unprompted.
+
+### What it exposed
+
+`compare` was silent about pi0.5 sitting at exactly 60/60. It printed the receipt
+— `within-cell ICC 0.000, between-scenario Var 0.00000` — without the
+consequence: an arm at the ceiling has no room to move, so a change that improved
+it could not be observed here, and the interval's upper bound comes from
+arithmetic rather than from evidence. A reader takes that from the *absence* of a
+note.
+
+Now named, for 0% as well as 100%, and break-tested against two interior rates so
+the note is a finding rather than decoration.
+
+### What it does not settle
+
+pi0 at 75% overall is not its published LIBERO-Spatial number, and this is not
+the reference environment (Python 3.11, numpy 2.4.6, against the image's 3.8 and
+1.22.4). The paired question is unaffected — both arms see the identical
+environment — but nothing here should be read as a measurement of either
+checkpoint's absolute capability.
