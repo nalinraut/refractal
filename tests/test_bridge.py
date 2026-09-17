@@ -24,6 +24,8 @@ from refractal.execute.vla_eval import (
     RECORDER_SURFACE,
     build_eval_config,
     check_index_contract,
+    check_server_assignment,
+    preflight_servers,
     group_by_seed,
     rows_from_benchmark_result,
     StepBuffer,
@@ -496,3 +498,70 @@ class TestSeedsComeFromTheLoopNotTheCounter(unittest.TestCase):
             output_dir="/tmp/out", max_steps=220,
         )
         self.assertEqual(config["benchmarks"][0]["episodes_per_task"], 5)
+
+
+class TestServerAssignment(unittest.TestCase):
+    """Both sides correct, the disagreement only in the relationship.
+
+    Same shape as the index contract. Point two checkpoints at one port and every
+    internal check passes -- well-formed rows, exact pairing, correct denominators
+    -- and the verdict is a clean "no change" with a tight interval. The only
+    thing wrong is which policy produced the rows, which the analysis cannot see.
+    """
+
+    def test_distinct_urls_are_accepted(self):
+        check_server_assignment({"pi0": "ws://localhost:8000", "pi05": "ws://localhost:8001"})
+
+    def test_a_shared_url_is_refused(self):
+        with self.assertRaises(BridgeError) as ctx:
+            check_server_assignment({"pi0": "ws://localhost:8000", "pi05": "ws://localhost:8000"})
+        message = str(ctx.exception)
+        self.assertIn("compared against themselves", message)
+        self.assertIn("clean null", message)
+
+    def test_it_names_which_checkpoints_collided(self):
+        with self.assertRaises(BridgeError) as ctx:
+            check_server_assignment(
+                {"a": "ws://x:1", "b": "ws://x:1", "c": "ws://y:2"}
+            )
+        self.assertIn("'a', 'b'", str(ctx.exception))
+        self.assertNotIn("'c'", str(ctx.exception))
+
+    def test_no_servers_at_all_is_refused(self):
+        with self.assertRaises(BridgeError):
+            check_server_assignment({})
+
+
+class TestServerPreflight(unittest.TestCase):
+    """Fail before the first episode, not on first use."""
+
+    def test_an_unreachable_server_is_refused_up_front(self):
+        # Port 1 on localhost: nothing listens there.
+        with self.assertRaises(BridgeError) as ctx:
+            preflight_servers({"pi0": "ws://127.0.0.1:1"}, timeout=0.5)
+        message = str(ctx.exception)
+        self.assertIn("not accepting connections", message)
+        # The reason servers are not supervised belongs in the error, because
+        # this is where someone reads it.
+        self.assertIn("warm-up", message)
+
+    def test_a_reachable_server_passes(self):
+        import socket
+        import threading
+
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        threading.Thread(target=lambda: listener.accept(), daemon=True).start()
+        try:
+            result = preflight_servers({"pi0": f"ws://127.0.0.1:{port}"}, timeout=2.0)
+            self.assertEqual(result, {"pi0": f"ws://127.0.0.1:{port}"})
+        finally:
+            listener.close()
+
+    def test_it_checks_the_assignment_too(self):
+        """One call, both preconditions: a collision never reaches a socket."""
+        with self.assertRaises(BridgeError) as ctx:
+            preflight_servers({"a": "ws://127.0.0.1:1", "b": "ws://127.0.0.1:1"}, timeout=0.5)
+        self.assertIn("compared against themselves", str(ctx.exception))

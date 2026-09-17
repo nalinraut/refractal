@@ -234,10 +234,23 @@ probabilities `π_iA` and `π_iB`, and that coupling shrinks `Var(Δπ_i)` towar
 — driving the design effect to exactly 1 **from above**, never below. So the true
 value is ≥ 1 always, and a reading below 1 is estimation error.
 
+**Correction, 2026-09-17: "below 1.0 is noise" is only true *near* 1.0.** Two arms
+drawn from one source give a design effect of **0.000 with sd 0.000**, against
+0.973 ± 0.117 for a true null — roughly eight sigma down. That is a signature, not
+a low reading, and it is what a checkpoint compared against itself looks like. The
+usual cause is two checkpoints pointed at one model server.
+
+`compare` now blocks on it (`DEGENERATE_DESIGN_EFFECT = 0.25`, about five sigma
+below 1 at this scale). It catches a *deterministic* policy behind one server,
+where every per-scenario difference is exactly zero; a stochastic policy behind
+one server draws fresh noise per episode and looks exactly like a true null, which
+this cannot distinguish. The reliable guard is `check_server_assignment` in the
+bridge, before the run — this is the second, independent one.
+
 Practical consequences:
 
-- A real policy reading below 1.0 is not evidence of anything. A reading
-  meaningfully above 1.0 is.
+- A real policy reading a little below 1.0 is not evidence of anything. A reading
+  meaningfully above 1.0 is. A reading *near zero* is a wiring fault.
 - At 119 scenarios the sd is ~0.14, so the **1.25 threshold sits about 1.8σ above
   1.0** — roughly a 4% false-alarm rate for "clustering matters" when it does not.
   Close to the α it is used alongside, by coincidence rather than design, and

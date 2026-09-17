@@ -227,6 +227,77 @@ def to_episode_row(episode: PlannedEpisode, result: Mapping[str, Any]) -> Episod
     )
 
 
+def check_server_assignment(servers: Mapping[str, str]) -> None:
+    """Distinct checkpoints must answer on distinct URLs.
+
+    Point two checkpoints at one port and you get a comparison of a checkpoint
+    against itself: plausible rates, a difference near zero, a tight interval and
+    a verdict of "no change". Nothing downstream would object, because every
+    internal check passes — the rows are well-formed, the pairing is exact, the
+    denominators are right. The only thing wrong is which policy produced them,
+    which is not recorded anywhere the analysis can see.
+
+    Same shape as the index contract: both sides correct, the disagreement living
+    only in the relationship, and the result fully formed and wrong.
+    """
+    if not servers:
+        raise BridgeError("no server URLs were given; every checkpoint needs one.")
+    by_url: dict[str, list[str]] = {}
+    for checkpoint, url in servers.items():
+        by_url.setdefault(url, []).append(checkpoint)
+    collisions = {url: names for url, names in by_url.items() if len(names) > 1}
+    if collisions:
+        detail = "; ".join(f"{url} -> {sorted(names)}" for url, names in collisions.items())
+        raise BridgeError(
+            f"these checkpoints share a server URL: {detail}. They would be compared "
+            "against themselves, and the result would look like a clean null: a "
+            "difference near zero with a tight interval and every internal check passing."
+        )
+
+
+def preflight_servers(servers: Mapping[str, str], *, timeout: float = 5.0) -> dict[str, str]:
+    """Check every declared server before the first episode, not on first use.
+
+    A run that gets forty episodes in and dies because the second server was never
+    started has wasted the compute and left a partial comparison behind. One
+    connect attempt per server turns a confusing mid-run failure into a stated
+    precondition.
+
+    **What this checks and what it does not.** A TCP connect proves something is
+    listening on that port. It does not prove it is a model server, or the right
+    checkpoint — that is what the harness's HELLO handshake and spec
+    cross-validation are for, and they happen per episode. This is the cheap half,
+    and its job is to fail before anything is spent.
+    """
+    import socket
+    from urllib.parse import urlparse
+
+    check_server_assignment(servers)
+    unreachable: dict[str, str] = {}
+    for checkpoint, url in sorted(servers.items()):
+        parsed = urlparse(url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                pass
+        except OSError as exc:
+            unreachable[checkpoint] = f"{url} ({exc.__class__.__name__}: {exc})"
+    if unreachable:
+        lines = "\n  ".join(f"{c}: {d}" for c, d in sorted(unreachable.items()))
+        raise BridgeError(
+            "these model servers are not accepting connections:\n  "
+            + lines
+            + "\n\nStart them before the run rather than letting the run start them. "
+            "A supervised server loads during the first episode, so two interleaved "
+            "checkpoints would carry different warm-up costs -- model load, CUDA "
+            "context, first-inference JIT -- inside the thing being measured. Servers "
+            "up and warm first is the measurement protocol, not a concession to "
+            "architecture."
+        )
+    return dict(servers)
+
+
 def group_by_seed(episodes: list[PlannedEpisode]) -> dict[int, list[PlannedEpisode]]:
     """One harness invocation per seed, because the harness has no seed concept.
 
@@ -496,6 +567,8 @@ __all__ = [
     "to_episode_row",
     "build_eval_config",
     "check_index_contract",
+    "check_server_assignment",
+    "preflight_servers",
     "group_by_seed",
     "check_recorder_surface",
     "rows_from_benchmark_result",

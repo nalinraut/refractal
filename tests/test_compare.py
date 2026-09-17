@@ -391,13 +391,21 @@ class TestMultipleCheckpoints(unittest.TestCase):
     """Two is the common case, not a special one. D7."""
 
     def _rows(self, rates):
-        """rates: {checkpoint: success_rate} for one task."""
+        """rates: {checkpoint: success_rate} for one task.
+
+        The salt varies per checkpoint, which is not cosmetic. Sharing one salt
+        made every arm draw the same outcomes, so two checkpoints at the same rate
+        were byte-identical -- a self-comparison wearing two names. The fixture
+        looked right and every test passed, until the degenerate-arms guard
+        started asking. Independent draws at the same rate is what a true null
+        actually is.
+        """
         out = []
         for checkpoint, rate in rates.items():
             for row in rows_for(
                 success_rate=0.5,
                 scenario_spread=0.30,
-                salt="m0",
+                salt=f"m0-{checkpoint}",
                 per_task={(B, "vial-slot-7"): rate},
             ):
                 if row["checkpoint_id"] != B:
@@ -494,7 +502,7 @@ class TestUntestedPairsAreDisclosed(unittest.TestCase):
         rows = []
         for checkpoint, rate in rates.items():
             for row in rows_for(
-                success_rate=0.5, scenario_spread=0.30, salt="u0",
+                success_rate=0.5, scenario_spread=0.30, salt=f"u0-{checkpoint}",
                 per_task={(B, "vial-slot-7"): rate},
             ):
                 if row["checkpoint_id"] == B:
@@ -785,3 +793,56 @@ class TestTheBlockMessageNamesTheChangedFiles(unittest.TestCase):
             resamples=100, seed=1,
         )
         self.assertIn("did not write one", verdict.blocking[0])
+
+
+class TestDegenerateArmsAreBlocked(unittest.TestCase):
+    """The second, independent guard against a checkpoint compared to itself.
+
+    Measured: two arms drawn from one source give a design effect of 0.000 with
+    sd 0.000, where a true null gives 0.973 with sd 0.117. That is roughly eight
+    sigma down -- a signature, not a low reading.
+
+    It also corrects docs/statistics-measurements.md, which said a design effect
+    below 1.0 is noise. Below 1 *near 1* is noise; near zero is two arms that are
+    the same thing.
+    """
+
+    def _rows(self, identical):
+        rows = []
+        for i in range(40):
+            for checkpoint in (A, B):
+                for seed in range(3):
+                    tag = f"{i}|{seed}" if identical else f"{checkpoint}|{i}|{seed}"
+                    rows.append({
+                        "scene_id": "s", "scene_hash": "h", "task_id": "t",
+                        "task_hash": "th", "scenario_hash": f"s{i}",
+                        "checkpoint_id": checkpoint, "seed": seed, "session_id": "x",
+                        "harness_version": "v", "harness_surface": "v",
+                        "is_infra_failure": False, "success": hash(tag) % 3 > 0,
+                    })
+        return rows
+
+    def test_independent_arms_are_compared_normally(self):
+        verdict = evaluate(
+            build_units(self._rows(identical=False), checkpoints=[A, B]), [A, B],
+            resamples=200, seed=1,
+        )
+        self.assertEqual(verdict.blocking, [])
+
+    def test_identical_arms_are_blocked(self):
+        verdict = evaluate(
+            build_units(self._rows(identical=True), checkpoints=[A, B]), [A, B],
+            resamples=200, seed=1,
+        )
+        self.assertEqual(verdict.exit_code, 2)
+        self.assertEqual(verdict.tasks, [])
+        self.assertIn("no scenario-level variation", verdict.blocking[0])
+        self.assertIn("one model server", verdict.blocking[0])
+
+    def test_it_does_not_fire_on_too_few_scenarios_to_tell(self):
+        """Ten scenarios cannot distinguish a signature from a bad draw."""
+        rows = [r for r in self._rows(identical=True) if int(r["scenario_hash"][1:]) < 5]
+        verdict = evaluate(
+            build_units(rows, checkpoints=[A, B]), [A, B], resamples=100, seed=1
+        )
+        self.assertEqual(verdict.blocking, [])

@@ -189,6 +189,10 @@ def evaluate(
             "checkpoints being compared: the geometry changed between runs, so these "
             "results are not comparable. Re-run, or compare within one geometry."
         )
+    identical = _arms_look_identical(eligibility, checkpoints)
+    if identical:
+        verdict.blocking.append(identical)
+
     if eligibility.duplicate_rows:
         sample = eligibility.duplicate_rows[0]
         verdict.blocking.append(
@@ -349,6 +353,47 @@ def evaluate(
         )
 
     return verdict
+
+
+#: Below this, a design effect is not a low reading -- it is a signature. At ~120
+#: scenarios the estimator's sd is ~0.14 about a true value of 1, so 0.25 is about
+#: five sigma down. Nothing produces that by chance; two arms that are the same
+#: thing produce exactly 0.
+DEGENERATE_DESIGN_EFFECT = 0.25
+
+
+def _arms_look_identical(eligibility: Eligibility, checkpoints: Sequence[str]) -> str | None:
+    """Catch a comparison of a checkpoint against itself.
+
+    The failure this exists for: two checkpoints pointed at one model server.
+    Every internal check passes -- well-formed rows, exact pairing, correct
+    denominators -- and the verdict is a clean "no change" with a tight interval.
+    The only thing wrong is which policy produced the rows, which the analysis
+    cannot see.
+
+    **Limit, stated because it matters.** This catches a *deterministic* policy
+    behind one server, where every per-scenario difference is exactly zero. A
+    stochastic policy behind one server draws fresh noise per episode, so its
+    differences look exactly like a true null and this cannot distinguish them.
+    The reliable guard is `check_server_assignment` in the bridge, before the
+    run; this is the second, independent one -- and it also catches ways of
+    duplicating an arm that have nothing to do with URLs, such as copied rows.
+    """
+    if len(checkpoints) < 2 or len(eligibility.units) < 10:
+        return None
+    from .variance import measure_variance
+
+    report = measure_variance(eligibility.units, checkpoints[0], checkpoints[1])
+    if report.observed_var > 0 and report.design_effect >= DEGENERATE_DESIGN_EFFECT:
+        return None
+    return (
+        f"{checkpoints[0]!r} and {checkpoints[1]!r} produced outcomes with no "
+        f"scenario-level variation between them (design effect "
+        f"{report.design_effect:.3f}, observed Var {report.observed_var:.6f} across "
+        f"{report.units} scenarios). Two arms that are the same thing look exactly like "
+        "this. The usual cause is two checkpoints pointed at one model server, which "
+        "produces a clean-looking null that no downstream check can question."
+    )
 
 
 def _name_changed_files(
