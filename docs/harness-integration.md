@@ -46,6 +46,57 @@ The other `localhost` occurrences are a docstring example and `--network host`
 help text. Addressing a model server by hostname works today with no upstream
 change, so `refractal-design.md`'s claim that the address is hardcoded is stale.
 
+### Re-verified at v0.6.0, 2026-09-17
+
+The §1 hooks are re-checked whenever the pin moves. These four are *not* covered
+by the surface digest in the way the others are, so they were re-checked by hand:
+
+| claim | at v0.6.0 | note |
+|---|---|---|
+| `db_path` has no caller | **holds** — plumbed to `model_servers/base.py:75`, read by nothing | outside the digest, see below |
+| `_ALL_RECORD_FIELDS` is per-benchmark and advisory | **holds** — validated at `orchestrator.py:490`, now declared by 17 benchmarks | |
+| spec cross-validation is inline | **holds** — grown from 33 to 36 lines, still inside `_run_benchmark_inner` | |
+| the work-item loop is inline, not a method | **holds** — `orchestrator.py:312` | why `worker_selection` exists |
+
+### Why `model_servers/` is not on the surface, and what that costs
+
+`db_path` returning `""` is safe only while no model server reads it. That is a
+claim about `model_servers/`, which the digest does not cover — so it is stated
+here with its cost rather than left implied.
+
+Measured over the last 40 commits:
+
+| path | changed in |
+|---|---|
+| `model_servers/` (all) | **40 / 40** |
+| `model_servers/base.py` | 10 / 40 |
+
+Adding the directory would fire on every commit, which is the whole-tree failure
+the narrow digest exists to avoid. Adding `base.py` alone would roughly triple
+the alarm rate, and would still not catch the thing that matters — a *server*
+starting to call `recording_db_path`, which lives in the other twenty files.
+
+**What it would cost if the claim broke.** `sqlite3.connect("")` does not raise.
+It creates a temporary on-disk database that is discarded on close, so a server
+handed `""` would record its step data into nothing, silently. That loses a
+feature Refractal does not use; it cannot corrupt an episode row, because those
+are written by Refractal's own writer on the other side of the boundary.
+
+So: low consequence, high detection cost, and therefore a **documented
+assumption with a re-check** rather than a gate. Re-check is one grep:
+
+```console
+grep -rn "recording_db_path\|StepRecorder(" src/vla_eval/model_servers/
+```
+
+### The 12% figure is window-dependent
+
+The narrow digest changed on 3 of 24 transitions in the v0.5.0-era range. Over
+the most recent 40 commits `orchestrator.py` alone changed in 26, so the rate is
+higher in an active release cycle than that number suggests. The comparison that
+justified the design still holds — whole-tree was 24/24 — but "12%" is one
+window, not a constant.
+
 ### Surface manifests
 
 The digest is what belongs in a column; it is not enough to act on. Every run

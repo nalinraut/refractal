@@ -165,6 +165,48 @@ Worth a scan whenever one of these turns up, because two instances of a shape ar
 rarely two. The scan that found the last two took one grep over id-keyed
 assignments and `set()` construction.
 
+## Assertions about code you do not control
+
+A guard fails when it is wrong. An **assertion** — a claim written into a design
+document about someone else's code — just sits there being wrong.
+
+`refractal-design.md` said the harness hardcodes the model server address to
+localhost. It appeared in the design doc, the implementation prompt, the API
+reference and the Kubernetes discussion, and it decided that multi-host was
+blocked upstream. It was wrong:
+
+```python
+url: str = "ws://localhost:8000"     # a default
+url=data.get("url", cls.url)         # overridable from YAML
+```
+
+How it survived a review that caught a dozen subtler things: it came from a grep
+whose hits were **a docstring example and `--network host` help text**, and
+nothing ever tested it because nothing needed multi-host. Same shape as the
+unexercised invariants above — correct-looking, never exercised — except it was an
+assertion rather than a guard, so there was no test that *could* have failed.
+
+The practice that follows is the same question in a different place:
+
+> For each claim about an external dependency, what would falsify it, and is
+> anything positioned to notice?
+
+Three answers, and picking the right one is the work:
+
+- **The digest notices.** True for the hooks in `SURFACE` — a change to the
+  `_store` gate moves `harness_surface` and blocks comparisons.
+- **Nothing notices, and that is the right trade.** `db_path` having no caller
+  lives in `model_servers/`, which changes on every commit; gating on it would
+  produce an alarm nobody reads. Recorded as a documented assumption with the
+  one-line re-check instead.
+- **Nothing notices, and that is a gap.** Which is what the localhost claim was
+  for nine days. Re-checked by hand when the pin moves, and the results written
+  down with a date.
+
+The cheap version of all three: **re-verify on every pin move, and record the
+date**. A claim with a date attached degrades visibly; one without looks equally
+true forever.
+
 ## Currently known to be unexercised
 
 "Unexercised" is not one condition, and the list is only useful if it says which
