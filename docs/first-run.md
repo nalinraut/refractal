@@ -132,13 +132,37 @@ full strength, from the other side: not a server argument but a benchmark one.
 A working policy reads as a 0% policy, and the run completes, reports cleanly,
 and writes 8 rows that say `policy_failure`.
 
-The important part for the design: `quat_no_antipodal` is a benchmark
-constructor argument, so in this catalog it lives in `external.params`, which is
-hashed into `scene_hash`. A run with it and a run without it have different scene
-hashes and land in different comparison directories. The mismatch is not merely
-detectable — it is unrepresentable as a single comparison. That is the property
-the whole identity scheme is for, and this is the first time it has been load
-bearing against a real failure rather than a constructed one.
+### And the identity scheme did not actually cover it
+
+`quat_no_antipodal` is a benchmark constructor argument, so in this catalog it
+lives in `external.params`. The claim in the paragraph above — that it is
+therefore in `scene_hash` — was **false when written**.
+
+`build` computed an external scene's hash as `hash_obj(facts)`: the probe's facts
+alone. The probe reports what LIBERO contains and knows nothing about how this
+catalog asks for it. So adding the flag left `plan_id` **unchanged**, and a run
+with it and a run without it would have joined into one comparison and been
+averaged.
+
+Caught by adding the flag and checking `plan_id`, which did not move. Not by the
+test suite: one test recomputed the formula (`assertEqual(scene_hash,
+hash_obj({provider, digest}))`), which agrees with whatever the formula omits,
+and another asserted this exact property correctly — against
+`external_scene_ref_key`, the helper, while `build` hashed something else.
+
+Fixed: `hash_obj({"facts": facts, "catalog_ref": external_scene_ref_key(scene)})`.
+The two configurations now produce `plan_id` `1b441de8…` and `0cf5cbc3…`. Written
+up in `patterns.md` as "A test that restates the implementation".
+
+So the property held in the end — but it held because the run went looking, not
+because the design was already right. Worth being exact about which of those
+happened.
+
+### pi05 under the corrected convention
+
+4/4, against 2/2 at the default. The flag is right for both arms, which matters:
+it is a scene-level setting and cannot be varied per arm without making the two
+arms different scenes.
 
 What it does not settle: 50% on four episodes is not 96%, and this is not the
 reference environment. There may be more wrong. But the difference between 0/8
