@@ -9,14 +9,19 @@ here is the shape of the nesting and one I/O call.
 The nesting, and why it is four deep
 ------------------------------------
 
-``scene -> worker -> checkpoint -> seed``, one harness invocation per leaf.
+``scene -> worker -> task -> checkpoint -> seed``, one harness invocation per leaf.
 
+* **task**, because the harness's work-item loop can be constrained to one task
+  at a time and its episode counter restarts per task. A scene is the compiled
+  model and tasks are cheap to vary on it, so one worker holds many.
 * **checkpoint**, because a harness run addresses one model server.
 * **seed**, because the harness has no seed concept and the counter that would
   have to encode a repeat is the same counter that selects init states.
 
-Which is why ``invocations_per_worker`` is ``checkpoints x seeds`` in the planner:
-the leaf count is what pays scene construction.
+The task level is what lets a catalog declare one scene with ten tasks -- the
+shape the design doc's own test requires, since LIBERO-Spatial's ten tasks
+compile to one ``MjModel``. Without it, ``worker_selection`` refuses the worker
+and the plan cannot run.
 
 Resume is group-granular here
 -----------------------------
@@ -206,81 +211,89 @@ def run_vla_eval(
     for scene in plan.scenes:
         scenarios = {s.scenario_hash: s.params for s in scene.scenarios}
         for worker in scene.workers:
-            for checkpoint_id in sorted({e.checkpoint_id for e in worker.episodes}):
-                for_checkpoint = [
-                    e for e in worker.episodes if e.checkpoint_id == checkpoint_id
-                ]
-                for seed, group in sorted(group_by_seed(for_checkpoint).items()):
-                    if all(e.episode_id in already for e in group):
-                        summary.skipped += len(group)
-                        continue
-
-                    # Whole group or nothing: the harness counts from zero, so a
-                    # partially-done group has to be re-run in full and its part
-                    # file replaced rather than added to.
-                    check_index_contract(group, scenarios)
-                    config = build_eval_config(
-                        scene=scene,
-                        episodes=group,
-                        server_url=servers[checkpoint_id],
-                        output_dir=output_dir,
-                        max_steps=_max_steps(group),
-                    )
-                    # steps.parquet is deferred until after the first real run,
-                    # so nothing drains this buffer. The receipt for the injection
-                    # is `recorder_cls.constructed`, not the buffer -- see below.
-                    buffer = StepBuffer()
-                    recorder_cls = make_parquet_recorder(buffer.collect)
-
-                    started_at = dt.datetime.now(dt.timezone.utc)
-                    result = invoke(config, recorder_cls)
-                    ended_at = dt.datetime.now(dt.timezone.utc)
-
-                    # Raises if the harness returned fewer results than the plan
-                    # asked for, before anything is written. A short run must not
-                    # be recorded as though it completed.
-                    outcomes = rows_from_benchmark_result(result, group)
-                    if not recorder_cls.constructed:
-                        raise BridgeError(
-                            f"the harness ran {len(group)} episode(s) and never constructed "
-                            "the injected recorder, so `_build_recorder` was not consulted. "
-                            "The run would have completed, reported success and recorded "
-                            "nothing. Check whether the recorder gate in orchestrator.py "
-                            "still reads `self._store is None` -- "
-                            "scripts/verify_harness_claims.py checks exactly this."
-                        )
-                    buffer.clear()
-                    rows = [
-                        _row(
-                            outcome,
-                            scene,
-                            worker.worker_id,
-                            session_id=session_id,
-                            execution_mode=plan.execution_mode,
-                            harness_version=harness_version,
-                            harness_surface=harness_surface,
-                            server_url=servers[checkpoint_id],
-                            started_at=started_at,
-                            ended_at=ended_at,
-                        )
-                        for outcome in outcomes
+            for task_id in sorted({e.task_id for e in worker.episodes}):
+                for_task = [e for e in worker.episodes if e.task_id == task_id]
+                for checkpoint_id in sorted({e.checkpoint_id for e in for_task}):
+                    for_checkpoint = [
+                        e for e in for_task if e.checkpoint_id == checkpoint_id
                     ]
-                    part = (
-                        f"{worker.worker_id.replace('/', '-')}"
-                        f"-{checkpoint_id}-seed{seed}"
-                    )
-                    path = writer.write_episodes(
-                        checkpoint_id, scene.scene_id, rows, part=part
-                    )
-                    written_paths = [path] if path else []
-                    writer.verify_written(
-                        {r["episode_id"] for r in rows},
-                        written_paths,
-                        worker_id=f"{worker.worker_id}/{checkpoint_id}/seed{seed}",
-                    )
-                    summary.parts.extend(written_paths)
-                    summary.written += len(rows)
-                    summary.invocations += 1
+                    for seed, group in sorted(group_by_seed(for_checkpoint).items()):
+                        if all(e.episode_id in already for e in group):
+                            summary.skipped += len(group)
+                            continue
+
+                        # Whole group or nothing: the harness counts from zero, so a
+                        # partially-done group has to be re-run in full and its part
+                        # file replaced rather than added to.
+                        check_index_contract(group, scenarios)
+                        config = build_eval_config(
+                            scene=scene,
+                            episodes=group,
+                            server_url=servers[checkpoint_id],
+                            output_dir=output_dir,
+                            max_steps=_max_steps(group),
+                        )
+                        # steps.parquet is deferred until after the first real run,
+                        # so nothing drains this buffer. The receipt for the injection
+                        # is `recorder_cls.constructed`, not the buffer -- see below.
+                        buffer = StepBuffer()
+                        recorder_cls = make_parquet_recorder(buffer.collect)
+
+                        started_at = dt.datetime.now(dt.timezone.utc)
+                        result = invoke(config, recorder_cls)
+                        ended_at = dt.datetime.now(dt.timezone.utc)
+
+                        # Raises if the harness returned fewer results than the plan
+                        # asked for, before anything is written. A short run must not
+                        # be recorded as though it completed.
+                        outcomes = rows_from_benchmark_result(result, group)
+                        if not recorder_cls.constructed:
+                            raise BridgeError(
+                                f"the harness ran {len(group)} episode(s) and never constructed "
+                                "the injected recorder, so `_build_recorder` was not consulted. "
+                                "The run would have completed, reported success and recorded "
+                                "nothing. Check whether the recorder gate in orchestrator.py "
+                                "still reads `self._store is None` -- "
+                                "scripts/verify_harness_claims.py checks exactly this."
+                            )
+                        buffer.clear()
+                        rows = [
+                            _row(
+                                outcome,
+                                scene,
+                                worker.worker_id,
+                                session_id=session_id,
+                                execution_mode=plan.execution_mode,
+                                harness_version=harness_version,
+                                harness_surface=harness_surface,
+                                server_url=servers[checkpoint_id],
+                                started_at=started_at,
+                                ended_at=ended_at,
+                            )
+                            for outcome in outcomes
+                        ]
+                        # The task is in the name because a worker now holds
+                        # many. Without it, ten tasks would write to one path and
+                        # each would replace the last -- 60 groups producing 6
+                        # files, and `verify_written` would not see it, because it
+                        # checks the file it just wrote.
+                        part = (
+                            f"{worker.worker_id.replace('/', '-')}"
+                            f"-{task_id.replace('/', '-')}"
+                            f"-{checkpoint_id}-seed{seed}"
+                        )
+                        path = writer.write_episodes(
+                            checkpoint_id, scene.scene_id, rows, part=part
+                        )
+                        written_paths = [path] if path else []
+                        writer.verify_written(
+                            {r["episode_id"] for r in rows},
+                            written_paths,
+                            worker_id=f"{worker.worker_id}/{checkpoint_id}/seed{seed}",
+                        )
+                        summary.parts.extend(written_paths)
+                        summary.written += len(rows)
+                        summary.invocations += 1
 
     return summary
 

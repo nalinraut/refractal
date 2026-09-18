@@ -367,15 +367,62 @@ class TestWhatItRefuses(LoopCase):
             self.run_loop(plan, FakeHarness(short_by=1), only=("pi0",))
         self.assertEqual(self.rows(plan), [])
 
-    def test_a_worker_spanning_two_tasks_is_refused(self):
-        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+    def test_a_worker_spanning_two_tasks_is_split_not_refused(self):
+        """It used to be refused. A scene is the compiled model and tasks are
+        cheap to vary on it, so one worker holding many is the normal case --
+        LIBERO-Spatial's ten tasks are one MjModel. The loop splits by task and
+        gives each its own invocation, because the harness's episode counter
+        restarts per task and `worker_selection` can only name one at a time."""
+        plan = make_plan(scenarios=4, checkpoints=("pi0",))
         worker = plan.scenes[0].workers[0]
-        mixed = list(worker.episodes)
-        mixed[0] = mixed[0].model_copy(update={"task_id": "1"})
-        object.__setattr__(worker, "episodes", mixed)
-        with self.assertRaises(BridgeError) as ctx:
-            self.run_loop(plan, FakeHarness(), only=("pi0",))
-        self.assertIn("2 tasks", str(ctx.exception))
+        # Two tasks, each with its own zero-based contiguous scenario range.
+        scene = plan.scenes[0]
+        extra = [
+            PlannedScenario(scenario_hash=f"sha256:b-s{i}", scenario_set_id="init",
+                            params={"init_state_index": i})
+            for i in range(4)
+        ]
+        object.__setattr__(scene, "scenarios", list(scene.scenarios) + extra)
+        second = [
+            e.model_copy(update={"task_id": "1", "instruction": "put the cup down",
+                                 "scenario_hash": f"sha256:b-s{i}",
+                                 "episode_id": f"sha256:second-{i}"})
+            for i, e in enumerate(worker.episodes)
+        ]
+        object.__setattr__(worker, "episodes", list(worker.episodes) + second)
+
+        harness = FakeHarness()
+        summary = self.run_loop(plan, harness, only=("pi0",))
+        self.assertEqual(summary.invocations, 2, "one invocation per task")
+        self.assertEqual(summary.written, 8)
+        self.assertEqual(
+            sorted(c["benchmarks"][0]["tasks"][0] for c in harness.configs),
+            ["put the bowl on the plate", "put the cup down"],
+        )
+
+    def test_each_task_gets_its_own_part_file(self):
+        """Ten tasks writing to one path would leave one file and `verify_written`
+        would not see it -- it checks the file it just wrote."""
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        scene = plan.scenes[0]
+        worker = scene.workers[0]
+        extra = [
+            PlannedScenario(scenario_hash=f"sha256:b-s{i}", scenario_set_id="init",
+                            params={"init_state_index": i})
+            for i in range(2)
+        ]
+        object.__setattr__(scene, "scenarios", list(scene.scenarios) + extra)
+        second = [
+            e.model_copy(update={"task_id": "1", "instruction": "put the cup down",
+                                 "scenario_hash": f"sha256:b-s{i}",
+                                 "episode_id": f"sha256:second-{i}"})
+            for i, e in enumerate(worker.episodes)
+        ]
+        object.__setattr__(worker, "episodes", list(worker.episodes) + second)
+        summary = self.run_loop(plan, FakeHarness(), only=("pi0",))
+        self.assertEqual(len(summary.parts), 2)
+        self.assertEqual(len({p for p in summary.parts}), 2)
+        self.assertEqual(len(self.rows(plan)), 4)
 
     def test_an_offset_scenario_range_is_refused_before_invoking(self):
         """check_index_contract, reached through the loop rather than directly."""
