@@ -160,3 +160,60 @@ kind:
 The third is the one this project was built for: "did my change help" is a
 question about two nearby things, and a 27-point gap does not need a clustered
 bootstrap to detect.
+
+## The step-budget run: a prediction made before it
+
+The finding above — that no LIBERO suite discriminates these two checkpoints —
+has an answer that costs a catalog edit rather than a new benchmark. `max_steps`
+is already in `task_hash`, so two budgets are already two experiments and cannot
+silently join.
+
+**The budget was chosen from the 600-episode run's own steps-to-success
+distribution**, not guessed:
+
+```
+  pi0   215/300 succeeded; steps p10=80 p25=90 p50=103 p75=117 p90=127 max=213
+  pi05  295/300 succeeded; steps p10=80 p25=89 p50=101 p75=117 p90=124 max=165
+```
+
+Counting a win only if it finished within a tighter budget:
+
+| budget | pi0 | pi0.5 |
+|---|---|---|
+| 220 (the harness default) | 71.7% | **98.3%** — ceiling |
+| 120 | 57.7% | 82.3% |
+| **100** | **32.0%** | **48.7%** |
+| 80 | 7.3% | 10.7% |
+
+100 puts both arms nearest 50%, where per-scenario variance is greatest and the
+design effect has the most to measure.
+
+### The prediction
+
+At `max_steps: 100`, **pi0 ≈ 32% and pi0.5 ≈ 49%**, a gap of about 17 points with
+both arms interior.
+
+This is a real prediction and it can be wrong, because it assumes a truncated
+rerun reproduces the step distribution of the untruncated one. The policies are
+not budget-aware — nothing about a 100-step cap changes what the policy does at
+step 40 — but they *are* stochastic, so the rerun draws new trajectories rather
+than replaying the old ones. The prediction is therefore about the **rate**, not
+about which episodes succeed.
+
+If the measured rates come back near these, the step distribution is stable and
+the budget knob is a reliable way to move a saturated comparison into range. If
+they come back far off, that is more interesting: it would mean truncation
+interacts with the policy in some way not visible in the step histogram.
+
+### What the run is for
+
+The thing the last run could not provide: **a design effect where both arms
+contribute variance.** At the default budget, eight of ten tasks had pi0.5 pinned
+at 100%, so `d = 1 − pi0` by arithmetic and the design effect measured one arm's
+homogeneity. Two genuine two-arm observations out of ten. At 100 steps every task
+should be a two-arm observation.
+
+It also changes the question from capability to **efficiency** — both policies can
+do these tasks, and the question becomes which does them in fewer steps. That is a
+different question and a real one, and it is the one this benchmark can still
+answer about these checkpoints.
