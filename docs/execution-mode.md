@@ -100,3 +100,39 @@ The boundary is recorded here instead, and it is checkable — `plan_id` is
 unaffected, so the affected rows are exactly those under comparison ids
 `sha256:374443dd…` (smoke, 4 episodes), `sha256:1b441de8…` (120 episodes) and
 `sha256:4605f47f…` (600 episodes).
+
+## What the first real `concurrent` run found
+
+A harness bug that only this mode could surface.
+
+`Orchestrator._update_progress` writes `<output_dir>/<benchmark_name>.tmp` and
+`os.replace`s it into place. The name depends only on the benchmark, so two
+orchestrators sharing an `output_dir` race on one temp path: the first replace
+succeeds, the second finds nothing, and the run dies with
+
+```
+FileNotFoundError: '/tmp/smoke2-harness/LIBEROBenchmark_libero_spatial.tmp'
+  -> '/tmp/smoke2-harness/LIBEROBenchmark_libero_spatial.progress'
+```
+
+Serial shares that directory too and never collides, because it is never in two
+places at once. No amount of testing `serial` would have found it, and the fake
+harness in the unit tests does not write progress files — the barrier test proves
+the invocations overlap, not that the harness tolerates overlapping.
+
+Fixed on our side: each invocation gets `<output_dir>/<checkpoint>/<task>/seed<N>`
+as its scratch directory. `output_dir` is ours to choose, and a harness scratch
+directory assuming one orchestrator is a reasonable thing for it to assume.
+Refractal's own results never go there; they go to the results URI as Parquet.
+
+Verified after the fix, 8 episodes, one scene, two tasks, two arms in parallel:
+
+```
+  task-0  pi0   ok=True  mode=concurrent concurrent_with='pi05'   5.3s
+  task-0  pi05  ok=True  mode=concurrent concurrent_with='pi0'    5.2s
+  task-1  pi0   ok=True  mode=concurrent concurrent_with='pi05'   6.4s
+  task-1  pi05  ok=True  mode=concurrent concurrent_with='pi0'    5.9s
+```
+
+Each arm names the other, `execution_mode` is the mode that ran, and the durations
+carry the contention flag that says not to compare them with uncontended ones.

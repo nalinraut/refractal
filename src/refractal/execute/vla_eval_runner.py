@@ -197,11 +197,28 @@ def _run_group(
     cannot target one file.
     """
     check_index_contract(group, scenarios)
+    # A scratch directory per invocation, not per run.
+    #
+    # The harness writes a progress file at `<output_dir>/<benchmark_name>.tmp`
+    # and then `os.replace`s it into place. The name depends only on the
+    # benchmark, so two orchestrators sharing an output_dir race on one temp
+    # path: the first replace succeeds, the second finds nothing and the run dies
+    # with FileNotFoundError on `LIBEROBenchmark_libero_spatial.tmp`.
+    #
+    # Found by the first real `concurrent` run, which is the only thing that
+    # could find it -- serial shares the directory too and never collides,
+    # because it is never in two places at once.
+    #
+    # Fixed here rather than upstream because output_dir is ours to choose, and
+    # a harness scratch directory being single-orchestrator is a reasonable thing
+    # for it to assume. Refractal's own results do not go here; they go to the
+    # results URI as Parquet.
+    scratch = f"{output_dir.rstrip('/')}/{checkpoint_id}/{task_id}/seed{seed}"
     config = build_eval_config(
         scene=scene,
         episodes=group,
         server_url=servers[checkpoint_id],
-        output_dir=output_dir,
+        output_dir=scratch,
         max_steps=_max_steps(group),
     )
     buffer = StepBuffer()
