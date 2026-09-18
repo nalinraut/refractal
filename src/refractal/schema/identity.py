@@ -277,8 +277,14 @@ def experiment_identity(
     ``tier`` *is* included, because it changes which scenarios exist. That has a
     cost worth stating: a smoke run and a full run of the same catalog get
     different ids, so the smoke results cannot be reused as a head start on the
-    full run even though the smoke set is a strict subset of it. Worth
-    revisiting if tier-promotion turns out to matter in practice.
+    full run even though the smoke set is a strict subset of it.
+
+    **This is an open question and a release blocker**, written up in
+    ``docs/question-tier-in-identity.md`` rather than left as an aside here. The
+    subsetting is deterministic and nested, so the overlap is exactly known rather
+    than statistical, which is what makes promotion arguable at all. What settles
+    it is whether anyone wants tier promotion in practice -- a usage question, not
+    a design one.
     """
     return {
         "scenes": sorted(
