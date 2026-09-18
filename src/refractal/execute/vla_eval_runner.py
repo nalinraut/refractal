@@ -40,6 +40,7 @@ overwrites, verified rather than assumed.
 from __future__ import annotations
 
 import datetime as dt
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -107,6 +108,7 @@ def _row(
     server_url: str,
     started_at: dt.datetime,
     ended_at: dt.datetime,
+    concurrent_with: str | None,
 ) -> dict[str, Any]:
     """One Parquet row.
 
@@ -130,6 +132,7 @@ def _row(
         "worker_id": worker_id,
         "execution_mode": execution_mode,
         "server_url": server_url,
+        "concurrent_with": concurrent_with,
         "harness_version": harness_version,
         "harness_surface": harness_surface,
         "success": row.success,
@@ -161,6 +164,92 @@ def _max_steps(episodes: list[PlannedEpisode]) -> int:
             "task_hash would make the recorded identity a lie."
         )
     return limits.pop()
+
+
+def _run_group(
+    group: list[PlannedEpisode],
+    *,
+    scene: PlannedScene,
+    worker_id: str,
+    task_id: str,
+    checkpoint_id: str,
+    seed: int,
+    scenarios: Mapping[str, Any],
+    servers: Mapping[str, str],
+    output_dir: str,
+    invoke: "Invoke",
+    writer: ResultWriter,
+    session_id: str,
+    execution_mode: str,
+    harness_version: str,
+    harness_surface: str,
+    concurrent_with: str | None,
+) -> tuple[int, str | None]:
+    """One harness invocation, start to written rows. Returns (rows, part path).
+
+    Extracted so `serial` and `concurrent` share it exactly. The modes differ in
+    *ordering* and nothing else -- if they differed in what an invocation does,
+    the mode would be changing the measurement rather than describing it.
+
+    Thread-safe by not sharing anything: each call builds its own recorder class,
+    its own buffer and its own config, and `ResultWriter.write_episodes` writes to
+    a path that includes the task, checkpoint and seed, so two concurrent calls
+    cannot target one file.
+    """
+    check_index_contract(group, scenarios)
+    config = build_eval_config(
+        scene=scene,
+        episodes=group,
+        server_url=servers[checkpoint_id],
+        output_dir=output_dir,
+        max_steps=_max_steps(group),
+    )
+    buffer = StepBuffer()
+    recorder_cls = make_parquet_recorder(buffer.collect)
+
+    started_at = dt.datetime.now(dt.timezone.utc)
+    result = invoke(config, recorder_cls)
+    ended_at = dt.datetime.now(dt.timezone.utc)
+
+    outcomes = rows_from_benchmark_result(result, group)
+    if not recorder_cls.constructed:
+        raise BridgeError(
+            f"the harness ran {len(group)} episode(s) and never constructed the injected "
+            "recorder, so `_build_recorder` was not consulted. The run would have "
+            "completed, reported success and recorded nothing. Check whether the recorder "
+            "gate in orchestrator.py still reads `self._store is None` -- "
+            "scripts/verify_harness_claims.py checks exactly this."
+        )
+    buffer.clear()
+
+    rows = [
+        _row(
+            outcome,
+            scene,
+            worker_id,
+            session_id=session_id,
+            execution_mode=execution_mode,
+            harness_version=harness_version,
+            harness_surface=harness_surface,
+            server_url=servers[checkpoint_id],
+            started_at=started_at,
+            ended_at=ended_at,
+            concurrent_with=concurrent_with,
+        )
+        for outcome in outcomes
+    ]
+    part = (
+        f"{worker_id.replace('/', '-')}"
+        f"-{task_id.replace('/', '-')}"
+        f"-{checkpoint_id}-seed{seed}"
+    )
+    path = writer.write_episodes(checkpoint_id, scene.scene_id, rows, part=part)
+    writer.verify_written(
+        {r["episode_id"] for r in rows},
+        [path] if path else [],
+        worker_id=f"{worker_id}/{task_id}/{checkpoint_id}/seed{seed}",
+    )
+    return len(rows), path
 
 
 def run_vla_eval(
@@ -213,87 +302,82 @@ def run_vla_eval(
         for worker in scene.workers:
             for task_id in sorted({e.task_id for e in worker.episodes}):
                 for_task = [e for e in worker.episodes if e.task_id == task_id]
-                for checkpoint_id in sorted({e.checkpoint_id for e in for_task}):
-                    for_checkpoint = [
-                        e for e in for_task if e.checkpoint_id == checkpoint_id
-                    ]
-                    for seed, group in sorted(group_by_seed(for_checkpoint).items()):
-                        if all(e.episode_id in already for e in group):
-                            summary.skipped += len(group)
+                checkpoints = sorted({e.checkpoint_id for e in for_task})
+
+                def job(checkpoint_id: str, seed: int, group: list[PlannedEpisode],
+                        alongside: list[str]):
+                    return _run_group(
+                        group,
+                        scene=scene,
+                        worker_id=worker.worker_id,
+                        task_id=task_id,
+                        checkpoint_id=checkpoint_id,
+                        seed=seed,
+                        scenarios=scenarios,
+                        servers=servers,
+                        output_dir=output_dir,
+                        invoke=invoke,
+                        writer=writer,
+                        session_id=session_id,
+                        execution_mode=plan.execution_mode,
+                        harness_version=harness_version,
+                        harness_surface=harness_surface,
+                        concurrent_with=",".join(sorted(alongside)) or None,
+                    )
+
+                if plan.execution_mode == "concurrent":
+                    # Both checkpoints at once, each against its own server. One
+                    # thread per checkpoint: `invoke` is synchronous and the real
+                    # one calls anyio.run, which needs its own thread rather than
+                    # a shared event loop.
+                    #
+                    # Ordered seed-outer so the arms contend with each other
+                    # rather than with a different seed of themselves.
+                    for seed in sorted({e.seed for e in for_task}):
+                        batch = []
+                        for checkpoint_id in checkpoints:
+                            group = [
+                                e for e in for_task
+                                if e.checkpoint_id == checkpoint_id and e.seed == seed
+                            ]
+                            if not group or all(e.episode_id in already for e in group):
+                                summary.skipped += len(group)
+                                continue
+                            batch.append((checkpoint_id, group))
+                        if not batch:
                             continue
-
-                        # Whole group or nothing: the harness counts from zero, so a
-                        # partially-done group has to be re-run in full and its part
-                        # file replaced rather than added to.
-                        check_index_contract(group, scenarios)
-                        config = build_eval_config(
-                            scene=scene,
-                            episodes=group,
-                            server_url=servers[checkpoint_id],
-                            output_dir=output_dir,
-                            max_steps=_max_steps(group),
-                        )
-                        # steps.parquet is deferred until after the first real run,
-                        # so nothing drains this buffer. The receipt for the injection
-                        # is `recorder_cls.constructed`, not the buffer -- see below.
-                        buffer = StepBuffer()
-                        recorder_cls = make_parquet_recorder(buffer.collect)
-
-                        started_at = dt.datetime.now(dt.timezone.utc)
-                        result = invoke(config, recorder_cls)
-                        ended_at = dt.datetime.now(dt.timezone.utc)
-
-                        # Raises if the harness returned fewer results than the plan
-                        # asked for, before anything is written. A short run must not
-                        # be recorded as though it completed.
-                        outcomes = rows_from_benchmark_result(result, group)
-                        if not recorder_cls.constructed:
-                            raise BridgeError(
-                                f"the harness ran {len(group)} episode(s) and never constructed "
-                                "the injected recorder, so `_build_recorder` was not consulted. "
-                                "The run would have completed, reported success and recorded "
-                                "nothing. Check whether the recorder gate in orchestrator.py "
-                                "still reads `self._store is None` -- "
-                                "scripts/verify_harness_claims.py checks exactly this."
-                            )
-                        buffer.clear()
-                        rows = [
-                            _row(
-                                outcome,
-                                scene,
-                                worker.worker_id,
-                                session_id=session_id,
-                                execution_mode=plan.execution_mode,
-                                harness_version=harness_version,
-                                harness_surface=harness_surface,
-                                server_url=servers[checkpoint_id],
-                                started_at=started_at,
-                                ended_at=ended_at,
-                            )
-                            for outcome in outcomes
+                        alongside = [c for c, _ in batch]
+                        with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+                            futures = [
+                                pool.submit(job, c, seed, g,
+                                            [o for o in alongside if o != c])
+                                for c, g in batch
+                            ]
+                            for future in futures:
+                                written, path = future.result()
+                                summary.written += written
+                                if path:
+                                    summary.parts.append(path)
+                                summary.invocations += 1
+                else:
+                    # serial: all seeds for one checkpoint, then the next. The
+                    # ordering is the mode, so this stays checkpoint-outer --
+                    # reordering it to alternate would be interleaved execution
+                    # recorded as serial, which is the mislabelling this whole
+                    # definition exists to remove.
+                    for checkpoint_id in checkpoints:
+                        for_checkpoint = [
+                            e for e in for_task if e.checkpoint_id == checkpoint_id
                         ]
-                        # The task is in the name because a worker now holds
-                        # many. Without it, ten tasks would write to one path and
-                        # each would replace the last -- 60 groups producing 6
-                        # files, and `verify_written` would not see it, because it
-                        # checks the file it just wrote.
-                        part = (
-                            f"{worker.worker_id.replace('/', '-')}"
-                            f"-{task_id.replace('/', '-')}"
-                            f"-{checkpoint_id}-seed{seed}"
-                        )
-                        path = writer.write_episodes(
-                            checkpoint_id, scene.scene_id, rows, part=part
-                        )
-                        written_paths = [path] if path else []
-                        writer.verify_written(
-                            {r["episode_id"] for r in rows},
-                            written_paths,
-                            worker_id=f"{worker.worker_id}/{checkpoint_id}/seed{seed}",
-                        )
-                        summary.parts.extend(written_paths)
-                        summary.written += len(rows)
-                        summary.invocations += 1
+                        for seed, group in sorted(group_by_seed(for_checkpoint).items()):
+                            if all(e.episode_id in already for e in group):
+                                summary.skipped += len(group)
+                                continue
+                            written, path = job(checkpoint_id, seed, group, [])
+                            summary.written += written
+                            if path:
+                                summary.parts.append(path)
+                            summary.invocations += 1
 
     return summary
 

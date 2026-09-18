@@ -70,6 +70,18 @@ EPISODES_SCHEMA = pa.schema(
         # pointed at one server -- is preventable before a run and otherwise
         # unreconstructable after it, and `artifact_uri` is for artifacts.
         pa.field("server_url", pa.string()),
+        # Which OTHER checkpoints were running while this episode ran, sorted and
+        # comma-joined; empty when nothing else was.
+        #
+        # Contention is a property of the run, not of the deployment. A success
+        # rate measured under contention is fine; a duration measured under it is
+        # not comparable with one measured alone, and `elapsed_sec` is in the same
+        # row. Without this column the only way to know is to trust
+        # `execution_mode`, which is exactly the field that was wrong.
+        #
+        # Provenance, not identity: contention does not change what an episode
+        # means, so it must never gate a join.
+        pa.field("concurrent_with", pa.string()),
         # Two columns, one of each kind. `harness_version` is provenance: human
         # readable, never gates. `harness_surface` is a precondition: a digest
         # over only the harness modules Refractal depends on, so it stays

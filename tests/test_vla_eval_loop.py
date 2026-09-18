@@ -133,7 +133,7 @@ def make_plan(*, scenarios=3, seeds=(0,), checkpoints=("pi0", "pi05"), scenes=("
         catalog_hash="sha256:catalog",
         refractal_version="0.0.0",
         hardware_profile="alienware",
-        execution_mode="interleaved",
+        execution_mode="serial",
         checkpoints=[],
         tier="full",
         seeds=list(seeds),
@@ -617,6 +617,86 @@ class TestAPlanRoundTripsIntoARunnableConfig(unittest.TestCase):
         # refusal is the assertion: it proves the plan reached the point of being
         # rejected for the right reason rather than for a missing field.
         self.assertTrue(all(s.external is None for s in reloaded.scenes))
+
+
+class TestConcurrentMode(LoopCase):
+    """Both checkpoints at once, each against its own server.
+
+    The mode nothing used before, and the one the eval team wants: it halves wall
+    clock. It is also the only mode that needs a column the others do not, because
+    contention is a property of the run and a duration measured under it is not
+    comparable with one measured alone.
+    """
+
+    def _plan(self, **kw):
+        plan = make_plan(**kw)
+        object.__setattr__(plan, "execution_mode", "concurrent")
+        return plan
+
+    def test_the_arms_actually_overlap_in_time(self):
+        """The claim the mode is named for, measured rather than assumed.
+
+        A fake that blocks proves the two invocations are in flight together; a
+        fake that returns instantly would pass against a sequential loop too.
+        """
+        import threading
+
+        barrier = threading.Barrier(2, timeout=5)
+
+        class Overlapping(FakeHarness):
+            def __call__(self, config, recorder_cls):
+                # Both threads must arrive, or this raises BrokenBarrierError.
+                barrier.wait()
+                return super().__call__(config, recorder_cls)
+
+        plan = self._plan(scenarios=2, seeds=(0,), checkpoints=("pi0", "pi05"))
+        summary = self.run_loop(plan, Overlapping())
+        self.assertEqual(summary.invocations, 2)
+        self.assertEqual(summary.written, 4)
+
+    def test_each_row_records_what_it_contended_with(self):
+        plan = self._plan(scenarios=2, seeds=(0,), checkpoints=("pi0", "pi05"))
+        self.run_loop(plan, FakeHarness())
+        by_arm = {}
+        for row in self.rows(plan):
+            by_arm.setdefault(row["checkpoint_id"], set()).add(row["concurrent_with"])
+        self.assertEqual(by_arm["pi0"], {"pi05"})
+        self.assertEqual(by_arm["pi05"], {"pi0"})
+
+    def test_serial_records_no_contention(self):
+        """The column has to distinguish, or it is decoration."""
+        plan = make_plan(scenarios=2, seeds=(0,), checkpoints=("pi0", "pi05"))
+        self.assertEqual(plan.execution_mode, "serial")
+        self.run_loop(plan, FakeHarness())
+        self.assertEqual({r["concurrent_with"] for r in self.rows(plan)}, {None})
+
+    def test_the_mode_is_recorded_on_every_row(self):
+        plan = self._plan(scenarios=2, seeds=(0,), checkpoints=("pi0", "pi05"))
+        self.run_loop(plan, FakeHarness())
+        self.assertEqual({r["execution_mode"] for r in self.rows(plan)}, {"concurrent"})
+
+    def test_concurrent_writes_the_same_episodes_as_serial(self):
+        """Ordering is the only difference. If the modes disagreed about what ran,
+        the mode would be changing the measurement rather than describing it."""
+        serial_plan = make_plan(scenarios=3, seeds=(0, 1), checkpoints=("pi0", "pi05"))
+        self.run_loop(serial_plan, FakeHarness())
+        serial_ids = sorted(r["episode_id"] for r in self.rows(serial_plan))
+
+        self.tmp = tempfile.mkdtemp()
+        self.results = str(Path(self.tmp) / "results")
+        conc_plan = self._plan(scenarios=3, seeds=(0, 1), checkpoints=("pi0", "pi05"))
+        self.run_loop(conc_plan, FakeHarness())
+        conc_ids = sorted(r["episode_id"] for r in self.rows(conc_plan))
+
+        self.assertEqual(serial_ids, conc_ids)
+        self.assertEqual(len(conc_ids), len(set(conc_ids)))
+
+    def test_resume_still_skips_completed_groups(self):
+        plan = self._plan(scenarios=2, seeds=(0,), checkpoints=("pi0", "pi05"))
+        self.run_loop(plan, FakeHarness())
+        summary = self.run_loop(plan, FakeHarness(), session_id="bbbb-second")
+        self.assertEqual(summary.invocations, 0)
+        self.assertEqual(summary.skipped, 4)
 
 
 if __name__ == "__main__":

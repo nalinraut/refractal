@@ -115,7 +115,7 @@ run:
       vram_mb: 0
   seeds: 3          # separates "is this scenario hard" from "did the policy get lucky"
   tier: full        # smoke | regression | full
-  execution_mode: interleaved
+  execution_mode: serial
   results_uri: ./results
 """
 

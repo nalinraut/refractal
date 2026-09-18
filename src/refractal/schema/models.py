@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .errors import NotImplementedInV1
 from .importstr import validate_import_string
@@ -471,7 +471,53 @@ class Run(Strict):
     seed_base: int = 0
     tier: Literal["smoke", "regression", "full"] = "full"
     scenario_sets: list[Id] | None = None
-    execution_mode: Literal["interleaved", "serial"] = "interleaved"
+    #: Defined by episode ordering, not by how the servers are deployed.
+    #:
+    #: ``serial``
+    #:     All tasks for checkpoint A, then all tasks for checkpoint B. The only
+    #:     option when VRAM cannot hold both policies at once.
+    #: ``concurrent``
+    #:     Both checkpoints at the same time, each against its own server. Halves
+    #:     wall clock. Arms contend, so durations are not comparable and the rows
+    #:     record which other checkpoints were running alongside.
+    #:
+    #: ``interleaved`` is deliberately absent. It existed to remove within-session
+    #: drift, and drift was measured at zero: across ten tasks and three replicate
+    #: positions, the pooled rank correlation between position and cell rate was
+    #: +0.027 (p=0.839) for pi0 and +0.132 (p=0.230) for pi0.5, with the contrast
+    #: at +0.046 (p=0.723). See docs/ten-task-run.md. A third mode whose only
+    #: justification does not hold is a default somebody picks for a reason that
+    #: is not true.
+    #:
+    #: Never in ``plan_id``: two runs of one experiment in different modes belong
+    #: in one comparison, so this is recorded per episode and `compare` gates
+    #: latency reporting on it rather than refusing the join.
+    execution_mode: Literal["serial", "concurrent"] = "serial"
+
+    @field_validator("execution_mode", mode="before")
+    @classmethod
+    def _explain_interleaved(cls, value: Any) -> Any:
+        """`interleaved` is refused with its history rather than aliased.
+
+        Aliasing it to `serial` would be the right guess -- the old
+        deployment-shaped definition was recorded on runs that executed serially
+        -- and it would also relabel someone's catalog without telling them. The
+        author asked for a mode that no longer exists; which of the two they
+        meant is their call, not a default.
+        """
+        if value == "interleaved":
+            raise ValueError(
+                "execution_mode 'interleaved' no longer exists. It was defined by "
+                "whether both servers stayed resident, which is a property of the "
+                "deployment rather than of the run and distinguished nothing -- a "
+                "serial run with two servers up had it too. Its successor was to be "
+                "task-outer ordering, to remove within-session drift; drift was then "
+                "measured at zero (ten tasks, three replicate positions, rank "
+                "correlation +0.027 at p=0.839). Choose 'serial' (all tasks for one "
+                "checkpoint, then the next) or 'concurrent' (both at once, each "
+                "against its own server). See docs/execution-mode.md."
+            )
+        return value
     max_concurrent_checkpoints: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")

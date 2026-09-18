@@ -15,5 +15,5 @@ run:
       vram_mb: 8192
   seeds: 3
   tier: regression
-  execution_mode: interleaved
+  execution_mode: serial
   results_uri: ./results

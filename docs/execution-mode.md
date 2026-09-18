@@ -6,8 +6,48 @@ deployed.
 | Mode | What happens | Why you would pick it |
 |---|---|---|
 | `serial` | All tasks for checkpoint A, then all tasks for checkpoint B. | The only option when VRAM cannot hold both policies at once. |
-| `interleaved` | For each task: checkpoint A, then checkpoint B, then the next task. | Arms face the same machine conditions per task rather than per session. |
 | `concurrent` | Both checkpoints at once, each against its own server. | Halves wall clock. Arms contend, so durations are not comparable. |
+
+**Two modes, not three.** `interleaved` was to be task-outer ordering, to remove
+within-session drift. Drift was then measured at zero — ten tasks, three
+replicate positions, pooled rank correlation +0.027 at p=0.839 for pi0 and +0.132
+at p=0.230 for pi0.5, contrast +0.046 at p=0.723 (`docs/ten-task-run.md`). A mode
+whose only justification does not hold is a default somebody picks for a reason
+that is not true, so it was not built and the invocation overhead it would cost
+was not estimated — that would have been a number nobody could check, attached to
+a mode nobody should use.
+
+A catalog that still says `interleaved` is **refused with that history**, not
+aliased to `serial`. Aliasing would be the right guess and would also relabel
+someone's catalog without telling them; which of the two they meant is their
+call.
+
+## What the modes may not differ in
+
+Ordering, and nothing else. Both modes call one shared `_run_group`, so an
+invocation does the same thing either way. If they differed in what an invocation
+*does*, the mode would be changing the measurement rather than describing it —
+and a test asserts the two write exactly the same episode ids.
+
+`serial` stays checkpoint-outer within a task for the same reason. Reordering it
+to alternate would be interleaved execution recorded as serial, which is the
+mislabelling this definition exists to remove.
+
+## `concurrent_with`
+
+A column the other mode does not need. It records which other checkpoints were
+running while this episode ran, sorted and comma-joined, empty when nothing was.
+
+Provenance, never identity: contention does not change what an episode means, so
+it must not gate a join. But `elapsed_sec` sits in the same row, and a duration
+measured under contention is not comparable with one measured alone. Without the
+column the only way to know is to trust `execution_mode` — which is the field
+that was wrong.
+
+The overlap is tested by a barrier that both invocations must reach, so it fails
+if the loop runs them sequentially. Routed down the serial path it raises
+`BrokenBarrierError`, which is the point: a fake that returned instantly would
+have passed either way.
 
 ## The error this replaces
 
