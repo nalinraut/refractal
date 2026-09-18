@@ -21,15 +21,7 @@ PYTHONPATH=src python -m unittest discover -s tests -t .
 rm -rf dist && uv build
 
 # 3. Verify the artifacts, not the source tree.
-python - <<'PY'
-import zipfile
-names = zipfile.ZipFile("dist/refractal-<version>-py3-none-any.whl").namelist()
-pkgs = sorted({n.split("/")[1] for n in names if n.startswith("refractal/") and "/" in n[11:]})
-# Every subpackage, listed explicitly. Update this when one is ADDED -- `render`
-# was added and this assertion kept the old five, so it would have failed on a
-# correct wheel. A stale allow-list fails safe; it still has to be maintained.
-assert pkgs == ["build", "compare", "execute", "render", "resolve", "schema"], pkgs
-PY
+python scripts/verify_wheel.py dist/*.whl
 twine check dist/*
 
 # 4. Install the wheel into a clean venv and run the seconds test from it.
