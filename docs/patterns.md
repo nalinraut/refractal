@@ -264,6 +264,65 @@ The stub probe in the new test deliberately returns facts that do not depend on
 facts-only digest pass too — the fixture failing to exercise the property, one
 layer down, which is the trap the rest of this document is about.
 
+## A statistical property pinned to one pseudo-random draw
+
+Found while adding a field to `task_identity`. Three statistics tests failed:
+
+```
+AssertionError: 0.06565060092190661 not less than 0.05
+AssertionError: -0.0026400560224089514 not greater than 0.01066666666666667
+AssertionError: False is not true
+```
+
+Nothing was wrong with the statistics. `FakeBenchmark` seeds each episode's
+outcome from its `episode_id`, which derives from `task_hash` — so adding
+`provider_ref` to task identity reshuffled every synthetic outcome in the suite.
+The tests were asserting properties of one particular pseudo-random dataset,
+selected by a hardcoded salt.
+
+Two different problems wearing one costume, and they need different fixes.
+
+**A demonstration of a specific phenomenon** — "here is a draw where the
+unclustered test declares a false finding", "here is a draw where McNemar and the
+bootstrap disagree" — is *inherently* about a particular dataset. The fixture
+must therefore **search for a qualifying draw and fail loudly if none exists**:
+
+```python
+for salt in candidate_salts:
+    units = build(salt)
+    if wrong_test_fires(units) and correct_test_stays_null(units):
+        break
+else:
+    self.fail("no draw exhibits the anti-conservatism this class demonstrates: ...")
+```
+
+"No draw disagrees" is a real finding — it would mean the two tests had stopped
+being distinguishable, which is the entire reason the gate chooses between them.
+"0.0657 is not less than 0.05" is a maintenance chore wearing a finding's
+clothes, and the difference between those two failure messages is the whole
+value.
+
+**A calibration claim** — "the measured excess tracks the modelled variance" —
+is not about a draw at all. A single draw's excess is itself a random variable;
+one reshuffle produced −0.0026 against a modelled 0.0107, which is one sample of
+a noisy quantity rather than a calibration failure. Asserting it on a pinned draw
+was a claim about that draw. Averaging over twelve fixes it, and the failure
+message now prints the individual values so a real drift is distinguishable from
+one unlucky sample.
+
+The generalisation, which is not the same as the earlier entries — those are
+about fixtures that fail to exercise a property. This one is about a fixture that
+exercised the property *by coincidence*:
+
+> If a test would break when an unrelated identity field changes, it is asserting
+> on the draw rather than on the property. Ask whether the claim is "this dataset
+> has property P" or "datasets like this have property P". The first must search
+> and report when it cannot find; the second must average.
+
+The tell is cheap to check: change something upstream that should be irrelevant
+and see what breaks. Here the upstream change was adding a field to a hash, and
+it found three.
+
 ## Enforced where it can be
 
 `tests/test_resolve.py::TestTheDefaultFixtureExercisesItsInvariants` asserts the

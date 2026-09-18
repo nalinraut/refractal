@@ -118,14 +118,43 @@ class SceneEntry(Strict):
     facts: dict[str, Any] = Field(default_factory=dict)
 
 
+class TaskEntry(Strict):
+    """Facts about a task that only the provider can answer.
+
+    The mirror of ``SceneEntry`` for goals rather than geometry. ``task_hash``
+    covers instruction, predicate, arguments, step limit and phases -- complete
+    for a task whose goal those fields *define*, and empty for one using
+    ``from_benchmark``, where the benchmark owns the definition.
+
+    For LIBERO that means the BDDL digest and the init-state array digest. The
+    init states live here rather than on the scene because ``get_task_init_states``
+    is keyed by ``task_id``: the array is task content, and it is MjData, which
+    a scene hash was never for.
+    """
+
+    task_id: str
+    task_hash: str
+    #: What the hash was computed over, recorded for the same reason a scene's
+    #: facts are: a changed task_hash should be explainable by diffing two locks
+    #: rather than by re-deriving it.
+    facts: dict[str, Any] = Field(default_factory=dict)
+    #: The authored fields this was recorded against. Editing the instruction
+    #: makes the entry stale, because the instruction is also the selector.
+    authored_key: str | None = None
+
+
 class BuildLock(Strict):
     lock_schema: int = LOCK_SCHEMA
     scenes: list[SceneEntry] = Field(default_factory=list)
+    tasks: list[TaskEntry] = Field(default_factory=list)
     filters: list[FilterEntry] = Field(default_factory=list)
     shapes: list[ShapeEntry] = Field(default_factory=list)
     built_at: str | None = None
 
     #: Set by :func:`load_lock`; the scene hashes the filters were keyed against.
+    def task_entry(self, task_id: str) -> "TaskEntry | None":
+        return next((t for t in self.tasks if t.task_id == task_id), None)
+
     def filter_survivors(self, scenario_set: ScenarioSet) -> set[str]:
         entry = next(
             (f for f in self.filters if f.scenario_set_id == scenario_set.id), None

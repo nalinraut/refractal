@@ -63,7 +63,7 @@ def scenario_hash(
     return hash_obj(scenario_identity(params, faults))
 
 
-def task_identity(task: Task) -> dict[str, Any]:
+def task_identity(task: Task, content: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Task identity by content.
 
     ``id`` and ``description`` are excluded on purpose: renaming a task or
@@ -73,21 +73,45 @@ def task_identity(task: Task) -> dict[str, Any]:
 
     Two tasks whose identities collide are, by this definition, the same task
     run under two names -- which is true, and harmless.
+
+    ``content`` closes a gap in the original design
+    -----------------------------------------------
+
+    The five authored fields are complete for a task whose goal is *defined* by
+    them: a predicate over observations, with arguments.
+
+    They are empty for a task whose goal is opaque to all three.
+    ``from_benchmark`` is a passthrough -- the benchmark decides whether its own
+    task succeeded -- so ``predicate`` is a constant, ``predicate_args`` is
+    ``{}``, and the only thing separating two goals is ``instruction``: a
+    human-readable string a benchmark release could keep while moving the goal
+    region underneath it.
+
+    So ``build`` supplies what only the provider can answer -- for LIBERO, the
+    BDDL digest and the init-state array digest -- and it is hashed here. An
+    empty mapping hashes identically to ``None``, so a task with no content
+    keeps the identity it had.
     """
-    return {
+    document = {
         "instruction": task.instruction,
         "predicate": task.predicate,
         "predicate_args": task.predicate_args,
         "max_steps": task.max_steps,
+        "provider_ref": task.provider_ref,
         "phases": [
             {"name": p.name, "predicate": p.predicate, "predicate_args": p.predicate_args}
             for p in task.phases
         ],
     }
+    if content:
+        # Only when non-empty, so every task_hash recorded before this existed
+        # stays valid. A task whose goal IS its authored fields is unaffected.
+        document["content"] = dict(content)
+    return document
 
 
-def task_hash(task: Task) -> str:
-    return hash_obj(task_identity(task))
+def task_hash(task: Task, content: Mapping[str, Any] | None = None) -> str:
+    return hash_obj(task_identity(task, content))
 
 
 def _scene_files(catalog_root: Path, scene: Scene) -> list[Path]:

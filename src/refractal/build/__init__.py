@@ -51,13 +51,20 @@ from ..resolve.lock import (
     BuildLock,
     FilterEntry,
     SceneEntry,
+    TaskEntry,
     ShapeEntry,
     filter_key,
     filter_source_sha,
 )
 from ..schema.errors import CatalogError, RefractalError
 from ..schema.canonical import hash_obj
-from ..schema.identity import external_scene_ref_key, scenario_hash, scene_hash
+from ..schema.identity import (
+    external_scene_ref_key,
+    scenario_hash,
+    scene_hash,
+    task_hash,
+    task_identity,
+)
 from ..schema.importstr import check_arity, resolve_import_string
 from ..schema.loader import Catalog, load_catalog
 from ..schema.models import ResourceShape, Scene
@@ -247,6 +254,55 @@ def build(
                 model_hash=digest,
                 engine_version=version,
             )
+        )
+
+    # --- 2b: task content, for goals the Task table cannot express ------
+    #
+    # `task_hash` covers instruction, predicate, arguments, step limit and
+    # phases -- complete for a task those fields DEFINE, and empty for one using
+    # `from_benchmark`, where the benchmark owns the definition. For a LIBERO
+    # task that leaves `instruction` as the only discriminator: a string a
+    # release could keep while moving the goal region underneath it.
+    #
+    # So the probe is asked, the same way it is asked for an external scene's
+    # facts, and the answer is hashed into `task_hash`. Probes that do not
+    # implement the hook are unaffected and their tasks keep the identity they
+    # had -- an empty content mapping hashes identically to none.
+    for task in catalog.tasks:
+        scene = catalog.scene(task.scene)
+        if not scene.is_external or probe is None:
+            continue
+        supplier = getattr(probe, "task_facts", None)
+        if supplier is None:
+            report.warnings.append(
+                f"task {task.id!r} runs on an externally-defined scene and its predicate "
+                f"is {task.predicate!r}, but the probe supplies no task_facts. Its "
+                "task_hash covers only the authored fields, so a provider release that "
+                "moved this goal without editing the instruction would not move any "
+                "identity."
+            )
+            continue
+        facts = supplier(scene, task)
+        if not isinstance(facts, dict):
+            raise BuildError(
+                f"the probe returned {type(facts).__name__} for task {task.id!r}; "
+                "task_facts must return a dict of the facts that define the goal. "
+                "Refractal hashes it -- a probe that returns a digest would be a second "
+                "implementation of the canonicalisation."
+            )
+        if not facts:
+            continue
+        report.lock.tasks.append(
+            TaskEntry(
+                task_id=task.id,
+                task_hash=task_hash(task, facts),
+                facts=facts,
+                authored_key=hash_obj(task_identity(task)),
+            )
+        )
+    if report.lock.tasks:
+        report.notes.append(
+            f"recorded provider facts for {len(report.lock.tasks)} task(s)"
         )
 
     # --- 3: filters, evaluated here because they may need the engine ----

@@ -20,7 +20,13 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping, Sequence
 
 from ..schema.errors import CatalogError, GeneratorError
-from ..schema.identity import episode_id, scenario_hash, task_hash
+from ..schema.canonical import hash_obj
+from ..schema.identity import (
+    episode_id,
+    scenario_hash,
+    task_hash,
+    task_identity,
+)
 from ..schema.importstr import resolve_import_string
 from ..schema.loader import Catalog
 from ..schema.models import ScenarioSet
@@ -224,8 +230,39 @@ def expand_episodes(
     return episodes
 
 
-def task_hashes_for(catalog: Catalog) -> dict[str, str]:
-    return {task.id: task_hash(task) for task in catalog.tasks}
+def task_hashes_for(catalog: Catalog, lock=None) -> dict[str, str]:
+    """Task hashes, taking provider-supplied content from the lock when present.
+
+    Same shape as scene hashes for external scenes: the authored fields are
+    readable on a laptop, the provider's facts are not, so `build` records them
+    and `resolve` reads them back. A task with no lock entry hashes exactly as it
+    did before the hook existed.
+
+    **Staleness is checked, not assumed.** The entry records the authored fields
+    it was built against; if those moved, the recorded facts may describe a
+    different goal. Editing an instruction is the case that matters, because the
+    instruction is also the harness's task selector -- so a stale entry is not a
+    cosmetic mismatch, it can mean the recorded content belongs to a task the run
+    will not execute.
+    """
+    hashes: dict[str, str] = {}
+    for task in catalog.tasks:
+        entry = lock.task_entry(task.id) if lock is not None else None
+        if entry is None:
+            hashes[task.id] = task_hash(task)
+            continue
+        if entry.authored_key is not None and entry.authored_key != hash_obj(
+            task_identity(task)
+        ):
+            raise CatalogError(
+                f"task {task.id!r} has been edited since 'refractal build' recorded its "
+                f"provider facts. The lock holds {entry.facts!r}, which was recorded "
+                "against different authored fields -- and the instruction is also the "
+                "harness's task selector, so this is not necessarily cosmetic. Re-run "
+                "'refractal build'."
+            )
+        hashes[task.id] = entry.task_hash
+    return hashes
 
 
 __all__ = [

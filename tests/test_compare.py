@@ -226,18 +226,49 @@ class TestClusteringMatters(unittest.TestCase):
     regression looks like, and there the false-positive rate roughly triples.
     """
 
-    SALT = "n8"  # pinned: a draw where the wrong tests declare a finding
+    #: Searched for, not pinned.
+    #:
+    #: A hardcoded salt names one pseudo-random draw, and every episode_id in
+    #: that draw derives from task_hash -- so ANY change to what task identity
+    #: covers reshuffles it. That happened: adding `provider_ref` to
+    #: `task_identity` moved every hash and this test failed at p=0.0657 against
+    #: a 0.05 threshold, with nothing wrong in the statistics.
+    #:
+    #: A demonstration that "the wrong test declares a finding here" is
+    #: inherently about a particular draw, so the fixture must FIND one and say
+    #: so if it cannot -- rather than assert that a remembered one still works.
+    #: Failing with "no draw exhibits this" is a real finding; failing with
+    #: "0.0657 is not less than 0.05" is a maintenance chore wearing its clothes.
+    CANDIDATE_SALTS = tuple(f"n{i}" for i in range(40))
 
     def setUp(self):
-        rows = rows_for(
-            success_rate=0.5,
-            infra_failure_rate=0.03,
-            scenario_spread=0.30,
-            interaction_spread=0.35,
-            salt=self.SALT,
-            # No injected difference: any "finding" here is a false positive.
-        )
-        self.units = build_units(rows, checkpoints=[A, B]).units
+        self.units = None
+        self.salt = None
+        for salt in self.CANDIDATE_SALTS:
+            rows = rows_for(
+                success_rate=0.5,
+                infra_failure_rate=0.03,
+                scenario_spread=0.30,
+                interaction_spread=0.35,
+                salt=salt,
+                # No injected difference: any "finding" here is a false positive.
+            )
+            units = build_units(rows, checkpoints=[A, B]).units
+            if (
+                mcnemar_unclustered(units, A, B).p_value < 0.05
+                and two_proportion_z(units, A, B).p_value < 0.05
+                and mcnemar_exact(contingency(units, A, B, "majority")).p_value > 0.05
+            ):
+                self.units, self.salt = units, salt
+                break
+        if self.units is None:
+            self.fail(
+                f"no draw among {len(self.CANDIDATE_SALTS)} exhibits the anti-conservatism "
+                "this class exists to demonstrate: no salt produced a false positive from "
+                "both unclustered tests while the clustered ones stayed null. Either the "
+                "generator stopped producing the interaction, or the wrong tests stopped "
+                "being wrong -- both are findings, and neither is a flaky test."
+            )
 
     def test_correct_tests_find_nothing(self):
         self.assertGreater(mcnemar_exact(contingency(self.units, A, B, "majority")).p_value, 0.05)
@@ -406,9 +437,29 @@ class TestGate(unittest.TestCase):
         self.assertEqual(verdict.exit_code, 0)
 
     def test_bootstrap_gates_even_when_mcnemar_retains_its_null(self):
-        """The disagreement case, resolved in the bootstrap's favour."""
-        verdict = self._verdict(-0.06, salt="r3")
-        contrast = verdict.tasks[0].contrasts[0]
+        """The disagreement case, resolved in the bootstrap's favour.
+
+        The qualifying draw is SEARCHED FOR, not pinned. `salt="r3"` named one
+        particular pseudo-random dataset, and every episode_id in it derives from
+        task_hash -- so adding a field to `task_identity` reshuffled the draw and
+        this failed with the two tests no longer disagreeing. Nothing was wrong.
+
+        A disagreement between two tests is a property of a dataset, so the
+        fixture has to produce one. "No draw disagrees" is a genuine finding --
+        it would mean the two tests had stopped being distinguishable, which is
+        the whole reason the gate chooses between them.
+        """
+        for salt in (f"r{i}" for i in range(40)):
+            verdict = self._verdict(-0.06, salt=salt)
+            contrast = verdict.tasks[0].contrasts[0]
+            if contrast.mcnemar.p_value > 0.05 and contrast.bootstrap.excludes_zero:
+                break
+        else:
+            self.fail(
+                "no draw among 40 produced a disagreement: McNemar never retained its "
+                "null while the bootstrap excluded zero. The gate exists to resolve that "
+                "disagreement, so if it cannot occur the gate has nothing to decide."
+            )
         self.assertGreater(contrast.mcnemar.p_value, 0.05)      # McNemar sees nothing
         self.assertTrue(contrast.bootstrap.excludes_zero)        # the rate moved
         self.assertTrue(verdict.regressed)
@@ -731,16 +782,30 @@ class TestVarianceEstimatorIsCalibrated(unittest.TestCase):
         self.assertLess(shared.design_effect, interaction.design_effect)
 
     def test_the_measured_excess_tracks_the_modelled_variance(self):
-        """The comparison that makes a correction to the doc statable."""
+        """The comparison that makes a correction to the doc statable.
+
+        Averaged over draws rather than asserted on one. A single draw's excess
+        is itself a random variable -- on one reshuffle it came out at -0.0026
+        against a modelled 0.0107, which is not a calibration failure, it is one
+        sample of a noisy quantity. A calibration claim needs the mean, and
+        asserting it on a single pinned draw was a claim about that draw.
+        """
         for interaction in (0.20, 0.35):
-            report = self._measure(0.0, interaction)
             modelled = modelled_variance(
                 scenario_spread=0.0, interaction_spread=interaction
             )["expected_difference_var"]
-            measured = report.observed_var - report.binomial_var
-            # Same order of magnitude and same direction; this is a sanity bound,
-            # not a precision claim at 119 scenarios.
-            self.assertGreater(measured, 0.4 * modelled)
+            excesses = []
+            for draw in range(12):
+                report = self._measure(0.0, interaction, salt=f"cal{draw}")
+                excesses.append(report.observed_var - report.binomial_var)
+            measured = sum(excesses) / len(excesses)
+            # Same order of magnitude and same direction; a sanity bound, not a
+            # precision claim at 119 scenarios.
+            self.assertGreater(
+                measured, 0.4 * modelled,
+                f"mean excess {measured:.5f} over {len(excesses)} draws "
+                f"(individual: {[round(e, 4) for e in excesses]})",
+            )
             self.assertLess(measured, 2.0 * modelled)
 
     def test_only_the_interaction_term_is_expected_to_survive_pairing(self):

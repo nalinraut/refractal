@@ -76,7 +76,7 @@ def resolve(
             if entry is not None:
                 recorded[scene.id] = entry.scene_hash
     scene_hashes = catalog.scene_hashes(recorded)
-    task_hashes = task_hashes_for(catalog)
+    task_hashes = task_hashes_for(catalog, lock)
     hardware = catalog.hardware(hardware_profile)
 
     # --- scenarios, per scene -------------------------------------------

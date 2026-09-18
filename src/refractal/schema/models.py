@@ -277,6 +277,16 @@ class Task(Strict):
     #: comparability; leaving it out of identity would let a resumed run skip
     #: episodes recorded under the old limit.
     max_steps: int = Field(default=400, gt=0)
+    #: How the scene's provider identifies this task, e.g. ``{task_id: 3}``.
+    #:
+    #: Only meaningful on an externally-defined scene, and needed once a scene
+    #: carries more than one task -- which is the normal case, since a scene is
+    #: the compiled model and tasks are cheap to vary on it. The scene's ``ref``
+    #: says which model; this says which goal within it.
+    #:
+    #: Identity, via ``task_hash``: two tasks pointing at different provider
+    #: tasks are different tasks even if their instructions somehow matched.
+    provider_ref: dict[str, Any] = Field(default_factory=dict)
     description: str = ""
 
     @model_validator(mode="after")
