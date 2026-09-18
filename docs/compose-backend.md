@@ -20,6 +20,12 @@ LIBERO scene costs twelve seconds.
 
 ## The renderer refuses plans it cannot run
 
+The same move as `plan` refusing a VRAM overcommit: a precondition that is a pure
+function of an artifact, checked at the cheapest point that can see it, before
+anything is spent. There the artifact is the catalog and the cost is a GPU; here
+it is the plan and the cost is an 8 GB pull plus a simulator construction, twelve
+times over.
+
 The index contract is a pure function of the plan, which makes the renderer the
 cheapest place it can possibly be checked. On the real LIBERO plan: **540 of 600
 groups refused across twelve workers.** Without the check the renderer emits
@@ -40,8 +46,15 @@ workers per scene. The demonstration below uses two suites for that reason.
 Worth stating because it is a consequence of getting the scene model right: the
 ten-scenes-one-task shape was wrong, and it also happened to give the compose
 backend twelve services to fan out over. Fixing the model removed the fan-out.
-Sharding a scene by *task* rather than by scenario would restore it and is a
-planner change, deliberately not made here.
+
+This is a genuine tension between two correct models rather than a defect —
+Refractal's worker unit is a scene, Compose's is a container, and a single-suite
+run has one of each. Written up as an open planner question in
+[planner-question-worker-unit.md](planner-question-worker-unit.md), including the
+measured reason task-sharding would give up nothing (the harness's environment
+reuse unit is already the task, not the scene) and the reason the obvious fix is
+not obviously right (it would make the worker unit engine-dependent, and `resolve`
+must never branch on engine).
 
 ## Four permission failures, in order
 
@@ -55,9 +68,12 @@ one reads as something else.
 | `PermissionError: vla_eval/runners/action_buffer.py` | the base image's `/workspace/src` files are mode `600`, and the harness is installed editable |
 | `PermissionError: '/scratch'` | `--harness-output /scratch` named a directory that did not exist, and a non-root process cannot create one at `/` |
 
-None of these is interesting individually. Together they are the argument for
-running the container as a real uid from the first attempt rather than testing as
-root and adding `user:` later — three of the four are invisible to a root run.
+None of these is interesting individually. Together they are the concrete argument
+for a decision taken abstractly much earlier: that the uid is a **render-time**
+setting, emitted as a literal, and that a container runs as a real user rather
+than as root. Three of the four are invisible to a root run, so a container tested
+as root and given `user:` afterwards would have failed on somebody else's machine
+with no clue attached.
 
 ## Answers to the three questions
 
