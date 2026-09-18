@@ -76,6 +76,11 @@ class ComposeSettings:
     results_dir: str = "./results"
     #: Engine -> image override.
     images: dict[str, str] = field(default_factory=dict)
+    #: Extra read-only mounts, ``host:container``. For iteration: the image sets
+    #: PYTHONPATH to /opt/refractal/src and /opt/refractal-libero/src rather than
+    #: baking a wheel, so editing source does not mean rebuilding 8 GB. Bake it
+    #: once it stops changing, and drop these.
+    source_mounts: list[str] = field(default_factory=list)
     #: Added to every service when the servers are addressed as
     #: ``host.docker.internal``, which on Linux needs the mapping declared.
     host_gateway: bool = True
@@ -209,6 +214,7 @@ def _service(
     if settings.catalog_dir is not None:
         volumes.append(f"{settings.catalog_dir}:{CATALOG_PATH}:ro")
     volumes.append(f"{settings.results_dir}:{RESULTS_PATH}")
+    volumes += [f"{m}:ro" for m in settings.source_mounts]
 
     service: dict[str, Any] = {
         "image": settings.image_for(scene.engine),

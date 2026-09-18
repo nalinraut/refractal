@@ -13,6 +13,7 @@ and a GPU, and both import their dependencies inside the branch that uses them.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -128,6 +129,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 2
     session_id = args.session_id or uuid.uuid4().hex
 
+    if args.backend == "compose":
+        return _run_compose(args, plan)
+
     if args.backend == "vla-eval":
         from .execute.vla_eval import BridgeError
         from .execute.vla_eval_runner import run_vla_eval
@@ -177,6 +181,77 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_compose(args: argparse.Namespace, plan) -> int:
+    """Render, then hand over to `docker compose up`. Deliberately thin.
+
+    Everything that could be wrong about the deployment is wrong in the rendered
+    file, and the renderer is a pure function with its own tests. What is left
+    here is process handling and one thing the renderer cannot do: create the
+    results directory.
+
+    That has to happen on the host, before any container starts. Docker creates a
+    missing bind-mount target as root whatever `user:` says, and a non-root
+    container then cannot write into it -- and the failure is quiet, because the
+    run completes, Parquet lands where the container can write, and `compare`
+    fails later on somebody else's machine.
+    """
+    import subprocess
+
+    from .render import ComposeSettings, RenderError, render_compose
+
+    results = Path(args.results)
+    results.mkdir(parents=True, exist_ok=True)
+
+    try:
+        text = render_compose(
+            plan,
+            ComposeSettings(
+                servers=_servers(args.server),
+                user=args.user or f"{os.getuid()}:{os.getgid()}",
+                plan_file=str(Path(args.plan).resolve()),
+                catalog_dir=str(Path(args.catalog).resolve()) if args.catalog else None,
+                results_dir=str(results.resolve()),
+                images=dict(
+                    pair.split("=", 1) for pair in (args.image or []) if "=" in pair
+                ),
+                source_mounts=list(args.mount or []),
+            ),
+        )
+    except RenderError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    out = Path(args.compose_file)
+    out.write_text(text, encoding="utf-8")
+    print(f"  rendered {out}")
+
+    command = ["docker", "compose", "-f", str(out), "up",
+               "--abort-on-container-failure"]
+    if args.detach:
+        command = ["docker", "compose", "-f", str(out), "up", "-d"]
+    print(f"  {' '.join(command)}")
+    try:
+        completed = subprocess.run(command)
+    except FileNotFoundError:
+        print(
+            "error: docker is not on PATH. `--backend compose` shells out to "
+            "`docker compose`; the rendered file is written either way, so you can run "
+            "it by hand.",
+            file=sys.stderr,
+        )
+        return 2
+    if completed.returncode != 0:
+        print(
+            f"error: docker compose exited {completed.returncode}. The workers' own logs "
+            "are the place to look: a container that failed preflight says which server "
+            "it could not reach.",
+            file=sys.stderr,
+        )
+        return 2
+    print(f"  next:  refractal compare {args.results} {plan.plan_id}")
+    return 0
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     """Write a deployment description from a plan. No Docker, no execution."""
     from .render import ComposeSettings, RenderError, render_compose
@@ -196,6 +271,7 @@ def cmd_render(args: argparse.Namespace) -> int:
                     pair.split("=", 1) for pair in (args.image or []) if "=" in pair
                 ),
                 host_gateway=not args.no_host_gateway,
+                source_mounts=list(args.mount or []),
             ),
         )
     except RenderError as exc:
@@ -321,9 +397,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("-o", "--results", default="./results", help="results URI")
     run_cmd.add_argument("--catalog", help="catalog to copy in as provenance")
     run_cmd.add_argument(
-        "--backend", choices=("local", "vla-eval"), default="local",
-        help="'local' simulates; 'vla-eval' drives the harness against running "
-             "model servers. Compose and k8s are renderers over the latter, later")
+        "--backend", choices=("local", "vla-eval", "compose"), default="local",
+        help="'local' simulates; 'vla-eval' drives the harness in this process "
+             "against running model servers; 'compose' renders one container per "
+             "worker over that same entrypoint and starts them. The model servers "
+             "stay outside in every case")
     run_cmd.add_argument(
         "--server", action="append", metavar="CKPT=URL",
         help="model server for a checkpoint, e.g. --server pi0=http://localhost:8000. "
@@ -339,6 +417,15 @@ def build_parser() -> argparse.ArgumentParser:
              "from 'refractal plan -v'. A filter, not a different plan: plan_id and "
              "every episode id are unchanged, so several workers' rows join as one "
              "experiment. This is the entrypoint --backend compose renders against")
+    run_cmd.add_argument("--compose-file", default="docker-compose.yml",
+                         help="--backend compose: where to write the rendered file")
+    run_cmd.add_argument("--user", metavar="UID:GID",
+                         help="--backend compose: defaults to the current uid:gid")
+    run_cmd.add_argument("--image", action="append", metavar="ENGINE=IMAGE")
+    run_cmd.add_argument("--mount", action="append", metavar="HOST:CONTAINER",
+                         help="--backend compose: extra read-only mount, repeatable")
+    run_cmd.add_argument("--detach", action="store_true",
+                         help="--backend compose: 'up -d' instead of waiting")
     run_cmd.add_argument("--session-id", help="fixed session id, for reproducible tests")
     run_cmd.add_argument("--no-resume", action="store_true",
                          help="re-run episodes that already have results")
@@ -386,6 +473,10 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--results", default="./results", help="host path for results")
     render.add_argument("--plan-file", help="host path to the plan, if not the path given")
     render.add_argument("--image", action="append", metavar="ENGINE=IMAGE")
+    render.add_argument(
+        "--mount", action="append", metavar="HOST:CONTAINER",
+        help="extra read-only mount, repeatable. For iterating on source without "
+             "rebuilding the image")
     render.add_argument("--no-host-gateway", action="store_true",
                         help="omit the host.docker.internal mapping")
     render.set_defaults(func=cmd_render)
