@@ -202,12 +202,54 @@ def main(argv: list[str]) -> int:
             p = _permutation_p(xs, ys, groups, rho)
             print(f"     Spearman(replicate index, {b} - {a}) = {rho:+.3f}  "
                   f"permutation p = {p:.3f}  (n={len(xs)})")
+        # The honest version: only tasks where BOTH arms have room to move.
+        # On a task where one arm is pinned, the contrast is `1 - other_arm` by
+        # arithmetic and carries no information test 1 does not already have.
+        # Restricting is underpowered rather than uninformative, and the two are
+        # worth distinguishing.
+        interior = [
+            t for t in tasks_all
+            if all(
+                (t, arm) in per_task
+                and any(per_task[(t, arm)])
+                and not all(per_task[(t, arm)])
+                for arm in arms_all
+            )
+        ]
+        print(f"\n     Tasks where BOTH arms are interior: {len(interior)}/{len(tasks_all)}")
+        if not interior:
+            print("     None. The differential claim is not measurable from this run at "
+                  "all:\n     on every task one arm is pinned, so the contrast restates "
+                  "test 1.")
+        else:
+            xs, ys, groups = [], [], []
+            for task in interior:
+                for seed in seeds:
+                    ka, kb = (task, a, seed), (task, b, seed)
+                    if ka not in cells or kb not in cells:
+                        continue
+                    xs.append(float(seed))
+                    ys.append(sum(cells[kb]) / len(cells[kb])
+                              - sum(cells[ka]) / len(cells[ka]))
+                    groups.append(task)
+            if len(set(ys)) <= 1:
+                print("     contrast constant on those tasks -- nothing to trend")
+            else:
+                rho = spearman(xs, ys)
+                pv = _permutation_p(xs, ys, groups, rho)
+                print(f"     Spearman on those only = {rho:+.3f}  permutation p = {pv:.3f}  "
+                      f"(n={len(xs)} cells, {len(interior)} tasks)")
+            print("     This subset IS independent evidence. It is also small, so a null")
+            print("     here is weak. Both statements are true at once.")
+
         if max(pinned.values()) > len(tasks_all) / 2:
             worst = max(pinned, key=lambda k: pinned[k])
-            print(f"\n     NOT INDEPENDENT EVIDENCE: {worst} is pinned on "
-                  f"{pinned[worst]}/{len(tasks_all)} tasks, so on those the contrast is")
-            print("     1 - other_arm by arithmetic and this restates test 1 in different")
-            print("     units. Differential drift is not measurable from this run.")
+            print(f"\n     CEILING WARNING: {worst} is pinned on "
+                  f"{pinned[worst]}/{len(tasks_all)} tasks. The all-task number above is")
+            print("     mostly test 1 in different units. Read the both-interior subset,")
+            print("     and read the ceiling itself as the finding: this suite is too easy")
+            print(f"     for {worst}, so the comparison wants a harder one rather than "
+                  "more scenarios.")
 
     # --- test 2: does the contrast trend with session position? --------------
     starts: dict[tuple, object] = {}

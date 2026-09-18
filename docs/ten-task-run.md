@@ -1,0 +1,115 @@
+# The ten-task run: 600 episodes, and what it settles
+
+`sha256:4605f47f…`, 600 episodes, 60 harness invocations, 0 infra failures,
+`compare` exit 0, ~47 minutes wall clock. Two warm servers, `serial` execution
+(recorded as `interleaved` — see `execution-mode.md`).
+
+| task | pi0 | pi0.5 | design effect | pi0 ICC | pi0.5 ICC | verdict |
+|---|---|---|---|---|---|---|
+| 0 | 73.3% | 100% | **4.30** | 0.622 | 0.000 | no change |
+| 1 | 73.3% | 100% | 1.04 | 0.018 | 0.000 | improved |
+| 2 | 93.3% | 100% | **4.00** | 0.600 | 0.000 | no change |
+| 3 | 70.0% | 100% | 1.98 | 0.328 | 0.000 | improved |
+| 4 | 56.7% | **86.7%** | 2.35 | 0.458 | **0.239** | no change |
+| 5 | 80.0% | **96.7%** | 1.89 | 0.280 | 0.000 | no change |
+| 6 | 76.7% | 100% | 0.76 | 0.000 | 0.000 | improved |
+| 7 | 83.3% | 100% | 1.25 | 0.111 | 0.000 | no change |
+| 8 | 60.0% | 100% | **0.44** | 0.000 | 0.000 | improved |
+| 9 | 50.0% | 100% | 0.56 | 0.000 | 0.000 | improved |
+
+Design effect: min 0.44, median 1.89, max 4.30. Five of ten above the 1.25
+threshold, three below 1.0.
+
+## 1. Drift does not exist at this timescale
+
+`interleaved` exists to remove within-session drift. It does not survive the
+check.
+
+The test is a pooled rank correlation between replicate position and cell rate,
+with a permutation p-value that shuffles replicate labels **within each task** —
+so task difficulty is held fixed by construction and only position can
+contribute. Thirty cells per arm, ten tasks, three positions.
+
+| arm | rep0 | rep1 | rep2 | ρ | permutation p |
+|---|---|---|---|---|---|
+| pi0 | 71.0% | 73.0% | 71.0% | +0.027 | 0.839 |
+| pi0.5 | 97.0% | 99.0% | 99.0% | +0.132 | 0.230 |
+| contrast | | | | +0.046 | 0.723 |
+| both-interior only (n=6) | | | | +0.194 | 0.665 |
+
+Nothing. The spread across replicate positions is 2 points for both arms.
+
+**The two-task run said otherwise, and it was wrong.** It showed pi0 going
+85% → 75% → 65%, per-task 80/60/50 and 90/90/80, both non-increasing. That is
+what a small sample does: the correct test on those six cells already gave
+ρ = −0.554 at p = 0.108, which is not significant, and thirty cells put it at
++0.027. "Each task's sequence is monotone" is the wrong question, because
+non-increasing across three points happens by accident often enough that two
+tasks agreeing is two observations rather than six.
+
+**A direction error worth recording.** Before the data arrived I said the serial
+loop's ordering "would flatter pi0.5". That is backwards. Checkpoints are sorted,
+so pi0 runs entirely first and gets the *fresher* machine; monotone degradation
+would disadvantage the later arm and make pi0.5's measured advantage an
+underestimate. There is also a structural argument against drift being the
+explanation at all, available before any statistics: the decline sat inside pi0's
+own block while pi0.5 ran after all of it and scored higher. Session-wide drift
+predicts the later arm is worst. It was not.
+
+### So: two modes, not three
+
+`interleaved`'s justification was drift removal, and there is no drift to remove
+at this length of run. Building it would pay per-invocation overhead — sixty
+orchestrator setups instead of two, each with a connection handshake, render-mode
+setup and spec cross-validation — for nothing, and it would become a default
+somebody picks for a reason that does not hold.
+
+**Recommendation: `serial` and `concurrent`.** `serial` is a rename of what the
+loop already does. `concurrent` is the one nothing currently uses and the one the
+two warm servers already make possible, and it needs a column the others do not —
+which checkpoints were running alongside, per episode — because a success rate
+measured under contention is fine and a duration measured under it is not.
+
+This conclusion is scoped: no drift **in a 47-minute run on this machine**. A
+longer run, a thermally tighter box, or a shared host could all differ. The check
+is a script, so re-running it is cheap, and it should be re-run before anyone
+concludes drift is absent somewhere else.
+
+## 2. The ceiling is the headline, not a caveat
+
+**pi0.5 is pinned at 100% on 8 of 10 tasks.** Only tasks 4 and 5 have both arms
+interior.
+
+That is the finding rather than a limitation of it: LIBERO-Spatial is too easy for
+pi0.5, so eight of these ten contrasts can only ever detect pi0 being worse. More
+scenarios per task would not help — the ceiling is not a sample-size problem. The
+comparison wants a harder suite: LIBERO-Long, or LIBERO-Object at a shorter step
+budget.
+
+It also means the eight pinned tasks contribute a design effect that is not
+really about a paired difference. With one arm constant, `d = 1 − pi0`, so the
+number measures pi0's homogeneity with the subtraction contributing nothing. Two
+of these ten are genuine two-arm observations.
+
+## 3. What the run does establish about the statistics
+
+Across ten tasks the estimator produced **0.44 to 4.30** and gave the correct
+reading at both ends.
+
+* **4.30 on task 0**, with pi0's within-cell ICC at 0.622 and between-scenario
+  variance 0.110. Strong clustering, correctly flagged as load-bearing.
+* **0.44 on task 8**, with both ICCs at 0.000. Below 1, so the naive test is
+  conservative, and `compare` says clustering is not load-bearing rather than
+  warning.
+
+The two extremes come from one run, one estimator and one mechanism. A single
+design effect above 1 would have been consistent with the estimator being biased
+upward — the failure already found once in this project, the `s` versus `s−1`
+one. A spread from 0.44 to 4.30 that tracks the measured ICC is much harder to
+explain that way.
+
+**Holm is doing real work here.** Ten contrasts, and the note says the
+uncorrected chance of at least one false positive is about 40%. Four contrasts
+are significant uncorrected and not after adjustment — task 0 at p=0.0116 →
+holm=0.0580, task 4 at p=0.0260 → holm=0.0780. Those are the ones that would have
+been reported as wins by a per-task test.
