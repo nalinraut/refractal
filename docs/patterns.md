@@ -591,6 +591,15 @@ scenes for the path to matter. It needs an MJX scene to be worth exercising at
 all, and LIBERO is classic MuJoCo. Deliberate, and revisiting it before there is
 a vectorized scene would be inventing a fixture to satisfy a checklist.
 
+**It shares its prerequisite with an open schema question**, which makes the two
+of them one piece of work rather than two deferrals.
+[planner-question-worker-unit.md](planner-question-worker-unit.md) asks what a
+worker must own *whole* — as against how many episodes may share a process at
+once, which is what `envs_per_process` answers — and the two questions are only
+confusable while no engine can batch. An MJX scene separates them and exercises
+this path in the same afternoon, so the concrete next thing is a vectorized scene
+in a catalog, not either item on its own.
+
 ### Blocked on scheduled work
 
 **Every placement field in `plan.json`.** `device`, `cpuset` and `packed_scenes`

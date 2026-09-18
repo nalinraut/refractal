@@ -75,11 +75,46 @@ different:
 | `envs_per_process` | how many episodes may share one process at once | 1 |
 | the missing field | what is the atomic assignment a worker must own entirely | one task's full scenario range |
 
-A shape that said `atomic_unit: task` (or, engine-agnostically, a declared
-grouping key the planner partitions by and does not interpret) would let the
-planner shard LIBERO ten ways without ever learning what MuJoCo is. `plan` would
-then produce ten runnable workers for one scene, `render` would emit ten
-containers, and the index contract would hold by construction rather than by
+### The name matters more than the mechanism
+
+Proposed: **`partition_unit`**, an enum with values `scenario` and `task`.
+
+An enum rather than a number, and the reason is how it will be read years from
+now rather than how it behaves. **A number invites arithmetic; an enum says it is
+a boundary.** `envs_per_process` is a number and is divided into things — that is
+what `ceil(episodes / envs_per_process)` does — and the moment this field is a
+number, somebody will divide by it too, which is exactly the conflation that let
+a scenario range be split twelve ways.
+
+| value | means | who says it |
+|---|---|---|
+| `scenario` | any subset of a scene's scenarios may be split off | MJX — the batch genuinely holds arbitrary same-scene scenarios |
+| `task` | a worker must own a task's whole zero-based range | classic MuJoCo — the harness rebuilds per task, and the counter starts at zero |
+
+The planner partitions by it and never interprets it, the same way it already
+consumes `sec_per_1k_steps` without knowing what a step is.
+
+### It is a property of the engine-plus-benchmark pair
+
+This is the part the name has to keep honest, and the reason it cannot come from
+`envs_per_process`.
+
+`scenario` versus `task` is not a fact about the scene, and not a fact about the
+engine alone. It is a fact about **the engine together with the benchmark that
+drives it**: MJX could batch arbitrary same-scene scenarios, and classic MuJoCo
+plus *this harness* cannot, because the harness rebuilds per `task_id` and counts
+episodes from zero within one. A different driver over the same engine could
+answer differently.
+
+Which is why it belongs on `ResourceShape` — already keyed by
+`(scene, engine, hardware_profile)` and already the place where measured facts
+about a specific pairing live — and why it must be declared rather than derived.
+Deriving it from `envs_per_process` would be asserting that "how many at once"
+determines "what must be owned whole", and the whole point is that they are
+independent.
+
+With it, `plan` produces ten runnable workers for one scene, `render` emits ten
+containers, and the index contract holds by construction rather than by
 `--workers-per-scene 1`.
 
 ## Why not now
@@ -96,10 +131,31 @@ containers, and the index contract would hold by construction rather than by
   the unexercised list in `patterns.md`.
 
 Designing a partitioning primitive against one engine that cannot batch is how it
-ends up meaning "task" forever.
+ends up meaning "task" forever — the same failure as
+[the circularity in the statistics](statistics-measurements.md), where a model of
+within-scenario correlation was authored to make a fixture discriminate and the
+tests were then scored against it. The numbers were real counts; they described
+the model rather than the world. A `partition_unit` whose only witness is an
+engine that can only answer `task` would be the same shape: a real field that
+describes its one example.
 
-## What would settle it
+## What would settle it — one prerequisite, not two open items
 
-An MJX scene, or any engine where `envs_per_process > 1` is real. At that point
-the two questions above stop being confusable, because one scene genuinely does
-share a compiled model across a batch and the answers diverge.
+**An MJX scene**, or any engine where `envs_per_process > 1` is real. At that
+point the two questions stop being confusable, because one scene genuinely does
+share a compiled model across a batch and the answers diverge: `envs_per_process`
+becomes greater than 1 *and* `partition_unit` becomes `scenario`, independently.
+
+This is the same prerequisite as the **scene affinity and sequential packing**
+entry under "Blocked on a deferred dependency" in
+[patterns.md](patterns.md#currently-known-to-be-unexercised). Both wait on a
+vectorized scene, and neither is worth touching before one exists — the planner
+packs starved scenes with a `startup_sec`-driven threshold that no fixture has
+enough scenes to reach, and this field would have only one value anybody could
+demonstrate.
+
+So they are **one concrete next thing** rather than two vague deferrals: get an
+MJX scene into a catalog, and both become exercisable in the same afternoon. That
+is a better-shaped piece of work than either was alone, and it is the argument for
+doing it at all — a single fixture unblocks a planner path and settles a schema
+question that would otherwise be designed blind.
