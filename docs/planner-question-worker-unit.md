@@ -4,6 +4,23 @@ Not a bug. A genuine tension between two correct models, surfaced by building
 `--backend compose`, and written down rather than fixed because the fix touches
 the thing everything else rests on.
 
+## Not a recovery
+
+Stated first because it decides how the rest reads. The ten-scenes-one-task
+catalog gave `--backend compose` twelve services, and the corrected one gives a
+single-suite run one. That is **not** parallelism lost: the twelve were an
+artifact of a scene model that split one compiled model into ten, and fixing it
+removed something that should not have existed.
+
+So this is not a question about recovering a capability. It is the question the
+wrong model was hiding — **may a scene's episodes be split at all** — which ten
+fake scenes never had to answer, and which one real scene now asks directly.
+
+The parallelism Compose can genuinely exploit is **across scenes**, and a
+single-suite LIBERO run genuinely has one scene. Which is why the two-suite
+demonstration in [compose-backend.md](compose-backend.md) is the honest one rather
+than a workaround.
+
 ## The tension
 
 Refractal's worker unit is a **scene**, and correctness says LIBERO-Spatial is

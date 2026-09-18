@@ -43,9 +43,15 @@ run has exactly one worker and Compose buys nothing.
 Parallelism for this backend therefore comes from **multiple scenes**, not multiple
 workers per scene. The demonstration below uses two suites for that reason.
 
-Worth stating because it is a consequence of getting the scene model right: the
-ten-scenes-one-task shape was wrong, and it also happened to give the compose
-backend twelve services to fan out over. Fixing the model removed the fan-out.
+**The fan-out was never real, and calling its removal a regression would be
+wrong.** The ten-scenes-one-task shape split one compiled model into ten scenes,
+and the twelve services were an artifact of that error. Fixing the model removed
+something that should not have existed; nothing was lost.
+
+Which matters for how the open question below is read. It is not "how do we get
+the parallelism back". It is **"may a scene's episodes be split at all"** — a
+question that was always there and that the wrong scene model was hiding, because
+ten fake scenes never had to answer it.
 
 This is a genuine tension between two correct models rather than a defect —
 Refractal's worker unit is a scene, Compose's is a container, and a single-suite
