@@ -113,3 +113,50 @@ uncorrected chance of at least one false positive is about 40%. Four contrasts
 are significant uncorrected and not after adjustment — task 0 at p=0.0116 →
 holm=0.0580, task 4 at p=0.0260 → holm=0.0780. Those are the ones that would have
 been reported as wins by a per-task test.
+
+## LIBERO cannot discriminate these two checkpoints
+
+The cheap check before committing compute to a harder suite: pi0.5 alone, three
+tasks from each of LIBERO-Object and LIBERO-Long (`libero_10`), five episodes
+each, against the already-warm server.
+
+| suite | max_steps | pi0.5 |
+|---|---|---|
+| `libero_object` | 280 | **15/15 (100%)** |
+| `libero_10` (Long) | 520 | **15/15 (100%)** |
+
+Thirty episodes, thirty successes, including the three-stage
+`turn on the stove and put the moka pot on it`.
+
+So the ceiling is not a LIBERO-Spatial problem to be fixed by changing suite. **Of
+the three LIBERO suites sampled, none can discriminate pi0 from pi0.5**, because
+pi0.5 saturates all of them. Running LIBERO-Long instead would have cost an hour
+and produced the same eight-of-ten shape.
+
+Stated plainly because this is the kind of benchmark people keep running anyway:
+a suite on which the candidate scores 100% cannot answer "did my change help".
+It can only answer "did my change break something", and only for the arm that is
+not at the ceiling.
+
+Scoped honestly: three tasks per suite, five episodes each, first three task ids,
+one checkpoint. That is enough to rule the suites *out* — 30/30 leaves no room
+for a contrast — and not enough to characterise them.
+
+### What would discriminate
+
+Not more scenarios, and not another LIBERO suite. The options are different in
+kind:
+
+* **A harder benchmark.** Something where pi0.5 is genuinely interior.
+* **A tighter step budget.** Both arms succeed given 220 steps; at 60 they may
+  not. That measures efficiency rather than capability, and it is a real question
+  with an existing knob — `max_steps` is already in `task_hash`, so two budgets
+  are already two experiments and cannot silently join.
+* **Closer checkpoints.** pi0 against pi0.5 is a generational gap. Two adjacent
+  checkpoints of one training run are the case the paired machinery is actually
+  for, and the case where a design effect of 4.30 versus 0.44 changes what you
+  conclude.
+
+The third is the one this project was built for: "did my change help" is a
+question about two nearby things, and a 27-point gap does not need a clustered
+bootstrap to detect.
