@@ -210,10 +210,82 @@ interacts with the policy in some way not visible in the step histogram.
 The thing the last run could not provide: **a design effect where both arms
 contribute variance.** At the default budget, eight of ten tasks had pi0.5 pinned
 at 100%, so `d = 1 − pi0` by arithmetic and the design effect measured one arm's
-homogeneity. Two genuine two-arm observations out of ten. At 100 steps every task
-should be a two-arm observation.
+homogeneity. Two genuine two-arm observations out of ten.
+
+~~At 100 steps every task should be a two-arm observation.~~ **Wrong, and wrong
+against data already in hand** — see the results below. The per-task predictions
+said tasks 4, 7 and 9 would be 0% for *both* arms at this budget, and they were.
+Struck rather than deleted because the error is the point: it is the
+aggregation-level mistake from `patterns.md`, committed one paragraph after
+writing the entry about it.
 
 It also changes the question from capability to **efficiency** — both policies can
 do these tasks, and the question becomes which does them in fewer steps. That is a
 different question and a real one, and it is the one this benchmark can still
 answer about these checkpoints.
+
+
+## The result: the prediction held, and the conclusion drawn from it did not
+
+600 episodes, 0 infra failures, `compare` exit 0, 40 minutes.
+
+### The pooled test
+
+| arm | predicted | actual | error |
+|---|---|---|---|
+| pi0 | 32.0% | **30.3%** | −1.7 pts |
+| pi0.5 | 48.7% | **48.7%** | −0.0 pts |
+
+The step distribution is stable under truncation. A truncated rerun reproduces the
+rate the untruncated run's step histogram implies, so **the budget is a reliable
+knob for moving a saturated comparison into range** — which was the open question,
+and it is now answered rather than assumed.
+
+Per task, across all twenty task-arm cells: **mean absolute error 2.5 points**,
+worst 10. The model is accurate at both aggregation levels.
+
+### What it bought, and what it cost
+
+| | default budget (220) | tight budget (100) |
+|---|---|---|
+| both arms interior | 2/10 tasks | **4/10 tasks** |
+| pi0.5 ICC > 0 | 1/10 | **3/10** |
+| design effect | 0.44 – 4.30, median 1.89 | 0.44 – 4.06, median 1.10 |
+
+Four genuine two-arm observations instead of two, and pi0.5 now contributes real
+within-scenario variance on three tasks — ICC 0.806 on task 2, 0.650 on task 6,
+1.000 on task 8. That is the measurement the last run could not produce.
+
+**And three tasks went to the floor.** Tasks 4, 7 and 9 are 0.0% for both arms:
+nothing finishes in 100 steps. The budget that lifted pi0.5 off the ceiling pushed
+the harder tasks under it.
+
+### A single global budget trades a ceiling for a floor
+
+This is the real finding, and it is structural rather than a bad choice of 100.
+The tasks differ in difficulty, so their step distributions sit at different
+places, and **one cut cannot land in the interior of all ten**. The pooled
+optimum — both arms nearest 50% — is an average over ten distributions and is
+interior for none of them in particular.
+
+What would follow from it, and is not done here:
+
+* **A per-task budget**, chosen from each task's own distribution. `max_steps` is
+  already per-task in the Task table and already in `task_hash`, so this needs no
+  schema change at all — only a catalog whose ten tasks carry ten budgets. It
+  would put all ten in the interior and it makes the comparison a set of ten
+  differently-conditioned questions, which is a real cost to state.
+* **Or accept 4/10** and read the other six as what they are: two ceilings and
+  three floors that say these checkpoints are indistinguishable at this budget on
+  those tasks, which is information.
+
+The second is what the run actually supports. The first is a catalog edit that
+somebody should decide they want rather than one I should make because it
+optimises a number.
+
+### One arm got worse
+
+Task 1: pi0 16.7%, pi0.5 **3.3%**. The only task where the newer checkpoint is
+behind, and it is a regression in *efficiency* rather than capability — both
+scored 100% at the 220-step budget. Whether that matters depends on whether steps
+are a cost you are paying, which is exactly the question a tighter budget asks.

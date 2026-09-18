@@ -351,7 +351,21 @@ confirmation. The error is symmetric and only one half of it is loud.
 > aggregation level — before looking at any result. A number is not a prediction
 > until it says what would count as comparing against it.
 
-The live consequence, recorded before the run finishes rather than after: it
+**The guard was not enough, and the demonstration is this entry's own document.**
+One paragraph after writing "state what a prediction is a prediction *of*", the
+run write-up contained the sentence *"At 100 steps every task should be a two-arm
+observation."* That is a per-task claim derived from a pooled prediction, made
+while the per-task numbers were sitting in the same dataset. They said tasks 4, 7
+and 9 would be 0% for both arms. They were.
+
+So the guard as stated protects the comparison you are *about* to make and not
+the sentence you wrote two paragraphs earlier. The sharper version:
+
+> The aggregation level is a property of every claim in the document, not of the
+> moment you compare. If a number was computed by pooling, every sentence it
+> licenses is about the pool.
+
+The live consequence, recorded before the run finished rather than after: it
 produces **ten per-task comparisons and one pooled one**, and only the pooled one
 tests the prediction. Most of the ten will differ from 32% for reasons that have
 nothing to do with whether the model was right — task difficulty and step
