@@ -223,6 +223,56 @@ def locate_plan(target: str | Path) -> Path:
     )
 
 
+def restrict_to_worker(plan: "Plan", worker_id: str) -> "Plan":
+    """The same plan with every worker but one removed.
+
+    What ``--worker`` does, and it is a *filter* rather than a different plan:
+    ``plan_id``, ``catalog_hash``, every scene hash and every episode id are
+    untouched, so rows written by one worker join rows written by another as
+    though one process had produced both. That is the property that makes a
+    Compose run and a single-process run the same experiment.
+
+    Scenes that keep no workers are dropped, because a backend that iterates
+    scenes would otherwise construct one and find nothing to do -- and for the
+    vla-eval backend, constructing a LIBERO scene costs twelve seconds.
+
+    ``episode_count`` and ``estimated_seconds`` are recomputed for the scenes
+    that remain. They are the plan's own accounting of itself, and leaving them
+    describing episodes this process will not run would make a progress line
+    lie.
+    """
+    known = [w.worker_id for s in plan.scenes for w in s.workers]
+    if worker_id not in known:
+        raise PlanSchemaError(
+            f"this plan has no worker {worker_id!r}. It has {len(known)}: "
+            f"{sorted(known)}. A worker id is assigned by `refractal plan`, so a "
+            "mismatch usually means the plan was recompiled after the command "
+            "referring to it was written."
+        )
+
+    scenes = []
+    for scene in plan.scenes:
+        mine = [w for w in scene.workers if w.worker_id == worker_id]
+        if not mine:
+            continue
+        scenes.append(
+            scene.model_copy(
+                update={
+                    "workers": mine,
+                    "episode_count": sum(len(w.episodes) for w in mine),
+                    "estimated_seconds": sum(w.estimated_seconds for w in mine),
+                }
+            )
+        )
+    return plan.model_copy(
+        update={
+            "scenes": scenes,
+            "total_episodes": sum(s.episode_count for s in scenes),
+            "estimated_seconds": sum(s.estimated_seconds for s in scenes),
+        }
+    )
+
+
 def read_plan(path: str | Path) -> Plan:
     """Load a plan, refusing an unrecognised ``plan_schema`` before anything else.
 
@@ -259,4 +309,5 @@ __all__ = [
     "explain_identity_difference",
     "locate_plan",
     "read_plan",
+    "restrict_to_worker",
 ]

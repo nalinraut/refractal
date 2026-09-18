@@ -205,15 +205,24 @@ def _run_group(
     # path: the first replace succeeds, the second finds nothing and the run dies
     # with FileNotFoundError on `LIBEROBenchmark_libero_spatial.tmp`.
     #
-    # Found by the first real `concurrent` run, which is the only thing that
-    # could find it -- serial shares the directory too and never collides,
-    # because it is never in two places at once.
+    # Found by the first real `concurrent` run -- serial shares the directory too
+    # and never collides, because it is never in two places at once.
+    #
+    # THE WORKER ID IS IN THE PATH, and was not at first. Without it the key is
+    # (checkpoint, task, seed), which two workers on one scene share whenever the
+    # planner splits a scene's scenarios between them -- the default plan for the
+    # LIBERO catalog had four workers per scene. `--workers-per-scene 1` hid it,
+    # and `--backend compose` runs one container per worker, which would have
+    # collided at exactly that boundary.
     #
     # Fixed here rather than upstream because output_dir is ours to choose, and
     # a harness scratch directory being single-orchestrator is a reasonable thing
     # for it to assume. Refractal's own results do not go here; they go to the
     # results URI as Parquet.
-    scratch = f"{output_dir.rstrip('/')}/{checkpoint_id}/{task_id}/seed{seed}"
+    scratch = (
+        f"{output_dir.rstrip('/')}/{worker_id.replace('/', '-')}"
+        f"/{checkpoint_id}/{task_id}/seed{seed}"
+    )
     config = build_eval_config(
         scene=scene,
         episodes=group,

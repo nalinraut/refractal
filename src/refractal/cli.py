@@ -114,9 +114,18 @@ def _servers(pairs: list[str] | None) -> dict[str, str]:
 def cmd_run(args: argparse.Namespace) -> int:
     import uuid
 
-    from .schema.plan import read_plan
+    from .schema.plan import PlanSchemaError, read_plan, restrict_to_worker
 
     plan = read_plan(args.plan)
+    if args.worker:
+        # A filter, not a different plan: plan_id and every episode id are
+        # untouched, so this worker's rows join the others' as though one process
+        # had written them all.
+        try:
+            plan = restrict_to_worker(plan, args.worker)
+        except PlanSchemaError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     session_id = args.session_id or uuid.uuid4().hex
 
     if args.backend == "vla-eval":
@@ -165,6 +174,39 @@ def cmd_run(args: argparse.Namespace) -> int:
         f"{summary.written} episode(s) written, {summary.skipped} already done"
     )
     print(f"  next:  refractal compare {args.results} {plan.plan_id}")
+    return 0
+
+
+def cmd_render(args: argparse.Namespace) -> int:
+    """Write a deployment description from a plan. No Docker, no execution."""
+    from .render import ComposeSettings, RenderError, render_compose
+    from .schema.plan import read_plan
+
+    plan = read_plan(args.plan)
+    try:
+        text = render_compose(
+            plan,
+            ComposeSettings(
+                servers=_servers(args.server),
+                user=args.user,
+                plan_file=args.plan_file or args.plan,
+                catalog_dir=args.catalog,
+                results_dir=args.results,
+                images=dict(
+                    pair.split("=", 1) for pair in (args.image or []) if "=" in pair
+                ),
+                host_gateway=not args.no_host_gateway,
+            ),
+        )
+    except RenderError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    out = Path(args.output)
+    out.write_text(text, encoding="utf-8")
+    print(f"  wrote {out}  ({text.count(chr(10) + '  ') and ''}"
+          f"{sum(len(s.workers) for s in plan.scenes)} service(s))")
+    print(f"  next:  mkdir -p {args.results} && docker compose -f {out} up")
     return 0
 
 
@@ -291,6 +333,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--harness-output", default="./vla-eval-output",
         help="scratch directory for the harness's own outputs. Not the results URI: "
              "Refractal's results go to --results as Parquet")
+    run_cmd.add_argument(
+        "--worker", metavar="WORKER_ID",
+        help="run only this worker's episodes, e.g. libero-spatial/0. The ids come "
+             "from 'refractal plan -v'. A filter, not a different plan: plan_id and "
+             "every episode id are unchanged, so several workers' rows join as one "
+             "experiment. This is the entrypoint --backend compose renders against")
     run_cmd.add_argument("--session-id", help="fixed session id, for reproducible tests")
     run_cmd.add_argument("--no-resume", action="store_true",
                          help="re-run episodes that already have results")
@@ -317,6 +365,30 @@ def build_parser() -> argparse.ArgumentParser:
     explain.add_argument("before")
     explain.add_argument("after")
     explain.set_defaults(func=cmd_explain)
+
+    render = sub.add_parser(
+        "render", help="write a deployment description from a plan (no Docker)")
+    render.add_argument("plan", help="path to plan.json")
+    render.add_argument(
+        "--target", choices=("compose",), default="compose",
+        help="only 'compose' exists; k8s is explicitly out of scope")
+    render.add_argument("-o", "--output", default="docker-compose.yml")
+    render.add_argument(
+        "--server", action="append", metavar="CKPT=URL",
+        help="model server for a checkpoint. Point at the HOST, not a service name: "
+             "the servers stay outside Compose, bare and warm")
+    render.add_argument(
+        "--user", metavar="UID:GID",
+        help="emitted literally, e.g. 1000:1000. Pass \"$(id -u):$(id -g)\" -- NOT "
+             "'${UID}:${GID}', which is not exported by default and interpolates to ':'")
+    render.add_argument("--catalog", default="./catalog",
+                        help="host path to mount read-only as provenance")
+    render.add_argument("--results", default="./results", help="host path for results")
+    render.add_argument("--plan-file", help="host path to the plan, if not the path given")
+    render.add_argument("--image", action="append", metavar="ENGINE=IMAGE")
+    render.add_argument("--no-host-gateway", action="store_true",
+                        help="omit the host.docker.internal mapping")
+    render.set_defaults(func=cmd_render)
 
     compare = sub.add_parser(
         "compare",
