@@ -323,6 +323,42 @@ The tell is cheap to check: change something upstream that should be irrelevant
 and see what breaks. Here the upstream change was adding a field to a hash, and
 it found three.
 
+## Comparing at the wrong aggregation level
+
+The step-budget run was predicted before it: from the previous run's
+steps-to-success distribution, pi0 ≈ 32% and pi0.5 ≈ 49% at a 100-step cap,
+written down first so it could be wrong.
+
+Two groups in, pi0 came back at 70% and 60%. Flagged as a possible miss against
+the predicted 32%.
+
+It was not a miss. Those were **task 0 only**, and the 32% was **pooled across ten
+tasks**. Checked against the matching task, the prediction was 63.3% and the
+result was 63.3% at n=30. Task 0 is one of the faster ones — median 78 steps — so
+it loses least to a 100-step cap, and a pooled prediction says nothing about it.
+
+Same family as the fixture that exercised nothing and the formula-restating test,
+and a different tell. Those are about a test that cannot detect what it appears
+to. This is about **a comparison between two things that are not comparable** —
+neither number was wrong, and putting them side by side produced a finding out of
+nothing.
+
+The part that matters is the direction it could have gone. A fast task matching a
+pooled prediction would have read as **confirmation**, and nobody checks a
+confirmation. The error is symmetric and only one half of it is loud.
+
+> State what a prediction is a prediction *of* — which population, at which
+> aggregation level — before looking at any result. A number is not a prediction
+> until it says what would count as comparing against it.
+
+The live consequence, recorded before the run finishes rather than after: it
+produces **ten per-task comparisons and one pooled one**, and only the pooled one
+tests the prediction. Most of the ten will differ from 32% for reasons that have
+nothing to do with whether the model was right — task difficulty and step
+distribution vary, which is exactly what pooling averages over. Reading them
+individually would be doing the same thing again, ten times, with a menu of
+answers to pick from.
+
 ## Enforced where it can be
 
 `tests/test_resolve.py::TestTheDefaultFixtureExercisesItsInvariants` asserts the
