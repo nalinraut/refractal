@@ -1,0 +1,7 @@
+apiVersion: refractal.dev/v1alpha1
+tasks:
+  - id: pick-the-cube
+    scene: panda-pick-cube
+    instruction: "pick up the cube"
+    predicate: refractal.predicates:from_benchmark
+    max_steps: 150

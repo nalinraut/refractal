@@ -156,10 +156,62 @@ the model rather than the world. A `partition_unit` whose only witness is an
 engine that can only answer `task` would be the same shape: a real field that
 describes its one example.
 
+## Settled, empirically: the planner splits exactly backwards
+
+An MJX scene now exists — `examples/mjx-panda`, PandaPickCube exported from
+MuJoCo Playground as a catalog-local MJCF so `refractal plan` still runs with
+nothing installed. Measured on an RTX 5090:
+
+| batch | wall / 1k batched steps | env-steps/s | VRAM |
+|---|---|---|---|
+| 1 | 5.4 s | 184 | — |
+| 256 | 5.9 s | 43,154 | 870 MiB |
+| 1024 | 5.9 s | 173,286 | 948 MiB |
+| 4096 | 6.7 s | 608,069 | 1,348 MiB |
+
+3,300× throughput, wall clock nearly flat from 256 to 4096, ~0.33 MiB/env over
+~900 MiB fixed. So `envs_per_process: 4096`, and this is **the first scene in
+the project where that number is not 1**.
+
+Planning it against the same hardware profile as the LIBERO catalog:
+
+| scene | engine | `envs_per_process` | episodes | **workers the planner chose** | may it be split? |
+|---|---|---|---|---|---|
+| `libero-spatial` | mujoco | 1 | 600 | **12** | only at task boundaries |
+| `panda-pick-cube` | mjx | 4096 | 864 | **1** | anywhere |
+
+**The planner splits the engine that cannot be split, and refuses to split the
+one that can.**
+
+That is not a bug in the allocator — it is doing exactly what
+`useful_worker_ceiling = ceil(episodes / envs_per_process)` says. With
+`envs_per_process: 1` the ceiling is *episodes*, so it splits maximally. With
+4096 the ceiling is 1, so it does not split at all. The number is answering "how
+many can share a process", correctly, and that answer is **anti-correlated** with
+"may this be split" on these two engines.
+
+This settles the design question rather than arguing it. `partition_unit` cannot
+be derived from `envs_per_process`, and not merely because they are independent:
+on the only two engines available they point in opposite directions. A derivation
+would have to invert.
+
+### What it does not settle
+
+Whether a scene with `envs_per_process: 4096` *should* be splittable in practice.
+The planner declining to split it is arguably right — one worker batching 864
+episodes at 608k env-steps/s finishes in an estimated 26 seconds, and a second
+container would add a 25-second JAX compile to save nothing. `partition_unit`
+says what is *permitted*; the ceiling says what is *useful*; and for MJX they
+disagree in the harmless direction.
+
+The case where it matters is a scene too large for one device's VRAM, where the
+batch must be split across workers and the split must be legal. That is the next
+thing this fixture makes measurable.
+
 ## What would settle it — one prerequisite, not two open items
 
-**An MJX scene**, or any engine where `envs_per_process > 1` is real. At that
-point the two questions stop being confusable, because one scene genuinely does
+~~**An MJX scene**~~ — done, see above. Any engine where `envs_per_process > 1`
+is real. At that point the two questions stop being confusable, because one scene genuinely does
 share a compiled model across a batch and the answers diverge: `envs_per_process`
 becomes greater than 1 *and* `partition_unit` becomes `scenario`, independently.
 

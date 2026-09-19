@@ -1,0 +1,23 @@
+# DEVIATION from the API reference: proposed fifth catalog file.
+#
+# `--hardware rtx5090` selects a resource shape, which says what one worker
+# needs. Nothing in the reference says what the host provides -- yet the
+# reference's own example output prints "VRAM: cuda:0 16384 / 32768 MB" and a
+# total worker count, both of which need a capacity to divide into.
+#
+# Excluded from plan_id: hardware decides placement, not experiment identity.
+# The same experiment planned for a 5090 and for an A100 is the same
+# experiment, and its results must join.
+apiVersion: refractal.dev/v1alpha1
+hardware_profiles:
+  - id: rtx5090
+    cpu_cores: 16
+    memory_mb: 65536
+    devices:
+      - {id: "cuda:0", vram_mb: 32768}
+    max_workers: 12       # leave headroom for the model servers and the host
+
+  - id: cpu-only
+    cpu_cores: 8
+    memory_mb: 32768
+    devices: []

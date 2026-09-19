@@ -1,0 +1,20 @@
+apiVersion: refractal.dev/v1alpha1
+# The first scenario set in this project that varies something PHYSICAL.
+#
+# Every scenario set so far has been `init_state_index`, an integer selecting a
+# row from a pinned array -- which is the positional identity Refractal exists to
+# replace, kept only because LIBERO offers nothing else. Here the parameters are
+# the cube's position on the table, which is what the design doc's `vial_x` /
+# `vial_y` example always meant.
+#
+# It also exercises the float path through `normalize_params` and the 12
+# significant-digit quantisation, which integer indices never touched.
+scenario_sets:
+  - id: cube-grid
+    scene: panda-pick-cube
+    generator: refractal.generators:linspace_grid
+    generator_seed: 0
+    params:
+      cube_x: {range: [-0.15, 0.15], steps: 12}
+      cube_y: {range: [0.30, 0.60], steps: 12}
+    faults: []

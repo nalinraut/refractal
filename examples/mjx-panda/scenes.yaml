@@ -1,0 +1,39 @@
+apiVersion: refractal.dev/v1alpha1
+# The first vectorized scene in this project, and the reason it exists.
+#
+# Everything about scene affinity, bin-packing and `partition_unit` has been
+# reasoned about rather than measured, because LIBERO is classic MuJoCo and
+# `envs_per_process` has always been 1. One engine that cannot batch makes two
+# different questions look like one.
+#
+# MJX can batch. Measured on an RTX 5090, PandaPickCube, 100 batched steps:
+#
+#     batch   wall/1k batched steps   env-steps/s
+#         1                   5.4 s           184
+#       256                   5.9 s        43,154
+#      1024                   5.9 s       173,286
+#      4096                   6.7 s       608,069
+#
+# 3,300x throughput, and the wall clock is nearly FLAT from 256 to 4096 -- the
+# batch is almost free. VRAM with preallocation off: 4096 envs in 1,348 MiB, so
+# ~0.33 MiB/env over ~900 MiB of fixed cost.
+#
+# The MJCF is catalog-local, exported from mujoco_playground with
+# `mj_saveLastXML`, so `refractal plan` still runs on a laptop with nothing
+# installed. That is the property the whole compiler story rests on and it should
+# not be given up for a vectorized scene.
+scenes:
+  - id: panda-pick-cube
+    engine: mjx
+    engine_version: "3.13.0"
+    model: assets/panda_pick_cube.xml
+    resource_shape:
+      - hardware_profile: rtx5090
+        # MEASURED, and the first time this number is not 1.
+        envs_per_process: 4096
+        vram_per_env_mb: 1        # 0.33 measured, rounded up
+        vram_base_mb: 900         # compilation and model, before any env
+        cpu_cores: 1              # GPU-bound; the CPU does almost nothing
+        # Wall clock for 1000 steps of ONE FULL BATCH, not of one env.
+        sec_per_1k_steps: 6.7
+        startup_sec: 25           # JAX compilation, measured cold
