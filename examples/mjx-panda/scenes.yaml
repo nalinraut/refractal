@@ -51,3 +51,8 @@ scenes:
         # 4096. So a forced split pays N times a constant, which is what a scalar
         # startup_sec already models correctly.
         startup_sec: 3
+        # The field that makes every "measured" above a backed claim rather than
+        # a prose assertion. `refractal build` sets this when a prober measures;
+        # set by hand here because these were measured by hand, and the point of
+        # the lint is that the claim and the field must agree.
+        measured_at: "2026-09-18"

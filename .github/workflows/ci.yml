@@ -19,6 +19,17 @@ jobs:
       - run: pip install -e .[execute]
       - run: python -m unittest discover -s tests -t . -v
 
+  provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      # No prose claim that a value was measured, in a schema that records
+      # whether values were measured. Caught a startup_sec that was 10x too
+      # large and survived because its comment said "measured cold".
+      - run: python scripts/lint_provenance_claims.py examples
+
   boundaries:
     name: schema and resolve import nothing heavy
     runs-on: ubuntu-latest
