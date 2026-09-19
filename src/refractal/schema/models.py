@@ -79,7 +79,28 @@ class ResourceShape(Strict):
     vram_base_mb: int = Field(default=0, ge=0)
     cpu_cores: int = Field(gt=0)
     memory_mb: int = Field(default=2048, gt=0)
+    #: Wall clock for 1000 steps of **one full batch, as the worker experiences
+    #: it** -- not of the simulator.
+    #:
+    #: The distinction is load-bearing and was got wrong. Measuring the simulator
+    #: alone gives 8.0s for LIBERO; the worker blocks on a model server every
+    #: step, and the real figure from 600 episodes is 40.6s, of which ~33s is
+    #: inference. Both numbers are correct measurements; only one is of this
+    #: field.
+    #:
+    #: It INCLUDES amortised per-invocation setup, because that setup lands
+    #: inside the episodes' own elapsed time -- LIBERO's first episode of each
+    #: invocation runs 3.3 ms/step slower than the rest, which is the environment
+    #: being constructed. Do not also count it in ``startup_sec``.
     sec_per_1k_steps: float = Field(gt=0)
+    #: Cost paid once per worker *process*, before any episode runs: interpreter
+    #: start, device context, model load, JIT compilation.
+    #:
+    #: NOT per-invocation setup, which for a worker driving vla-eval is 0.1s
+    #: median and already inside ``sec_per_1k_steps``. Measured for MJX at 2.6s
+    #: (0.2 import jax, 0.3 CUDA context, 0.8 model load, 1.2 first compile) and
+    #: it does not vary with batch shape -- compile is 0.7s flat from 256 to
+    #: 4096 envs.
     startup_sec: int = Field(ge=0)
     max_envs: int | None = Field(default=None, gt=0)
     measured_at: str | None = None

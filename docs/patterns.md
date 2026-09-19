@@ -404,6 +404,97 @@ The tell, which generalises past this instance:
 requires JAX to plan, because that is data rather than code. The guard and the
 property are not the same size.
 
+## A true measurement of the wrong thing
+
+The harder sibling of the false-provenance entry, and the one with no lint.
+
+`sec_per_1k_steps` was `95`, declared, with a comment claiming it was measured.
+The obvious fix is to measure it — construct the LIBERO environment, step it a
+thousand times, divide. That gives **8.0 s**, and it is:
+
+* genuinely measured,
+* reproducible,
+* defensible to a reviewer,
+* **wrong**, and
+* wrong in the *same direction* as the value it replaced.
+
+Every property you would use to tell a good number from a bad one passes. The
+number is a correct measurement of the simulator. The field is consumed as the
+cost of a **worker**, and a worker blocks on a model server for every single
+step. The real figure, from 600 real episodes — 72,746 steps in 2,952 s — is
+**40.6 s per thousand**, of which roughly 33 s is inference the simulator
+measurement cannot see.
+
+What caught it was not a check. It was asking *what the worker actually waits
+on*, which is a question about the system rather than about the field.
+
+> A measurement is of something. When a field's name does not say what, the
+> obvious thing to measure is whatever is easiest to isolate — and the easiest
+> thing to isolate is usually the component, while the field usually means the
+> whole.
+
+The false-provenance case is guardable: a lint can see that a comment claims
+measurement while `measured_at` is empty. This one is not, because nothing in the
+file distinguishes "40.6 s of worker time" from "8.0 s of simulator time". Both
+are `sec_per_1k_steps: <float>`. The only available defence is that **the field
+now says what it is a measurement of**, in the schema rather than in a catalog
+comment.
+
+### The boundary question it opens, answered by measuring
+
+If `sec_per_1k_steps` means worker time, what does `startup_sec` mean, and do
+they overlap?
+
+Measured from the same run. Per-invocation overhead — the invocation window minus
+the sum of its episodes' `elapsed_sec` — is **0.1 s median across 60
+invocations**. But LIBERO constructs an environment per invocation and that costs
+about a second, so it has to be somewhere. It is inside `elapsed_sec`: the first
+episode of each invocation runs at 44.1 ms/step against 40.8 for the rest,
+**+0.36 s** on a median episode.
+
+So construction is *already inside* the per-step figure, amortised. Adding
+`startup_sec` on top would double-count it. Two fields that each look like a
+plain scalar turn out to share a boundary that neither of them names.
+
+This is the same shape as `envs_per_process` and `partition_unit` — fields whose
+meanings are only distinguishable once something forces them apart — and it is
+the third instance. The pattern:
+
+> A scalar in a schema carries a boundary as well as a value, and the boundary is
+> invisible until two fields disagree about where it is.
+
+### And the validation of the fix was itself a bad comparison
+
+Reported as "the planner now estimates 41 min against a real 47, from a starting
+point of 21 — from 2.2x under to 13% under". Wrong on both sides.
+
+The 41 was the estimate for a catalog at `max_steps: 100`. The run was at
+`max_steps: 220`. Two different experiments, correctly carrying two different
+`plan_id`s, compared as though one predicted the other. And the 47 was eyeballed
+from watching progress rather than recorded.
+
+Matched properly:
+
+* `sec_per_1k_steps: 40.6` **is exact** — 72,746 measured steps × 40.6 s/1k =
+  49.2 min, against 49.2 min of measured episode time. That part of the fix
+  stands.
+* The planner's makespan assumes **every episode runs to `max_steps`**. For the
+  220-step run it predicts 89 min against 49 actual — **1.8× over**, because
+  episodes finish early (mean 121 steps of a 220 cap).
+
+So the estimate is a worst case and is systematically high by exactly the rate at
+which episodes succeed before the cap. Whether that is right is a real question —
+a worst case is the honest number for capacity planning and a misleading one for
+"how long will this take" — and it is a different question from the one the
+`sec_per_1k_steps` fix answered.
+
+**This is the third instance of the same error in this document**, twice in
+comparisons I made while writing about the error. That frequency is the finding.
+The guard cannot be "remember to check", because remembering is what failed; it
+has to be that a comparison names both sides' identity before being made. Two
+`plan_id`s that differ are two experiments, and the project already computes
+exactly that — I had the discriminator and did not look at it.
+
 ## Enforced where it can be
 
 `tests/test_resolve.py::TestTheDefaultFixtureExercisesItsInvariants` asserts the
