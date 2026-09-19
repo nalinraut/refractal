@@ -36,7 +36,6 @@ def cmd_plan(args: argparse.Namespace) -> int:
         args.catalog,
         hardware_profile=args.hardware,
         pack_below_startup_sec=args.pack_below_startup_sec,
-        workers_per_scene=args.workers_per_scene,
     )
 
     for scene in plan.scenes:
@@ -415,11 +414,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--expect-plan", metavar="PLAN_ID",
         help="plan_id of the prior run, when it is not this one -- which is the "
              "normal case, since changing a step budget changes plan_id")
-    plan.add_argument(
-        "--workers-per-scene", type=int, default=None, metavar="N",
-        help="cap workers per scene. Use 1 for --backend vla-eval: the harness counts "
-             "episodes from zero within a task, so a worker holding a later slice of the "
-             "scenario range would run the wrong init states. Does not change plan_id")
     plan.add_argument(
         "--pack-below-startup-sec",
         type=int,

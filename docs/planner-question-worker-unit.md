@@ -138,16 +138,15 @@ determines "what must be owned whole", and the whole point is that they are
 independent.
 
 With it, `plan` produces ten runnable workers for one scene, `render` emits ten
-containers, and the index contract holds by construction rather than by
-`--workers-per-scene 1`.
+containers, and the index contract holds by construction rather than by a flag.
 
 ## Why not now
 
 * It changes how every plan is partitioned, so every `plan.json` layout moves —
   not `plan_id`, since placement is not identity, but everything downstream that
   reads a worker.
-* `--workers-per-scene 1` already makes single-suite runs correct, and the
-  two-suite demonstration already shows Compose working.
+* a worker cap already makes single-suite runs correct, and the two-suite
+  demonstration already shows Compose working.
 * The field is a schema addition to `ResourceShape`, which is the most-depended-on
   model in the project, and it should be designed against a second engine rather
   than against LIBERO alone. MJX is the case that would test it, and there is no

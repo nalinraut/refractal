@@ -160,7 +160,7 @@ def _check_runnable(plan: Plan) -> None:
     ``ep in range(episodes_per_task)`` and hands ``episode_idx = ep`` to the
     benchmark, so a worker holding a later slice of a scenario range runs the
     early indices while every row claims the late ones. One worker per scene
-    fixes it, which is what ``--workers-per-scene 1`` is for.
+    fixes it, which is what ``partition_unit: task`` expresses.
     """
     from ..execute.vla_eval import BridgeError, check_index_contract, group_by_seed
 
@@ -188,7 +188,7 @@ def _check_runnable(plan: Plan) -> None:
             f"vla-eval backend, starting with {shown}. The harness counts episodes from "
             "zero within a task, so a worker holding a later slice of a scenario range "
             "runs the early init states while every row claims the late ones.\n\n"
-            "Re-plan with --workers-per-scene 1. Rendering this would start "
+            "Declare `partition_unit: task` on the scene's resource shape. Rendering this would start "
             f"{sum(len(s.workers) for s in plan.scenes)} containers, most of which would "
             "pull an image and construct a simulator before failing preflight -- and the "
             "plan said so all along."

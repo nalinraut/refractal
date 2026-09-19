@@ -122,52 +122,67 @@ class TestPlanShape(unittest.TestCase):
             self.assertEqual(a, b)
 
 
-class TestWorkerCapIsPlacementNotIdentity(unittest.TestCase):
-    """A backend can require that one worker own a scene's whole range.
+class TestPartitioningIsPlacementNotIdentity(unittest.TestCase):
+    """`partition_unit` decides where a scene's episodes may be cut.
 
-    vla-eval counts episodes from zero within a task, so a worker holding init
-    states 5..9 runs 0..4 while every row claims 5..9. Measured on the LIBERO
-    catalog's default plan: 12 of 16 groups refused by `check_index_contract`.
-    Without that guard the run would have completed and recorded 30 of 40
-    episodes against the wrong scenario -- the positional-identity bug this
-    project exists to prevent, produced by the planner's own default output.
+    Replaces a class that tested `--workers-per-scene`, a flag added when a
+    LIBERO plan's twelve workers each held a slice of one task's scenario range.
+    It was a workaround for this field being absent; the flag is gone, and the
+    properties it was standing in for are asserted here against the real thing.
     """
 
-    def test_capping_workers_does_not_change_plan_id(self):
-        """The cap has to be free of identity, or a catalog could not target both
-        a backend that shards and one that cannot without becoming two
-        experiments."""
-        split = resolve(CATALOG, hardware_profile=HARDWARE)
-        single = resolve(CATALOG, hardware_profile=HARDWARE, workers_per_scene=1)
-        self.assertGreater(max(len(s.workers) for s in split.scenes), 1)
-        self.assertEqual([len(s.workers) for s in single.scenes],
-                         [1] * len(single.scenes))
-        self.assertEqual(split.plan_id, single.plan_id)
+    def _plan(self, unit):
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            shutil.copytree(CATALOG, root, dirs_exist_ok=True)
+            tmp.edit(
+                "scenes.yaml",
+                lambda d: [
+                    shape.__setitem__("partition_unit", unit)
+                    for scene in d["scenes"]
+                    for shape in scene["resource_shape"]
+                ],
+            )
+            return resolve(root, hardware_profile=HARDWARE)
 
-    def test_capping_loses_no_episodes(self):
-        split = resolve(CATALOG, hardware_profile=HARDWARE)
-        single = resolve(CATALOG, hardware_profile=HARDWARE, workers_per_scene=1)
+    def test_it_does_not_change_plan_id(self):
+        """Placement is not identity. The same experiment split ten ways and one
+        way is the same experiment, which is what lets one catalog target a
+        backend that shards and one that cannot."""
+        scenario = self._plan("scenario")
+        task = self._plan("task")
+        self.assertNotEqual(
+            [len(s.workers) for s in scenario.scenes],
+            [len(s.workers) for s in task.scenes],
+            "the fixture must actually partition differently, or this asserts nothing",
+        )
+        self.assertEqual(scenario.plan_id, task.plan_id)
 
+    def test_it_loses_no_episodes(self):
         def ids(plan):
             return sorted(e.episode_id for s in plan.scenes
                           for w in s.workers for e in w.episodes)
 
-        self.assertEqual(ids(split), ids(single))
+        scenario, task = self._plan("scenario"), self._plan("task")
+        self.assertEqual(ids(scenario), ids(task))
+        self.assertEqual(len(ids(task)), len(set(ids(task))), "no episode in two workers")
 
-    def test_one_worker_owns_a_contiguous_zero_based_range(self):
-        """The property the cap exists to produce, asserted on the thing that
-        consumes it rather than on the worker count."""
-        plan = resolve(CATALOG, hardware_profile=HARDWARE, workers_per_scene=1)
-        for scene in plan.scenes:
-            params = {s.scenario_hash: s.params for s in scene.scenarios}
-            for worker in scene.workers:
-                for checkpoint in {e.checkpoint_id for e in worker.episodes}:
-                    hashes = {e.scenario_hash for e in worker.episodes
-                              if e.checkpoint_id == checkpoint}
-                    self.assertEqual(
-                        hashes, set(params),
-                        "a capped worker must own every scenario on its scene",
-                    )
+    def test_scenario_partitioning_may_cut_anywhere(self):
+        """The permissive value has to actually permit, or the enum has one
+        meaningful value and a decorative one."""
+        plan = self._plan("scenario")
+        split = [
+            scene.scene_id
+            for scene in plan.scenes
+            if any(
+                len({w.worker_id for w in scene.workers
+                     for e in w.episodes if e.task_id == task_id}) > 1
+                for task_id in {e.task_id for w in scene.workers for e in w.episodes}
+            )
+        ]
+        self.assertTrue(
+            split, "no scene was cut inside a task, so `scenario` permitted nothing"
+        )
 
 
 class TestWorkerCountIsCapacityBound(unittest.TestCase):

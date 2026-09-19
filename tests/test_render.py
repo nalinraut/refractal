@@ -158,7 +158,7 @@ class TestTheRendererRefusesRatherThanEmitting(unittest.TestCase):
             compose_services(plan, settings())
         message = str(ctx.exception)
         self.assertIn("cannot run on the vla-eval backend", message)
-        self.assertIn("--workers-per-scene 1", message)
+        self.assertIn("partition_unit: task", message)
 
     def test_a_missing_server_is_refused_at_render_time(self):
         plan = with_workers(make_plan(scenarios=2, checkpoints=("pi0", "pi05")), 1)

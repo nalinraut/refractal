@@ -181,20 +181,21 @@ def allocate_workers(
     budgets: list[DeviceBudget],
     *,
     pack_below_startup_sec: int = 30,
-    workers_per_scene: int | None = None,
 ) -> Allocation:
     """Greedy makespan allocation, bounded by CPU, RAM, VRAM and useful ceiling.
 
-    ``workers_per_scene`` caps the split. It exists because a backend can require
-    that one worker own a scene's whole scenario range: the vla-eval harness
-    counts episodes from zero within a task, so a worker holding init states 5..9
-    would run 0..4 while every row claimed 5..9. ``check_index_contract`` refuses
-    that, which means the *default* plan for a LIBERO catalog is unrunnable on
-    that backend -- measured: 12 of 16 groups refused.
+    Worker layout is placement, not identity: the same experiment split four ways
+    and one way is the same experiment, which is why one catalog can target a
+    backend that shards and one that cannot.
 
-    A cap does not change ``plan_id``. Worker layout is placement, not identity:
-    the same experiment split four ways and one way is the same experiment, which
-    is why the same catalog can target a backend that shards and one that cannot.
+    There used to be a ``workers_per_scene`` cap here, added when a LIBERO plan's
+    twelve workers each held a slice of one task's scenario range and 12 of 16
+    episode groups were refused. It was a workaround for a missing field:
+    ``partition_unit`` now says where cuts may fall, the planner respects it, and
+    the cap protected nothing it still needs to. Removed rather than kept as a
+    knob, because a flag whose help text claims a correctness property it no
+    longer has is worse than no flag -- someone would reach for it believing it
+    guarded something.
     """
     allocation = Allocation()
     if not demands:
@@ -203,7 +204,6 @@ def allocate_workers(
     cpu_free = hardware.cpu_cores
     mem_free = hardware.memory_mb
     max_workers = hardware.max_workers or 10**6
-    per_scene_cap = workers_per_scene or 10**6
 
     for demand in demands:
         allocation.workers[demand.scene_id] = 0
@@ -241,8 +241,7 @@ def allocate_workers(
         candidates = [
             d
             for d in demands
-            if allocation.workers[d.scene_id]
-            < min(d.useful_worker_ceiling(), per_scene_cap)
+            if allocation.workers[d.scene_id] < d.useful_worker_ceiling()
         ]
         if not candidates:
             break

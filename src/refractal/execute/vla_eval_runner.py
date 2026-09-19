@@ -211,7 +211,7 @@ def _run_group(
     # THE WORKER ID IS IN THE PATH, and was not at first. Without it the key is
     # (checkpoint, task, seed), which two workers on one scene share whenever the
     # planner splits a scene's scenarios between them -- the default plan for the
-    # LIBERO catalog had four workers per scene. `--workers-per-scene 1` hid it,
+    # LIBERO catalog had four workers per scene. A worker cap hid it,
     # and `--backend compose` runs one container per worker, which would have
     # collided at exactly that boundary.
     #
