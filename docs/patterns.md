@@ -373,6 +373,37 @@ distribution vary, which is exactly what pooling averages over. Reading them
 individually would be doing the same thing again, ten times, with a menu of
 answers to pick from.
 
+## A property that is easy to give away quietly
+
+`refractal plan` runs on a bare laptop — no Docker, no GPU, no simulator. It is
+the first line of the CLI's docstring and the reason `plan` and `execute` are
+separate packages, with `tests/test_boundaries.py` failing the build if `schema`
+or `resolve` ever import something heavy.
+
+Adding a vectorized scene is where that property was easiest to lose, and the
+loss would have been silent. MuJoCo Playground's `PandaPickCube` is a Python
+object: `registry.load("PandaPickCube")`. A scene declared as
+`external: {provider: mujoco_playground...}` would have worked, passed every
+test, and made `refractal plan` require JAX and CUDA — discovered by the first
+person who tried to plan on a laptop, long after the decision.
+
+What was done instead: export the compiled model with `mj_saveLastXML` and commit
+the MJCF as a catalog-local asset. `scene_hash` is then computed over a file,
+which is what the design says for a scene that *can* be a file, and planning needs
+nothing installed.
+
+The tell, which generalises past this instance:
+
+> A load-bearing property with no test is preserved by whoever remembers it. When
+> a new capability arrives that would be *easier* to build the other way, that is
+> the moment to check what the easier way costs — because the easier way usually
+> works, and the property usually fails silently and later.
+
+`test_boundaries.py` guards the *package* boundary — it would have caught
+`refractal.schema` importing JAX. It would not have caught a *catalog* that
+requires JAX to plan, because that is data rather than code. The guard and the
+property are not the same size.
+
 ## Enforced where it can be
 
 `tests/test_resolve.py::TestTheDefaultFixtureExercisesItsInvariants` asserts the

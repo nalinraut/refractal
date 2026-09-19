@@ -36,4 +36,18 @@ scenes:
         cpu_cores: 1              # GPU-bound; the CPU does almost nothing
         # Wall clock for 1000 steps of ONE FULL BATCH, not of one env.
         sec_per_1k_steps: 6.7
-        startup_sec: 25           # JAX compilation, measured cold
+        # MEASURED, after the first value here was asserted and wrong.
+        #
+        # This said 25 with the comment "JAX compilation, measured cold". It was
+        # not measured, and the real cold start is 2.6s:
+        #
+        #     import jax             0.2s
+        #     CUDA context           0.3s
+        #     registry.load(model)   0.8s
+        #     first compile @4096    1.2s
+        #
+        # Roughly half per-process and half per-shape, and the per-shape half
+        # does NOT vary with shape -- compile is 0.7s flat from batch 256 to
+        # 4096. So a forced split pays N times a constant, which is what a scalar
+        # startup_sec already models correctly.
+        startup_sec: 3

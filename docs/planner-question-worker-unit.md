@@ -190,10 +190,64 @@ That is not a bug in the allocator — it is doing exactly what
 many can share a process", correctly, and that answer is **anti-correlated** with
 "may this be split" on these two engines.
 
-This settles the design question rather than arguing it. `partition_unit` cannot
-be derived from `envs_per_process`, and not merely because they are independent:
-on the only two engines available they point in opposite directions. A derivation
-would have to invert.
+This settles the design question rather than deferring it, and the form of the
+settlement is stronger than "these are two questions".
+
+Any formula linking them is not underdetermined — it is **wrong in the direction
+it points**. On the only two engines available, the engine with the lower
+`envs_per_process` is the one with the *more* restrictive `partition_unit`. A
+derivation would have to invert, and a rule that has to invert on a sample of two
+is not a rule that was nearly right.
+
+So `partition_unit` is a declared field. Not "declared for now, pending a better
+derivation" — declared because the derivation would have to be backwards.
+
+### The refusal is justified on its own terms, separately
+
+Worth stating apart from the partitioning question, because it is a different
+claim and it stands without it.
+
+**The batch is nearly free up to 4096** — 5.9 s per thousand batched steps at 256,
+6.7 s at 4096, for sixteen times the work. So splitting a 4096-env scene buys
+essentially no throughput, and costs a JAX compile per worker.
+
+The planner is not declining to split out of caution or conservatism. It is
+declining because **there is no throughput left to win**. That happens to be
+right, and it is right for a reason the planner does not know — it sees
+`ceil(episodes / envs_per_process)` and not a flatness curve. Correct decision,
+accidental justification, and the two should not be conflated when the VRAM-bound
+case arrives and the ceiling stops being the binding constraint.
+
+### A prediction about `startup_sec`, tested and rejected
+
+The obvious next worry was that `startup_sec` would turn out inadequate as a
+scalar for MJX in the same way `envs_per_process` was inadequate for
+partitioning — because a forced split pays a JIT compile per worker, so a plan
+splitting into three shapes would pay three different compiles.
+
+**Measured, and it does not hold.** Compile cost is flat across shapes:
+
+| batch | compile | steady s/1k |
+|---|---|---|
+| 64 | 1.0 s | 11.4 |
+| 256 | 0.7 s | 12.5 |
+| 1024 | 0.7 s | 10.5 |
+| 4096 | 0.7 s | 12.6 |
+
+And the full cold start is 2.6 s, decomposing as 0.2 s `import jax` + 0.3 s CUDA
+context + 0.8 s model load + 1.2 s first compile — roughly half per-process and
+half per-shape, with the per-shape half not varying with shape.
+
+So a forced split pays **N times a constant**, which is exactly what a scalar
+models and what `SceneDemand.startup_cost` already multiplies by invocation
+count. `startup_sec` is adequate. The parallel to `envs_per_process` was
+plausible and wrong, and worth recording as rejected rather than left as a
+standing worry somebody re-derives later.
+
+It did find something else. The catalog declared `startup_sec: 25` with the
+comment *"JAX compilation, measured cold"*. The real figure is 2.6 s and the
+measurement never happened — a comment asserting provenance it did not have, in
+the file whose whole job is recording measured facts. Corrected to 3.
 
 ### What it does not settle
 
