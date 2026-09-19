@@ -10,7 +10,7 @@ from __future__ import annotations
 import unittest
 
 from refractal.promote import PromotionError, check_nesting, promote
-from test_vla_eval_loop import make_plan
+from tests.test_vla_eval_loop import make_plan
 
 
 def rows_for(plan, ids=None):

@@ -21,7 +21,7 @@ from refractal.render import (
     render_compose,
 )
 from refractal.schema.plan import PlanSchemaError, restrict_to_worker
-from test_vla_eval_loop import make_plan
+from tests.test_vla_eval_loop import make_plan
 
 SERVERS = {"pi0": "ws://host.docker.internal:8000", "pi05": "ws://host.docker.internal:8001"}
 

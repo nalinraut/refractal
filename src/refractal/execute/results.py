@@ -41,6 +41,21 @@ import pyarrow.parquet as pq
 
 #: One row per episode. Order is the read order; keep identity columns first so
 #: a human running `head` sees what the row *is* before what happened to it.
+#: Every ``read_table`` here passes ``use_threads=False``, and it is not a
+#: performance choice.
+#:
+#: pyarrow's threaded reader over a Python file object -- which is what an fsspec
+#: handle is -- leaves a thread pool unjoined at interpreter shutdown, and CPython
+#: exits with SIGABRT and ``terminate called without an active exception``. The
+#: rows are written correctly and the process still dies: `refractal run` exited
+#: 134 on the happy path, after printing its success line.
+#:
+#: Reproduced outside Refractal in twelve lines -- write twelve Parquet files
+#: through ``fs.open``, read them back the same way -- so it is pyarrow and fsspec
+#: rather than anything here. Threading buys nothing at part-file sizes, which are
+#: tens to hundreds of rows.
+READ_THREADS = False
+
 EPISODES_SCHEMA = pa.schema(
     [
         pa.field("episode_id", pa.string(), nullable=False),
@@ -200,7 +215,8 @@ class ResultWriter:
         ids: list[str] = []
         for path in paths:
             with self.fs.open(path, "rb") as handle:
-                ids.extend(pq.read_table(handle, columns=["episode_id"])
+                ids.extend(pq.read_table(handle, columns=["episode_id"],
+                                     use_threads=READ_THREADS)
                            .column("episode_id").to_pylist())
         return ids
 
@@ -284,7 +300,8 @@ class ResultWriter:
         done: set[str] = set()
         for path in paths:
             with self.fs.open(path, "rb") as handle:
-                table = pq.read_table(handle, columns=["episode_id"])
+                table = pq.read_table(handle, columns=["episode_id"],
+                                      use_threads=READ_THREADS)
             done.update(table.column("episode_id").to_pylist())
         return done
 
@@ -364,7 +381,7 @@ def read_episodes(results_uri: str, plan_id: str) -> "pa.Table":
     tables = []
     for path in paths:
         with fs.open(path, "rb") as handle:
-            tables.append(pq.read_table(handle))
+            tables.append(pq.read_table(handle, use_threads=READ_THREADS))
     return pa.concat_tables(tables)
 
 

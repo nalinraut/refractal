@@ -10,7 +10,7 @@ from __future__ import annotations
 import unittest
 
 from refractal.expect import expected_seconds
-from test_vla_eval_loop import make_plan
+from tests.test_vla_eval_loop import make_plan
 
 
 def prior(steps_by_task, checkpoints=("pi0", "pi05"), task_prefix=""):

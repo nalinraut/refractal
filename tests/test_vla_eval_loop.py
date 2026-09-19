@@ -21,7 +21,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_bridge import install_stand_in_harness
+from tests.test_bridge import install_stand_in_harness
 
 from refractal.execute.results import read_episodes
 from refractal.execute.vla_eval import BridgeError
@@ -541,7 +541,9 @@ class TestAPlanRoundTripsIntoARunnableConfig(unittest.TestCase):
         return reloaded, configs
 
     def test_an_external_plan_reaches_a_complete_harness_config(self):
-        from test_vla_eval_loop import make_plan  # this module, by name
+        # `make_plan` is defined in this module; imported by name so the nested
+        # helper classes can reach it without a forward reference.
+        from tests.test_vla_eval_loop import make_plan
 
         plan = make_plan(scenarios=3, seeds=(0, 1), checkpoints=("pi0", "pi05"))
         _, configs = self._round_trip(plan)
@@ -568,7 +570,7 @@ class TestAPlanRoundTripsIntoARunnableConfig(unittest.TestCase):
         """It is the field that was missing, and it is an int inside a hash --
         the kind of thing a serialiser can drop without any identity test
         noticing."""
-        from test_vla_eval_loop import make_plan
+        from tests.test_vla_eval_loop import make_plan
 
         plan = make_plan(scenarios=2, checkpoints=("pi0",))
         reloaded, configs = self._round_trip(plan)
@@ -583,7 +585,7 @@ class TestAPlanRoundTripsIntoARunnableConfig(unittest.TestCase):
         cannot run. It has to say so, rather than building a config whose
         provider is None and failing inside the harness."""
         from refractal.execute.vla_eval import BridgeError
-        from test_vla_eval_loop import make_plan
+        from tests.test_vla_eval_loop import make_plan
 
         plan = make_plan(scenarios=2, checkpoints=("pi0",))
         object.__setattr__(plan.scenes[0], "external", None)
