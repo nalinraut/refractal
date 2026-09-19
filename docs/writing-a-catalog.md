@@ -72,8 +72,8 @@ tasks:
     max_steps: 300
 ```
 
-Four of those fields decide whether two runs are comparable — `instruction`,
-`predicate`, `predicate_args`, `max_steps` — so changing any of them makes a
+Four of those fields decide whether two runs are comparable (`instruction`,
+`predicate`, `predicate_args`, `max_steps`), so changing any of them makes a
 different task, and results recorded before the change will not join results
 recorded after. `id` and `description` do not: rename freely.
 
@@ -91,7 +91,7 @@ passthrough predicate rather than re-deriving it:
 ```
 
 That leaves `instruction` as the only thing distinguishing two goals, which is
-not enough — a release could keep the string and move the goal. Give the task a
+not enough: a release could keep the string and move the goal. Give the task a
 `provider_ref` so `refractal build` can record what the goal actually *is*:
 
 ```yaml
@@ -118,7 +118,7 @@ scenario_sets:
     faults: []
 ```
 
-The parameter names are **yours**. Refractal never looks inside the dict — it
+The parameter names are **yours**. Refractal never looks inside the dict. It
 hashes it and hands it to your adapter's `reset`. A catalog naming `cup_x` and an
 adapter reading `cube_x` produces episodes that all start from the adapter's
 default and a comparison that means nothing, with no error anywhere. Name them
@@ -199,7 +199,7 @@ run:
 there is no within-scenario variance to measure, and `compare` cannot tell a
 clustered difference from an unclustered one.
 
-`tier` subsamples scenarios — `smoke` 10%, `regression` 50%, `full` 100% — and is
+`tier` subsamples scenarios (`smoke` 10%, `regression` 50%, `full` 100%), and is
 part of the experiment's identity, so a smoke run and a full run do not join by
 default. `refractal compare --promote-from` pools them when you ask.
 

@@ -93,7 +93,7 @@ external:
   params: {send_state: true, num_steps_wait: 10}  # constructor arguments
 ```
 
-`params` is passed to your `__init__`. `ref` is not — it identifies the scene.
+`params` is passed to your `__init__`. `ref` is not; it identifies the scene.
 Both are hashed into the scene's identity.
 
 ## Checking it works

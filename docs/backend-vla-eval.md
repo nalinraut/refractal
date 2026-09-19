@@ -1,8 +1,14 @@
 # Running against vla-eval
 
 `--backend vla-eval` drives
-[`allenai/vla-evaluation-harness`](https://github.com/allenai/vla-evaluation-harness)
+[**`allenai/vla-evaluation-harness`**](https://github.com/allenai/vla-evaluation-harness)
 against running model servers and writes Parquet.
+
+The harness is the Allen Institute for AI's, under Apache-2.0, and it does the
+work: the model-server protocol, the benchmark adapters, the observation and
+action specifications, and the episode loop are all theirs. Refractal chooses
+which episodes to run, gives them identities and compares the results. Cite the
+harness in anything you publish.
 
 ```console
 $ pip install refractal[vla-eval]
@@ -21,7 +27,7 @@ $ vla-eval serve -c configs/model_servers/<family>/<config>.yaml --address 0.0.0
 ```
 
 Then send at least one episode through each before the measured run. A first
-inference can take minutes — model load, CUDA context, JIT compilation — and the
+inference can take minutes (model load, CUDA context, JIT compilation), and the
 default per-step timeout is 30 seconds, so an unwarmed server errors every
 episode of whichever arm starts first.
 
@@ -77,7 +83,7 @@ Beyond the identity fields:
 | `server_url` | which server answered |
 | `harness_version` | what was installed |
 | `harness_surface` | digest of the harness modules Refractal depends on |
-| `is_infra_failure` | a crash or timeout, not a policy failure — excluded from success denominators |
+| `is_infra_failure` | a crash or timeout, not a policy failure; excluded from success denominators |
 | `concurrent_with` | other checkpoints running at the same time, under `execution_mode: concurrent` |
 
 `harness_surface` gates comparisons. If it differs between arms, `compare` exits

@@ -38,7 +38,7 @@ $ refractal plan catalog --hardware laptop -o plan.json
 `plan` is the compiler. It expands two scenario sets into 30 distinct scenarios,
 crosses them with tasks, seeds and checkpoints to get 360 episodes, assigns each
 one to a worker, and writes the result. It ran on a laptop with no simulator
-installed, which is the point — you can see what a run will cost before spending
+installed, which is the point: you can see what a run will cost before spending
 anything.
 
 **`plan_id` is the experiment's identity.** It is a hash of everything that
@@ -96,7 +96,7 @@ $ refractal compare results $(python -c "import json;print(json.load(open('plan.
 
 Reading it:
 
-- **`Scenarios in all 2 checkpoints: 60`** — the comparison is paired. Only
+- **`Scenarios in all 2 checkpoints: 60`**: the comparison is paired. Only
   scenarios both checkpoints attempted are used, and this line tells you how many
   survived. If it is far below what you planned, something did not run.
 - **The 2×2** is scenarios, not episodes. `7` and `7` are the scenarios that
@@ -105,7 +105,7 @@ Reading it:
 - **The design effect** is how much more variable the paired difference is than
   independent coin flips would be. Above ~1.25 and clustering matters: treating
   each episode as independent would understate the uncertainty.
-- **The interval** is a clustered bootstrap — it resamples whole scenarios, not
+- **The interval** is a clustered bootstrap. It resamples whole scenarios, not
   episodes, because five repeats of one scenario are not five independent facts.
 - **`-> no change`** is the verdict. `compare` exits 0 for no regression, 1 for a
   regression, 2 when the question cannot be answered.
@@ -129,9 +129,9 @@ process that ran it.
 
 ## What to change next
 
-- **Point it at a real simulator.** You write an adapter — see
+- **Point it at a real simulator.** You write an adapter (see
   [the adapter contract](adapter-contract.md) and
-  [the worked example](adapter-example.md) — and Refractal drives it.
+  [the worked example](adapter-example.md)), and Refractal drives it.
 - **Change the catalog.** [Writing a catalog](writing-a-catalog.md) covers what
   goes in each file and which edits invalidate existing results.
 - **Run the arms against real model servers** with `--backend vla-eval`, or one
@@ -141,5 +141,5 @@ process that ran it.
 
 The fake benchmark produces outcomes from a hash of the episode id. They are
 deterministic, they have realistic within-scenario correlation, and they are not
-a robot. Every number above is real arithmetic over synthetic outcomes — the
+a robot. Every number above is real arithmetic over synthetic outcomes. The
 statistics are exercised, the conclusion is about nothing.

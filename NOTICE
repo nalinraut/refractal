@@ -1,0 +1,23 @@
+Refractal
+Copyright 2026 Nalin Raut
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product depends on software from the following projects.
+No source from them is included in this distribution.
+
+-------------------------------------------------------------------------------
+vla-evaluation-harness
+https://github.com/allenai/vla-evaluation-harness
+Copyright The Allen Institute for Artificial Intelligence
+Licensed under the Apache License, Version 2.0
+
+Refractal's `--backend vla-eval` runs every episode through this harness. It
+provides the model-server protocol, the benchmark adapters, the observation and
+action specifications, and the episode loop. Refractal subclasses two of its
+classes (`Orchestrator` and `EpisodeRecorder`) and adds no copies of its source.
+-------------------------------------------------------------------------------
+
+Benchmark suites and model servers loaded through the harness at run time are
+the work of their own authors and carry their own licences. Refractal neither
+distributes nor modifies them.

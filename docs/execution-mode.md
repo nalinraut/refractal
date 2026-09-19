@@ -45,4 +45,4 @@ matters if you are pointing several runs at one directory by hand.
 Changing the mode changes nothing about which episodes exist or what any of them
 is, so it does not move `plan_id`. Two runs of one experiment in different modes
 belong in one comparison, and `compare` warns when the rows it is pooling do not
-agree on mode or session — success rates are unaffected, durations are not.
+agree on mode or session. Success rates are unaffected; durations are not.

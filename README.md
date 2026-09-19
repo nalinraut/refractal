@@ -17,9 +17,9 @@ Refractal turns "run a benchmark" into "run an experiment."
 $ pip install refractal
 $ refractal init .
 $ refractal plan catalog --hardware laptop
-  cube-bowl-v1        30 scenarios     360 episodes    4 worker(s)  ~18 min
+  cube-bowl-v1        30 scenarios     360 episodes    2 worker(s)  <=37 min
   ------------------------------------------------------------------
-  360 episodes across 1 scene(s), 4 worker(s), est. 18 min
+  360 episodes across 1 scene(s), 2 worker(s), at most 37 min
   wrote plan.json  (plan_schema 1, plan_id sha256:dc5e1755911f...)
 
 $ refractal run plan.json --catalog catalog
@@ -148,11 +148,34 @@ bootstrap is resampling, and Cochran's Q is a permutation test.
   nothing writes it, deliberately: writing it against synthetic data would bake
   in guesses about what a real adapter can record.
 
-Refractal sits on top of [`allenai/vla-evaluation-harness`][harness] and does
-not fork it.
+## Built on vla-evaluation-harness
 
-[harness]: https://github.com/allenai/vla-evaluation-harness
+Refractal is a layer over
+[**`allenai/vla-evaluation-harness`**](https://github.com/allenai/vla-evaluation-harness),
+from the Allen Institute for AI, and does not fork it. The harness runs the
+episodes: it owns the model-server protocol, the benchmark adapters, the
+observation and action specs, and the episode loop. Refractal decides which
+episodes to run, gives them content-addressed identities, and compares the
+results.
+
+Everything `--backend vla-eval` does is the harness doing it. Refractal
+subclasses two of its classes and otherwise stays out of the way, which is why
+the integration is a pinned dependency rather than a vendored copy, and why
+`scripts/verify_harness_claims.py` exists: the assumptions Refractal makes about
+someone else's code are checked rather than assumed.
+
+The harness is Apache-2.0, as is Refractal. No code is copied from it.
+
+If you use Refractal for published work, cite the harness as well. The
+evaluation is theirs; the comparison is ours.
+
+## Acknowledgements
+
+- [`allenai/vla-evaluation-harness`](https://github.com/allenai/vla-evaluation-harness)
+  (Allen Institute for AI, Apache-2.0), which runs every episode.
+- The benchmark suites and model servers it wraps, each under its own licence
+  and each the work of its own authors.
 
 ## Licence
 
-Apache-2.0.
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

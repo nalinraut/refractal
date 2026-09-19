@@ -19,7 +19,7 @@ do about it.
 
 The comparison is paired. Only scenarios both checkpoints attempted are used.
 
-If this number is far below what you planned, episodes are missing — a worker
+If this number is far below what you planned, episodes are missing: a worker
 died, or a resume never finished. Compare it against `total_episodes` in
 `plan.json` before reading anything else.
 
@@ -37,7 +37,7 @@ died, or a resume never finished. Compare it against `total_episodes` in
 per checkpoint by majority vote across its seeds, then cross-tabulated.
 
 The off-diagonal cells are what moved. `7` and `7` here means fourteen scenarios
-flipped, seven each way — a rate that barely moved and a lot of churn underneath.
+flipped, seven each way: a rate that barely moved and a lot of churn underneath.
 
 A rate that moves while the off-diagonals stay small is a uniform shift: the same
 scenarios succeed, slightly more or less often. A rate that holds while the
@@ -79,7 +79,7 @@ answer, which is why both are printed.
 | | |
 |---|---|
 | `-0.033` | the difference in success rate |
-| `[-0.200, +0.122]` | 95% interval from a clustered bootstrap — it resamples whole scenarios, not episodes |
+| `[-0.200, +0.122]` | 95% interval from a clustered bootstrap; it resamples whole scenarios, not episodes |
 | `p=` | from the bootstrap |
 | `holm=` | corrected across every contrast in this run |
 | `McNemar p=` | whether the *set* of scenarios solved changed |
@@ -97,23 +97,23 @@ gives about a 40% chance of at least one false positive.
 
 Each fires on a condition and each means something specific.
 
-**`N scenarios is below 200`** — the bootstrap interval is optimistic at small
+**`N scenarios is below 200`**: the bootstrap interval is optimistic at small
 scenario counts, measuring roughly 7% false positives against a nominal 5%.
 Treat a marginal result as marginal.
 
-**`the rate moved but few scenarios flipped their majority`** — a uniform shift
+**`the rate moved but few scenarios flipped their majority`**: a uniform shift
 rather than a set of scenarios breaking. Read the 2×2 before acting.
 
-**`X is at 100% on every episode of this task`** — that arm is at a ceiling. A
+**`X is at 100% on every episode of this task`**: that arm is at a ceiling. A
 change that improved it could not be measured here, and the interval's bound on
 that side comes from arithmetic rather than from data. Widen the task set before
 reading it as a limit.
 
-**`clustering is not load-bearing for the difference`** — the design effect is
+**`clustering is not load-bearing for the difference`**: the design effect is
 low. A shared scenario effect cancels in a paired contrast, so a high ICC alone
 does not imply clustering matters.
 
-**`episode(s) were PROMOTED from run …`** — rows from another run were pooled in.
+**`episode(s) were PROMOTED from run …`**: rows from another run were pooled in.
 See `--promote-from`.
 
 ## When compare refuses
@@ -121,13 +121,13 @@ See `--promote-from`.
 Exit 2, with the reason. The common ones:
 
 - **Fewer than two checkpoints** in the results.
-- **Conflicting scene hashes** for one scene id — two different worlds recorded
+- **Conflicting scene hashes** for one scene id: two different worlds recorded
   under one name.
-- **Duplicate episode ids** — one episode counted twice, which would weight a
+- **Duplicate episode ids**: one episode counted twice, which would weight a
   scenario double.
-- **A harness surface mismatch** — the code driving the episodes changed between
+- **A harness surface mismatch**: the code driving the episodes changed between
   arms. Override with `--allow-harness-mismatch` after reading what moved.
-- **Degenerate arms** — the two checkpoints produced byte-identical outcomes,
+- **Degenerate arms**: the two checkpoints produced byte-identical outcomes,
   usually meaning both were pointed at the same server.
 
 ## Options
@@ -146,7 +146,7 @@ Exit 2, with the reason. The common ones:
 ## Pooling two runs
 
 A smaller run nests inside a larger one when every episode it contains is one the
-larger plan also contains — changing only `tier` produces that, changing anything
+larger plan also contains. Changing only `tier` produces that; changing anything
 else does not.
 
 ```console

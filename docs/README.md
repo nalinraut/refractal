@@ -8,7 +8,13 @@ answers *what did this checkpoint score*; Refractal answers *did my change help*
 which needs paired statistics over episodes that are content-addressed rather
 than positional.
 
-**New here?** [getting-started.md](getting-started.md) — five commands, about a
+`--backend vla-eval` runs every episode through
+[**`allenai/vla-evaluation-harness`**](https://github.com/allenai/vla-evaluation-harness)
+(Allen Institute for AI, Apache-2.0), which provides the model-server protocol,
+the benchmark adapters and the episode loop. Refractal does not fork it. If you
+publish work that used Refractal, cite the harness too.
+
+**New here?** [getting-started.md](getting-started.md): five commands, about a
 minute, ending on a real verdict. No GPU, no simulator, no checkpoints.
 
 ## Using it

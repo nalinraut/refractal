@@ -62,12 +62,12 @@ cannot write into it. `--backend compose` does this for you; `docker compose up`
 by hand does not.
 
 **Pass `--user` as a literal.** `"$(id -u):$(id -g)"` expands in your shell.
-`"${UID}:${GID}"` does not — neither is exported by default, so it interpolates
+`"${UID}:${GID}"` does not: neither is exported by default, so it interpolates
 to `":"` and Compose either errors or silently runs as root.
 
 **Address the servers on the host.** `host.docker.internal` with the
 `extra_hosts` mapping the renderer emits, or your host's LAN address. Not a
-service name — the servers are not in this file.
+service name; the servers are not in this file.
 
 ## Flags
 
@@ -119,13 +119,13 @@ RUN mkdir -p /scratch && chmod 1777 /scratch
 
 Four lines there exist because the container runs as an arbitrary non-root user:
 
-- `UV_PYTHON_INSTALL_DIR` — the default is under `/root`, mode 700, and the venv
+- `UV_PYTHON_INSTALL_DIR`: the default is under `/root`, mode 700, and the venv
   symlinks into it. Without this: `Could not find platform independent libraries`
   before any of your code runs.
-- `chmod -R a+rX /opt/uv-python` — same reason.
-- `HOME=/tmp` — a non-root user needs somewhere writable. If your simulator reads
+- `chmod -R a+rX /opt/uv-python`: same reason.
+- `HOME=/tmp`: a non-root user needs somewhere writable. If your simulator reads
   config from `$HOME`, copy it there too.
-- `/scratch` at `1777` — `--harness-output` names it, and a non-root process
+- `/scratch` at `1777`: `--harness-output` names it, and a non-root process
   cannot create a directory at `/`.
 
 Also `chmod -R a+rX` anything your base image copied in as mode 600. Editable

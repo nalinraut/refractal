@@ -52,7 +52,7 @@ $ python scripts/verify_wheel.py dist/refractal-0.1.0a1-py3-none-any.whl
 ```
 
 Exit 1 names what is missing or extra. Missing usually means an unanchored
-`.gitignore` pattern — `build/` matches `src/refractal/build/` as well as
+`.gitignore` pattern: `build/` matches `src/refractal/build/` as well as
 `./build/`, and the result is a wheel short an entire subpackage while
 `git status` stays clean. Extra means a stale `dist/`.
 

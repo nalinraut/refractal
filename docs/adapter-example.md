@@ -70,7 +70,7 @@ class BenchAdapter(StepBenchmark):
         self._env.reset()
 
         # THE SCENARIO. These keys are whatever the catalog's `params` declared.
-        # Refractal never inspects this dict -- it hashes it and passes it
+        # Refractal never inspects this dict. It hashes it and passes it
         # through. If the catalog says `cup_x` and this reads `cube_x`, every
         # episode silently starts from the default, the two arms face identical
         # conditions, and the comparison is between a thing and itself. Nothing
@@ -125,7 +125,7 @@ class BenchAdapter(StepBenchmark):
         obs, reward, done, info = self._env.step(np.asarray(command))
 
         # Everything worth having later goes through the recorder. A field not
-        # passed here cannot be recovered -- the episode ran and the value is
+        # passed here cannot be recovered: the episode ran and the value is
         # gone.
         if self._recorder is not None:
             self._recorder.record_step(
@@ -138,7 +138,7 @@ class BenchAdapter(StepBenchmark):
 
     def check_done(self, step_result: StepResult) -> bool:
         # Default is `step_result.done`. Override when the environment signals
-        # termination some other way -- here, success is a flag in `info`.
+        # termination some other way. Here, success is a flag in `info`.
         return bool(step_result.info.get("goal_reached", False))
 
     def get_step_result(self, step_result: StepResult) -> EpisodeResult:
@@ -182,7 +182,7 @@ tasks:
     provider_ref: {task_id: 0}
     max_steps: 300
 
-# scenarios.yaml -- these names must match what reset() reads
+# scenarios.yaml: these names must match what reset() reads
 scenario_sets:
   - id: cup-positions
     scene: bench-kitchen
