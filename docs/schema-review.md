@@ -109,7 +109,7 @@ problems:
   `plan_schema` structurally, applied to the field that actually is derived.
 
 **Fix.** `plan_id = H(experiment_identity)` over the *parsed* models, excluding
-`results_uri`, `execution_mode`, `max_concurrent_checkpoints`, resource shapes,
+`results_uri`, `execution_mode`, resource shapes,
 hardware, and all descriptions.
 
 `execution_mode` is excluded so interleaved and serial runs of one experiment

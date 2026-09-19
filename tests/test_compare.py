@@ -239,7 +239,19 @@ class TestClusteringMatters(unittest.TestCase):
     #: so if it cannot -- rather than assert that a remembered one still works.
     #: Failing with "no draw exhibits this" is a real finding; failing with
     #: "0.0657 is not less than 0.05" is a maintenance chore wearing its clothes.
-    CANDIDATE_SALTS = tuple(f"n{i}" for i in range(40))
+    #: 150, not 40, and the number is a measurement rather than a guess.
+    #:
+    #: The four conditions hold together on about 2% of draws -- measured: the
+    #: unclustered tests declare a false finding on 8%, the z-test on 7%, and the
+    #: conjunction with both correct tests staying null on 3 of 150. That rarity
+    #: IS the property being demonstrated: anti-conservatism at roughly the
+    #: inflated false-positive rate. A search sized for a common event would be
+    #: the wrong size for a test about an uncommon one.
+    #:
+    #: 40 was too few, and found out the day a predicate string changed in the
+    #: example catalog: `predicate` is in `task_hash`, which is in `episode_id`,
+    #: which seeds every synthetic outcome. The first qualifying salt is n40.
+    CANDIDATE_SALTS = tuple(f"n{i}" for i in range(150))
 
     def setUp(self):
         self.units = None
@@ -258,6 +270,12 @@ class TestClusteringMatters(unittest.TestCase):
                 mcnemar_unclustered(units, A, B).p_value < 0.05
                 and two_proportion_z(units, A, B).p_value < 0.05
                 and mcnemar_exact(contingency(units, A, B, "majority")).p_value > 0.05
+                # The bootstrap too. Searching for three of the four conditions
+                # this class asserts found a draw that satisfied three and broke
+                # the fourth the next time any identity field moved -- a
+                # searching fixture has to search for everything its tests check,
+                # or it is a pinned salt with extra steps.
+                and not clustered_bootstrap(units, A, B, resamples=2000, seed=7).excludes_zero
             ):
                 self.units, self.salt = units, salt
                 break
@@ -298,14 +316,35 @@ class TestBorderlineRealDifference(unittest.TestCase):
     """
 
     def setUp(self):
-        rows = rows_for(
-            success_rate=0.5,
-            infra_failure_rate=0.03,
-            scenario_spread=0.30,
-            salt="b0",
-            per_task={(B, "vial-slot-7"): 0.57},
-        )
-        self.units = build_units(rows, checkpoints=[A, B]).units
+        # SEARCHED, not pinned. This class demonstrates a disagreement between
+        # two correct methods, which is a property of a dataset -- so the fixture
+        # has to find one and say so if it cannot, rather than remember a salt
+        # that worked once. `salt="b0"` broke the day a predicate string changed
+        # in the example catalog, because `predicate` is in `task_hash`, which is
+        # in `episode_id`, which seeds every synthetic outcome.
+        self.units = None
+        for salt in (f"b{i}" for i in range(40)):
+            rows = rows_for(
+                success_rate=0.5,
+                infra_failure_rate=0.03,
+                scenario_spread=0.30,
+                salt=salt,
+                per_task={(B, "vial-slot-7"): 0.57},
+            )
+            units = build_units(rows, checkpoints=[A, B]).units
+            if (
+                mcnemar_exact(contingency(units, A, B, "majority")).p_value > 0.05
+                and clustered_bootstrap(units, A, B, resamples=2000, seed=7).excludes_zero
+            ):
+                self.units = units
+                break
+        if self.units is None:
+            self.fail(
+                "no draw among 40 produced the disagreement this class exists to "
+                "demonstrate: McNemar retaining its null while the clustered "
+                "bootstrap excludes zero. If that cannot happen the two methods are "
+                "not answering different questions, which is the claim."
+            )
 
     def test_mcnemar_does_not_reject(self):
         self.assertGreater(mcnemar_exact(contingency(self.units, A, B, "majority")).p_value, 0.05)

@@ -15,6 +15,37 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
+def object_in_slot(state: Mapping[str, Any], args: Mapping[str, Any]) -> bool:
+    """A success check with arguments, which is the shape that matters.
+
+    ``predicate_args`` is hashed into ``task_hash``, so slot 4 and slot 7 are
+    different tasks rather than one task run twice. That is the whole reason the
+    args are immutable and in the identity.
+    """
+    return state.get("slot") == args.get("slot")
+
+
+def ee_near(state: Mapping[str, Any], args: Mapping[str, Any]) -> bool:
+    """A phase predicate. Phases are in ``task_hash`` too."""
+    return bool(state.get("near"))
+
+
+def lifted(state: Mapping[str, Any], args: Mapping[str, Any]) -> bool:
+    return bool(state.get("lifted"))
+
+
+def over(state: Mapping[str, Any], args: Mapping[str, Any]) -> bool:
+    return bool(state.get("over"))
+
+
+def seated(state: Mapping[str, Any], args: Mapping[str, Any]) -> bool:
+    return bool(state.get("seated"))
+
+
+def object_in_container(state: Mapping[str, Any], args: Mapping[str, Any]) -> bool:
+    return state.get("container") == args.get("container")
+
+
 def cube_in_bowl(state: Mapping[str, Any], args: Mapping[str, Any]) -> bool:
     """Success when the cube is within ``tolerance`` of the bowl centre."""
     tolerance = float(args.get("tolerance", 0.05))
@@ -40,6 +71,18 @@ def within_reach(scenario: Mapping[str, Any]) -> bool:
     x = float(scenario.get("cube_x", 0.0))
     y = float(scenario.get("cube_y", 0.0))
     return 0.06 <= x <= 0.19 and abs(y) <= 0.08
+
+
+class GR00TServer:
+    """A stand-in for a model server, so ``run.yaml`` names one that imports.
+
+    ``server`` is a render-time field -- nothing resolves it during ``plan`` --
+    but a shipped example whose import strings do not resolve teaches the format
+    wrongly, and a reader cannot tell which dangling name is deliberate.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
 
 
 class EchoServer:

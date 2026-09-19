@@ -75,6 +75,49 @@ class TestNestingIsExact(unittest.TestCase):
         self.assertIn("actually happened", str(ctx.exception))
 
 
+class TestDuplicatesAreRefusedRatherThanPooled(unittest.TestCase):
+    """The question a set cannot answer, asked separately.
+
+    `check_nesting` does a set difference: it answers "is every promoted id a
+    planned id". That is necessary and not sufficient -- it cannot see the same
+    id twice, and a doubled row pooled into a comparison weights one scenario
+    double.
+
+    Caught by an audit, in code written the same day as the pattern entry saying
+    to match the container to the question. Which is why the entry now also says
+    WHEN to check: at write time, for any collection keyed by an identity.
+    """
+
+    def _rows(self, plan, ids=None):
+        return rows_for(plan, ids)
+
+    def test_a_doubled_episode_is_refused(self):
+        plan = make_plan(scenarios=3, checkpoints=("pi0",))
+        rows = self._rows(plan)
+        with self.assertRaises(PromotionError) as ctx:
+            promote(plan, [], rows + [rows[0]], "sha256:dup")
+        message = str(ctx.exception)
+        self.assertIn("duplicated episode id", message)
+        self.assertIn("weight it double", message)
+
+    def test_the_message_names_the_run_not_the_symptom(self):
+        """`compare` would block downstream saying "duplicate rows", which sends
+        the reader to this comparison rather than to the run that supplied them."""
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        rows = self._rows(plan)
+        with self.assertRaises(PromotionError) as ctx:
+            promote(plan, [], rows + [rows[0]], "sha256:dup")
+        self.assertIn("defect in that run", str(ctx.exception))
+
+    def test_rows_and_episodes_are_counted_separately(self):
+        """The count used to be called `episodes` and count rows. The name is how
+        the bug survived review, so the fix is both."""
+        plan = make_plan(scenarios=3, checkpoints=("pi0",))
+        _, promotion = promote(plan, [], self._rows(plan), "sha256:ok")
+        self.assertEqual(promotion.rows, promotion.episodes)
+        self.assertEqual(promotion.episodes, 3)
+
+
 class TestPromotionFillsGapsRatherThanOverwriting(unittest.TestCase):
     def test_the_targets_own_rows_win(self):
         """If an episode ran under both plans, the one belonging to THIS
@@ -91,6 +134,7 @@ class TestPromotionFillsGapsRatherThanOverwriting(unittest.TestCase):
         for episode_id in every[:2]:
             self.assertTrue(kept[episode_id], "the target's own row must win")
         self.assertEqual(promotion.episodes, len(every) - 2)
+        self.assertEqual(promotion.rows, promotion.episodes)
 
     def test_remaining_counts_what_still_has_to_run(self):
         plan = make_plan(scenarios=5, checkpoints=("pi0",))

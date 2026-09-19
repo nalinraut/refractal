@@ -1,8 +1,8 @@
 apiVersion: refractal.dev/v1alpha1
 run:
   checkpoints:
-    - {id: baseline,  path: local/baseline,  server: "pkg.mod:Server"}
-    - {id: candidate, path: local/candidate, server: "pkg.mod:Server"}
+    - {id: baseline,  path: local/baseline,  server: refractal.example:EchoServer}
+    - {id: candidate, path: local/candidate, server: refractal.example:EchoServer}
   seeds: 3
   tier: full
   execution_mode: serial

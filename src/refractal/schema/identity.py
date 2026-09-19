@@ -268,7 +268,7 @@ def experiment_identity(
       raises against deriving ``plan_schema`` structurally, applied to the field
       that actually is derived.
 
-    ``execution_mode``, ``max_concurrent_checkpoints`` and every resource shape
+    ``execution_mode`` and every resource shape
     are excluded for the same reason as hardware: they change how the work is
     placed and paced, not which episodes exist. Interleaved and serial runs of
     one experiment belong in one comparison, with the mode recorded per episode

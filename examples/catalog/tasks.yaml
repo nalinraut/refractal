@@ -5,25 +5,25 @@ tasks:
   - id: vial-slot-4
     scene: vial-rack-v1
     instruction: "put the vial in slot 4"
-    predicate: so101_eval.predicates:object_in_slot
+    predicate: refractal.example:object_in_slot
     predicate_args: {object: vial, slot: 4}
     max_steps: 400
     phases:
-      - {name: reach,     predicate: so101_eval.predicates:ee_near, predicate_args: {target: vial, tol: 0.02}}
-      - {name: grasp,     predicate: so101_eval.predicates:lifted,  predicate_args: {object: vial, height: 0.02}}
-      - {name: transport, predicate: so101_eval.predicates:over,    predicate_args: {object: vial, target: slot_4}}
-      - {name: place,     predicate: so101_eval.predicates:seated,  predicate_args: {object: vial, slot: 4}}
+      - {name: reach,     predicate: refractal.example:ee_near, predicate_args: {target: vial, tol: 0.02}}
+      - {name: grasp,     predicate: refractal.example:lifted,  predicate_args: {object: vial, height: 0.02}}
+      - {name: transport, predicate: refractal.example:over,    predicate_args: {object: vial, target: slot_4}}
+      - {name: place,     predicate: refractal.example:seated,  predicate_args: {object: vial, slot: 4}}
 
   - id: vial-slot-7
     scene: vial-rack-v1
     instruction: "put the vial in slot 7"
-    predicate: so101_eval.predicates:object_in_slot
+    predicate: refractal.example:object_in_slot
     predicate_args: {object: vial, slot: 7}
     max_steps: 400
 
   - id: cube-in-bowl
     scene: cube-bowl-v1
     instruction: "put the cube in the bowl"
-    predicate: so101_eval.predicates:object_in_container
+    predicate: refractal.example:object_in_container
     predicate_args: {object: cube, container: bowl}
     max_steps: 300

@@ -5,12 +5,12 @@ run:
   checkpoints:
     - id: ckpt-46
       path: ./checkpoints/gr00t-n16-46
-      server: so101_eval.servers:GR00TServer
+      server: refractal.example:GR00TServer
       server_args: {max_batch_size: 8}   # upstream default is 1, i.e. an idle GPU
       vram_mb: 8192
     - id: ckpt-47
       path: ./checkpoints/gr00t-n16-47
-      server: so101_eval.servers:GR00TServer
+      server: refractal.example:GR00TServer
       server_args: {max_batch_size: 8}
       vram_mb: 8192
   seeds: 3

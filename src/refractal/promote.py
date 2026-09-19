@@ -44,6 +44,13 @@ class Promotion:
     """What was reused, recorded so a verdict can say so."""
 
     from_plan_id: str
+    #: ROWS pooled, not episodes. The first version called this ``episodes`` and
+    #: counted rows, which is how a duplicate got past review: the name asserted
+    #: the two were the same and nothing checked.
+    rows: int
+    #: Distinct episode ids among those rows. Equal to ``rows`` unless the
+    #: promoted run contains a doubled episode, which is now refused -- kept
+    #: separate so the two can be compared rather than assumed equal.
     episodes: int
     #: Episodes the target plan still has to run after this.
     remaining: int
@@ -53,12 +60,34 @@ class Promotion:
 def check_nesting(plan: Plan, promoted: Sequence[Mapping[str, Any]]) -> set[str]:
     """Episode ids in ``promoted`` that the target plan does not contain.
 
-    Empty means the runs nest and promotion is legal.
+    Empty means every promoted id is a planned id. That is necessary and **not
+    sufficient** -- see ``duplicated_in``, which asks the other question a set
+    cannot.
     """
     planned = {
         e.episode_id for s in plan.scenes for w in s.workers for e in w.episodes
     }
     return {str(r["episode_id"]) for r in promoted} - planned
+
+
+def duplicated_in(promoted: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """Episode ids appearing more than once in ``promoted``, and how often.
+
+    A set answers "which ids are here". It cannot answer "is any id here twice",
+    and those are different questions -- which is why ``episode_ids_in`` returns
+    a list and ``verify_written`` compares multisets.
+
+    Missing it here admitted a doubled row into a pooled comparison, where it
+    would be counted twice and weight one scenario double. ``compare`` blocks on
+    duplicates downstream, so nothing corrupts -- but it blocks naming "duplicate
+    rows" rather than "the run you promoted from has them", which sends the reader
+    to the wrong place.
+    """
+    counts: dict[str, int] = {}
+    for row in promoted:
+        key = str(row["episode_id"])
+        counts[key] = counts.get(key, 0) + 1
+    return {k: v for k, v in counts.items() if v > 1}
 
 
 def promote(
@@ -72,6 +101,19 @@ def promote(
         raise PromotionError(
             f"no episodes found for {from_plan_id}. Promotion needs a run that "
             "actually happened; check the plan id and the results URI."
+        )
+
+    doubled = duplicated_in(promoted_rows)
+    if doubled:
+        worst = sorted(doubled.items(), key=lambda kv: -kv[1])[:2]
+        raise PromotionError(
+            f"the run being promoted contains {len(doubled)} duplicated episode id(s), "
+            f"for example {[f'{k[:22]}... x{v}' for k, v in worst]}. Pooling them would "
+            "count one scenario twice and weight it double in the comparison.\n\n"
+            "This is a defect in that run rather than in the nesting: a resumed run "
+            "that wrote a second part file for a group it had already written. "
+            "`compare` would block on it downstream, naming 'duplicate rows' rather "
+            "than the run that supplied them."
         )
 
     stray = check_nesting(plan, promoted_rows)
@@ -99,7 +141,8 @@ def promote(
     pooled = list(target_rows) + fresh
     return pooled, Promotion(
         from_plan_id=from_plan_id,
-        episodes=len(fresh),
+        rows=len(fresh),
+        episodes=len({str(r["episode_id"]) for r in fresh}),
         remaining=len(planned - have - {str(r["episode_id"]) for r in fresh}),
         checkpoints=sorted({str(r["checkpoint_id"]) for r in fresh}),
     )

@@ -358,7 +358,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(
-            f"  promoted {promotion.episodes} episode(s) from "
+            f"  promoted {promotion.episodes} episode(s) in {promotion.rows} row(s) from "
             f"{args.promote_from[:19]}... ({promotion.remaining} still unrun)"
         )
 

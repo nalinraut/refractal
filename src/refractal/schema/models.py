@@ -136,6 +136,19 @@ class ResourceShape(Strict):
     #: Which is why it lives on ``ResourceShape``, already keyed by
     #: ``(scene, engine, hardware_profile)``.
     partition_unit: Literal["scenario", "task"] = "task"
+    #: A hard ceiling on the batch, when the hardware has one the planner cannot
+    #: infer -- a driver limit, a licence, a known instability above N.
+    #:
+    #: NOT "a ceiling the planner may raise the batch to", which is what the
+    #: validator used to say. The planner never raises a batch: it uses
+    #: ``envs_per_process`` as measured. That clause described a feature nobody
+    #: built, and the MJX measurement makes it uninteresting -- throughput is flat
+    #: from 256 envs upward, so there is nothing to gain by raising toward a
+    #: ceiling.
+    #:
+    #: Kept because declaring a real hardware limit is worth doing even when only
+    #: the validator reads it; removed from the error message is the claim that
+    #: something acts on it.
     max_envs: int | None = Field(default=None, gt=0)
     measured_at: str | None = None
 
@@ -144,8 +157,8 @@ class ResourceShape(Strict):
         if self.max_envs is not None and self.max_envs < self.envs_per_process:
             raise ValueError(
                 f"max_envs ({self.max_envs}) is below envs_per_process "
-                f"({self.envs_per_process}); max_envs is a ceiling the planner may "
-                "raise the batch to, not a floor"
+                f"({self.envs_per_process}). max_envs is a hard ceiling on the batch; "
+                "a scene cannot be measured at a batch size its own ceiling forbids."
             )
         return self
 
@@ -573,7 +586,6 @@ class Run(Strict):
                 "against its own server). See docs/execution-mode.md."
             )
         return value
-    max_concurrent_checkpoints: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _check(self) -> "Run":

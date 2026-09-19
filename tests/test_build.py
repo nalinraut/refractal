@@ -434,14 +434,32 @@ class TestCallableShapesAreChecked(unittest.TestCase):
             self.assertIn("must be (state, args) -> bool", str(ctx.exception))
 
     def test_an_unimportable_predicate_is_only_a_note(self):
-        """A catalog may legitimately be built before its adapter is installed."""
+        """A predicate naming a package we do not have is not an error.
+
+        `build` runs where the engine is installed; the predicate runs where the
+        policy is. A catalog whose predicate imports on the operator's machine and
+        not on ours is CORRECT, which is why this is a note.
+
+        The absent module is created here rather than borrowed from the example
+        catalog. This used to rely on `examples/catalog` naming `so101_eval`, a
+        package descoped weeks ago -- so the test passed because a shipped example
+        was broken, and fixing the example broke the test. A guard that depends on
+        a defect silently weakens the day the defect is fixed.
+        """
         with Temp() as root:
-            report = build(root)
-            self.assertTrue(any("could not import" in n for n in report.notes))
-
-
-class TestFilterDiagnosis(unittest.TestCase):
-    """Three distinct ways a filter can be wrong, each named separately."""
+            tmp = Temp.__new__(Temp); tmp.root = root
+            tmp.edit(
+                "tasks.yaml",
+                lambda d: [
+                    t.__setitem__("predicate", "definitely_not_installed:whatever")
+                    for t in d["tasks"]
+                ] and [t.pop("phases", None) for t in d["tasks"]],
+            )
+            report = build(root, hardware_profile=HARDWARE, write=False)
+            self.assertTrue(
+                any("definitely_not_installed" in n for n in report.notes),
+                f"expected a note naming the unimportable module, got {report.notes}",
+            )
 
     def test_wrong_shape_reports_the_shape_not_the_workspace(self):
         with Temp() as root:

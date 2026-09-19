@@ -108,8 +108,9 @@ def check_record_fields_advisory(root: Path) -> Claim:
     )
     return Claim(
         "_ALL_RECORD_FIELDS is per-benchmark and advisory",
-        "the SO-101 adapter declares whatever step fields it wants; if this became a "
-        "fixed list, a custom field would be rejected",
+        "any adapter declares whatever step fields it wants; if this became a fixed "
+        "list, a custom field would be rejected. (This said 'the SO-101 adapter', "
+        "which was descoped -- the claim held while its stated reason named nothing.)",
         validated and declaring > 0,
         f"validated via getattr, {declaring} benchmark(s) declare one",
     )
