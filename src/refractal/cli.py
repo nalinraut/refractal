@@ -326,6 +326,42 @@ def cmd_compare(args: argparse.Namespace) -> int:
     from .execute import ResultWriter, read_episodes
 
     rows = read_episodes(args.results, args.plan_id).to_pylist()
+
+    promotion = None
+    if args.promote_from:
+        # Explicit, and refused when the runs do not nest. `tier` stays in
+        # plan_id -- the two runs keep their different ids and this does not
+        # merge them, it pools their rows for one comparison and says so.
+        from .promote import PromotionError, promote
+        from .execute.results import comparison_prefix
+        from .schema.plan import locate_plan, read_plan
+
+        try:
+            # The comparison directory, not the results root: a results tree with
+            # several comparisons in it has several plan.json files, and
+            # locate_plan refuses to guess between them. Naming the one we are
+            # comparing is the whole point of having the id.
+            plan = read_plan(
+                locate_plan(comparison_prefix(args.results, args.plan_id))
+            )
+        except Exception as exc:
+            print(
+                f"error: --promote-from needs this run's plan.json to know which "
+                f"episodes it contains, and it could not be read: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+        promoted_rows = read_episodes(args.results, args.promote_from).to_pylist()
+        try:
+            rows, promotion = promote(plan, rows, promoted_rows, args.promote_from)
+        except PromotionError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"  promoted {promotion.episodes} episode(s) from "
+            f"{args.promote_from[:19]}... ({promotion.remaining} still unrun)"
+        )
+
     if not rows:
         print(f"error: no episodes under {args.results} for {args.plan_id}", file=sys.stderr)
         return 2
@@ -346,6 +382,18 @@ def cmd_compare(args: argparse.Namespace) -> int:
         allow_harness_mismatch=args.allow_harness_mismatch,
         surface_manifests=ResultWriter(args.results, args.plan_id).read_harness_manifests(),
     )
+    if promotion is not None:
+        # On the verdict, not only on stdout. A rendered verdict that does not
+        # say it pooled two runs reads as an ordinary one, and somebody reading
+        # it later has no way to know -- which is the failure mode promotion was
+        # designed to avoid in the first place.
+        verdict.notes.append(
+            f"{promotion.episodes} episode(s) were PROMOTED from run "
+            f"{promotion.from_plan_id} for checkpoint(s) {promotion.checkpoints}. "
+            "Those runs are different experiments by plan_id and were pooled on "
+            "request; every promoted episode id was verified to be one this plan "
+            "contains, which is exact because episode_id does not cover tier."
+        )
     print(render(verdict))
     return verdict.exit_code
 
@@ -552,6 +600,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="compare across harness versions anyway. Blocked by default: a harness "
         "change can alter which observation parameters reach the benchmark.",
     )
+    compare.add_argument(
+        "--promote-from", metavar="PLAN_ID",
+        help="also read episodes from another run and pool them into this "
+             "comparison. For reusing a smoke run inside a full one: `tier` is in "
+             "plan_id so they are different experiments, and this says so out loud "
+             "rather than letting them join silently. Refused unless every promoted "
+             "episode id is one this plan contains")
     compare.add_argument("--resamples", type=int, default=5000)
     compare.set_defaults(func=cmd_compare)
     return parser

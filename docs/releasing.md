@@ -48,7 +48,7 @@ twine upload dist/*
 
 Five, in order. The first two are gating; the rest is procedure.
 
-1. **Settle `partition_unit`** — what a worker must own *whole*, as distinct from
+1. ~~**Settle `partition_unit`**~~ **DONE** — — what a worker must own *whole*, as distinct from
    how many episodes may share a process at once. It touches `ResourceShape`, the
    most depended-on model in the project, and it is already written down as
    likely to change. See
@@ -56,7 +56,7 @@ Five, in order. The first two are gating; the rest is procedure.
    MJX scene to design against honestly, which is the same prerequisite as scene
    affinity on the unexercised list — one fixture, two items.
 
-2. **Settle `tier` in identity** — whether a smoke run and a full run of one
+2. ~~**Settle `tier` in identity**~~ **DONE** — — whether a smoke run and a full run of one
    catalog are one experiment or two. Smaller than the first, and not a tweak: it
    changes what "the same experiment" means. See
    [question-tier-in-identity.md](question-tier-in-identity.md).
@@ -68,7 +68,9 @@ Five, in order. The first two are gating; the rest is procedure.
 
 5. **Publish `0.1.0a1`.** Keep the `a`.
 
-Why this order rather than publishing now: `plan_id` stability *is* the product,
+Both blockers are closed. What remains is steps 3-5, which are procedure.
+
+Why the order was this rather than publishing first: `plan_id` stability *is* the product,
 and both open questions move it. Verified that they move it *safely* — adding a
 field to `task_identity` changes `plan_id` (`6212937…` → `6790ee62…`), so results
 from two versions land in different comparison directories and cannot silently

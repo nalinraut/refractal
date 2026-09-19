@@ -1,8 +1,12 @@
-# Open question: is a smoke run the same experiment as a full run?
+# Closed: a smoke run is a different experiment, and may be reused explicitly
 
-A release blocker, and smaller than
-[the worker-unit question](planner-question-worker-unit.md) — but not a tweak,
-because it changes what "the same experiment" means.
+**Answered: `tier` stays in `plan_id`, and `compare --promote-from` makes reuse
+an explicit request that is refused when the runs do not nest.**
+
+Kept as a document because the reasoning is the point. The answer preserves the
+reading every other field in `experiment_identity` was decided under — "was this
+the same experiment" rather than "may these rows be averaged" — and pays the cost
+that reading implies, rather than making one field an exception.
 
 ## Where it stands
 
@@ -75,10 +79,48 @@ reading.
 Worth deciding before publishing, because it is exactly the kind of field whose
 answer becomes load-bearing the moment somebody has results under it.
 
-### The third option, which may be the real answer
+## The answer, implemented
 
-Keep `tier` in `plan_id` and give `compare` an explicit, opt-in way to pool two
-plan ids whose scenario sets are known to nest — stated as a flag, recorded in the
-verdict, and refused when the nesting does not actually hold. That keeps
-`experiment_identity` reading one way, and makes promotion a thing somebody asks
-for out loud rather than a thing that happens because two ids collided.
+`compare RESULTS PLAN_ID --promote-from OTHER_PLAN_ID`. The two runs keep their
+different ids; nothing is merged. Their rows are pooled for one comparison, on
+request, and the verdict records that it happened and from where — a rendered
+verdict that did not say so would read as an ordinary one, which is the failure
+promotion exists to avoid.
+
+### The nesting check is exact, and that is the design
+
+`episode_id` is derived from `(scene_hash, task_hash, scenario_hash, seed,
+checkpoint_id)`. **Tier is not in it.** Subsetting changes which episodes exist,
+not what any of them is — so a smoke episode and the full run's counterpart
+already carry the same id.
+
+Which makes the condition exact rather than a heuristic: promotion is legal when
+every promoted episode id is one the target plan contains. No tolerance, nothing
+to tune. If anything other than the tier moved, the hashes moved, the ids do not
+match, and it refuses.
+
+Verified against the two real runs, which differ in `max_steps` rather than tier:
+
+```
+error: 600 of 600 promoted episode(s) are not in this plan ... The runs do not nest.
+exit=2
+```
+
+`max_steps` is in `task_hash`, so every id moved. That is not a tier difference
+and pooling them would average two experiments.
+
+### What the tests check that the fixtures could not
+
+The unit fixtures build subsets by hand, which would pass even if `tier` did not
+nest at all. So there is a test against the real mechanism: plan the same catalog
+at `smoke` and at `full`, and assert the smoke episode ids are a strict subset.
+
+That assumption — `TIER_FRACTION` subsampling by a deterministic hash fraction,
+so a smoke scenario is a regression scenario is a full scenario — was load-bearing
+for this whole design and nothing had checked it. It holds.
+
+### Direction matters
+
+A superset does not nest inside a subset: promoting a full run into a smoke run
+is refused. Tested, because the asymmetry is easy to lose in an implementation
+that thinks of the check as "do these overlap".
