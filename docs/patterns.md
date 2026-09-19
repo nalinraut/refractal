@@ -488,12 +488,55 @@ a worst case is the honest number for capacity planning and a misleading one for
 "how long will this take" — and it is a different question from the one the
 `sec_per_1k_steps` fix answered.
 
+### The makespan half is naming, not arithmetic
+
+Calling the 89-versus-49 an error would be wrong. A worst-case makespan is
+**correct for its purpose** — it is the number you want when deciding whether a
+night's compute is enough. "How long will this take" is a different question with
+a different answer, and the planner was answering the first while printing it
+where a reader assumes the second.
+
+So the fix is naming. `refractal plan` now says *at most 41 min* and adds a line
+saying it costs every episode at its full step limit.
+
+Deliberately **not** a second, expected-duration number. That would need a
+distribution over episode lengths, which only a previous run provides — and such
+a distribution is fitted to a checkpoint. A worse policy times out more and runs
+longer, so the estimate would be optimistic **in exactly the case where somebody
+is waiting on it**. A bound plus a sentence beats a number that is wrong in the
+direction that hurts.
+
+Worth noting the near-miss: deriving expected duration from a previous run's step
+distribution is precisely the move that produced the step-budget prediction, and
+that one held to 2.5 points. The move is sound; what differs is that a step budget
+is a property of the *task* and an episode-length distribution is a property of
+the *policy*, so one transfers across checkpoints and the other does not.
+
+### Three instances, and the guard is only half machine-checkable
+
 **This is the third instance of the same error in this document**, twice in
-comparisons I made while writing about the error. That frequency is the finding.
-The guard cannot be "remember to check", because remembering is what failed; it
-has to be that a comparison names both sides' identity before being made. Two
-`plan_id`s that differ are two experiments, and the project already computes
-exactly that — I had the discriminator and did not look at it.
+comparisons made while writing about the error. That frequency is the finding, and
+it rules out "remember to check" — remembering is what failed.
+
+The obvious guard is to name both sides' identity before comparing: two differing
+`plan_id`s are two experiments, and the project computes exactly that. That covers
+this instance, and it is the weaker half of the lesson, because **it only works
+where an identifier already exists**.
+
+The first instance had none. A per-task result against a pooled prediction:
+nothing in either number was tagged "per task" or "pooled", no identifier
+distinguished them, and no check could have. So the general form is narrower than
+the mechanism that catches this one:
+
+> Before comparing two numbers, state what each is a number *of*. Sometimes that
+> is a `plan_id`, and a machine can check it. Sometimes it is "per task" versus
+> "pooled", and only the sentence can.
+
+Which is uncomfortable and should be said rather than implied away: **part of this
+one stays manual.** The `plan_id` check is not coverage, it is one case that
+happens to be automatable, and treating it as the guard would leave the harder
+half looking handled. The first instance is still the one most likely to recur,
+because it is the one with nothing to check against.
 
 ## Enforced where it can be
 

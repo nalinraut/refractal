@@ -46,7 +46,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
             f"  {scene.scene_id:<16} {len(scene.scenarios):>5} scenarios"
             f"  {scene.episode_count:>6} episodes"
             f"  {len(scene.workers):>3} worker(s){' [packed]' if packed else ''}"
-            f"  ~{_fmt_duration(scene.estimated_seconds)}"
+            f"  <={_fmt_duration(scene.estimated_seconds)}"
         )
         if args.verbose:
             for worker in scene.workers:
@@ -54,7 +54,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
                     f"      {worker.worker_id:<20} {worker.device:<8}"
                     f" cpuset={worker.cpuset or '-':<8}"
                     f" {len(worker.episodes):>5} episodes"
-                    f"  ~{_fmt_duration(worker.estimated_seconds)}"
+                    f"  <={_fmt_duration(worker.estimated_seconds)}"
                     f"  ({shape.envs_per_process} env/proc)"
                 )
 
@@ -62,7 +62,23 @@ def cmd_plan(args: argparse.Namespace) -> int:
     print(
         f"  {'-' * 66}\n"
         f"  {plan.total_episodes} episodes across {len(plan.scenes)} scene(s), "
-        f"{workers} worker(s), est. {_fmt_duration(plan.estimated_seconds)}"
+        f"{workers} worker(s), at most {_fmt_duration(plan.estimated_seconds)}"
+    )
+    # A BOUND, not an expectation, and said so because a reader assumes the
+    # other. The makespan model runs every episode to its step cap; episodes that
+    # succeed finish earlier, so the real duration is lower by exactly the rate at
+    # which they do. Measured once: a 220-step plan bounded at 89 min ran in 49,
+    # because episodes averaged 121 steps.
+    #
+    # Deliberately NOT a second, expected-duration number. That would need a
+    # distribution over episode lengths, which only a previous run provides, and
+    # such a distribution is fitted to a checkpoint -- a worse policy times out
+    # more and runs longer, so the estimate would be optimistic in exactly the
+    # case where somebody is waiting on it. A bound plus this sentence is more
+    # honest than a number that is wrong in the direction that hurts.
+    print(
+        "  that is an upper bound: every episode is costed at its full step "
+        "limit, and episodes that succeed finish sooner."
     )
     print(
         f"  tier={plan.tier}  seeds={plan.seeds}  "
