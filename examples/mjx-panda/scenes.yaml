@@ -30,6 +30,10 @@ scenes:
     resource_shape:
       - hardware_profile: rtx5090
         # MEASURED, and the first time this number is not 1.
+        # MJX may be split anywhere: the batch holds arbitrary same-scene
+        # scenarios, so any subset is a legal worker. Independent of the number
+        # below, which says the split would buy nothing.
+        partition_unit: scenario
         envs_per_process: 4096
         vram_per_env_mb: 1        # 0.33 measured, rounded up
         vram_base_mb: 900         # compilation and model, before any env

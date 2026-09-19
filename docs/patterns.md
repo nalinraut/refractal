@@ -522,13 +522,33 @@ The cautions are the point, and they fire on the two ways it misleads:
 220-step run, predicting the 100-step run, **39 min against an actual 39.9 —
 2% error**. The bound was 41.
 
-And writing it reproduced the aggregation error a fourth time, in one line. The
-cap was applied to the *mean* of prior episode lengths rather than to each
-episode before averaging — which lets episodes this plan would have stopped pull
-the average up first. On the real data that is 100 against a correct 95, and it
-made the expected duration exactly equal the bound, which is how it was noticed:
-the second number was useless rather than wrong-looking. Kept as a regression
-test.
+### The fourth instance, and why it is the useful one
+
+Writing this reproduced the aggregation error a fourth time, in one line. The cap
+was applied to the *mean* of prior episode lengths rather than to each episode
+before averaging — which lets episodes this plan would have stopped pull the
+average up first. On the real data: 100 against a correct 95.
+
+**It was caught because the arithmetic collapsed the two numbers together.**
+Capping the mean at `max_steps` makes the expected duration *exactly* equal the
+bound, and a second number identical to the first is visibly broken rather than
+plausibly wrong. Nothing about 41-and-41 could be read as a result.
+
+That is luck, and it is worth being explicit about how much. A slightly different
+cap — a prior run whose mean sat just under the limit — would have produced 97
+instead of 95, a believable number, no collapse, and nothing to notice. The error
+would have shipped.
+
+So of four instances: **three produced numbers that looked fine, and one was
+visible by an accident of arithmetic.** That ratio is the argument for the
+standing question rather than the remembered lesson:
+
+> Before averaging anything, ask whether a transform applies to the items or to
+> the aggregate. The two differ whenever the transform is not linear — a cap, a
+> floor, a ratio, a threshold — and the difference is usually small enough to
+> look like a result.
+
+Kept as a regression test, and break-tested: reverting to the mean-cap fails it.
 
 Worth noting the near-miss: deriving expected duration from a previous run's step
 distribution is precisely the move that produced the step-budget prediction, and

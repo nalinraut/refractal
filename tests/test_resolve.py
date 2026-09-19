@@ -211,8 +211,103 @@ class TestWorkerCountIsCapacityBound(unittest.TestCase):
             tmp.edit("run.yaml", lambda d: d["run"].__setitem__("tier", "full"))
             plan = resolve(root, hardware_profile=HARDWARE)
             self.assertEqual(plan.total_episodes, 2)
-            # 16 cores available, but only 2 useful workers.
+            # 16 cores available. Two limits now, and the tighter one binds:
+            #   envs_per_process = 1  -> 2 workers are USEFUL
+            #   partition_unit = task -> 1 worker per task is LEGAL, and this
+            #                            scene has one task
+            # Before `partition_unit` existed the planner saw only the first and
+            # chose 2, which is how a LIBERO plan got twelve workers each holding
+            # a slice of one task's scenario range.
+            self.assertEqual(sum(len(s.workers) for s in plan.scenes), 1)
+
+    def test_declaring_scenario_restores_the_split(self):
+        """The field has to change something, or it is decoration.
+
+        Byte-identical to the test above except for one line -- the scene
+        declares `partition_unit: scenario` -- so the difference in worker count
+        is attributable to that and nothing else.
+        """
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            tmp.edit(
+                "scenarios.yaml",
+                lambda d: d.__setitem__(
+                    "scenario_sets",
+                    [
+                        {
+                            **d["scenario_sets"][0],
+                            "params": {"vial_x": {"choices": [0.1, 0.12]}},
+                        }
+                    ],
+                ),
+            )
+            tmp.edit("tasks.yaml", lambda d: d.__setitem__("tasks", [d["tasks"][0]]))
+            tmp.edit(
+                "run.yaml",
+                lambda d: (
+                    d["run"].__setitem__("seeds", 1),
+                    d["run"].__setitem__("checkpoints", d["run"]["checkpoints"][:1]),
+                ),
+            )
+            tmp.edit("hardware.yaml", lambda d: d["hardware_profiles"][0].pop("max_workers"))
+            tmp.edit("run.yaml", lambda d: d["run"].__setitem__("tier", "full"))
+            # THE ONLY DIFFERENCE.
+            tmp.edit(
+                "scenes.yaml",
+                lambda d: [
+                    shape.__setitem__("partition_unit", "scenario")
+                    for scene in d["scenes"]
+                    for shape in scene["resource_shape"]
+                ],
+            )
+            plan = resolve(root, hardware_profile=HARDWARE)
+            self.assertEqual(plan.total_episodes, 2)
             self.assertEqual(sum(len(s.workers) for s in plan.scenes), 2)
+
+    def test_task_partitioning_never_cuts_inside_a_task(self):
+        """Capping the worker COUNT is not enough, which was the first attempt.
+
+        Ten workers over ten tasks still split a task's scenario range when the
+        slices are taken by episode index -- measured on the real LIBERO catalog:
+        ten workers, and still 540 of 600 groups refused. The ceiling made the
+        count legal and the assignment illegal.
+
+        Asserted as the property the backend actually needs: no worker holds a
+        strict subset of any task's episodes.
+        """
+        plan = resolve(CATALOG, hardware_profile=HARDWARE)
+        for scene in plan.scenes:
+            shape = scene.resource_shape
+            if shape.partition_unit != "task":
+                continue
+            everywhere = {}
+            for worker in scene.workers:
+                for episode in worker.episodes:
+                    everywhere.setdefault(episode.task_id, set()).add(worker.worker_id)
+            for task_id, owners in everywhere.items():
+                self.assertEqual(
+                    len(owners), 1,
+                    f"task {task_id} is split across {sorted(owners)}; a worker "
+                    "holding part of a task's zero-based range runs the early "
+                    "init states while its rows claim the late ones",
+                )
+
+    def test_the_default_is_the_conservative_one(self):
+        """A scene that does not say is assumed unsplittable.
+
+        The asymmetry: a wrong `scenario` runs the wrong init states and records
+        them as though they were right, which is silent. A wrong `task` costs
+        parallelism, which is visible and harmless. Defaults go to the failure you
+        can see.
+        """
+        from refractal.schema.models import ResourceShape
+
+        shape = ResourceShape(
+            hardware_profile="h", envs_per_process=1, vram_per_env_mb=0,
+            cpu_cores=1, sec_per_1k_steps=1.0, startup_sec=0,
+        )
+        self.assertEqual(shape.partition_unit, "task")
 
 
 class TestRefusals(unittest.TestCase):

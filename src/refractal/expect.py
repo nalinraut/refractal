@@ -138,12 +138,21 @@ def expected_seconds(
             "a worse checkpoint times out more often and runs LONGER, so this will "
             "under-estimate exactly when somebody is waiting on it."
         )
-    if expectation.matched_tasks < expectation.total_tasks:
-        expectation.notes.append(
-            f"only {expectation.matched_tasks} of {expectation.total_tasks} task(s) "
-            "matched by task_id; the rest fall back to the pooled mean. Task ids are "
-            "labels, so a rename since the prior run looks like a miss."
-        )
+    # Stated unconditionally, not only when something failed to match. A reader
+    # who sees "0 of 10 matched" learns to distrust misses; the join's other
+    # failure is silent and in the opposite direction, and nothing would teach
+    # them to distrust a match.
+    expectation.notes.append(
+        f"{expectation.matched_tasks} of {expectation.total_tasks} task(s) matched "
+        "by task_id, which is a LABEL and cuts both ways. A task renamed since the "
+        "prior run looks like a miss and falls back to the pooled mean, which is "
+        "visible. A task that kept its id and changed its content -- a different "
+        "instruction, a different goal -- matches silently and contributes the "
+        "wrong distribution, which is not. task_hash would catch the second and is "
+        "unusable here: it moves when max_steps moves, so it never matches across "
+        "a re-plan at a different budget, which is when this estimate is most "
+        "wanted."
+    )
     return expectation
 
 

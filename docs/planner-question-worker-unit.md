@@ -1,8 +1,15 @@
 # Open planner question: what must a worker own whole?
 
-Not a bug. A genuine tension between two correct models, surfaced by building
-`--backend compose`, and written down rather than fixed because the fix touches
-the thing everything else rests on.
+**Answered and implemented.** `ResourceShape.partition_unit`, an enum of
+`scenario | task`, declared and never derived. Kept as a document because the
+reasoning is the useful part and the measurement that settled it is not
+reproducible from the code.
+
+The result: the LIBERO catalog now plans to **10 workers, 60 groups, 0 refused,
+with no flag**. `--workers-per-scene 1` existed to work around this and is no
+longer needed for correctness. The fan-out is real — ten containers over ten
+tasks, each owning whole scenario ranges — where the twelve it used to produce
+were an artifact of a wrong scene model.
 
 ## Not a recovery
 
@@ -282,3 +289,25 @@ MJX scene into a catalog, and both become exercisable in the same afternoon. Tha
 is a better-shaped piece of work than either was alone, and it is the argument for
 doing it at all — a single fixture unblocks a planner path and settles a schema
 question that would otherwise be designed blind.
+
+
+## What implementing it cost, which was one more instance of the same mistake
+
+Capping the worker **count** at the task count looked like the whole fix. It is
+not. Ten workers over ten tasks still split a task's scenario range, because the
+slices were taken by episode index — measured on the real catalog: ten workers,
+and still **540 of 600 groups refused**. The ceiling made the count legal and the
+assignment illegal.
+
+`partition_unit` has to drive **where the cuts fall**, not only how many there
+are. Whole tasks are binned largest-first into workers and the bins are emitted
+directly.
+
+The second attempt was also wrong, and in a way worth recording: reorder the
+episodes so tasks are contiguous, then slice at a fixed width. That fails whenever
+tasks differ in size — a fixed-width cut lands mid-task anyway, reintroducing the
+exact failure one line after preventing it. The bins have to be the workers.
+
+Tested as the property rather than the mechanism: **no worker holds a strict
+subset of any task's episodes.** Break-tested by reverting to index slicing,
+which fails it by name.

@@ -102,6 +102,40 @@ class ResourceShape(Strict):
     #: it does not vary with batch shape -- compile is 0.7s flat from 256 to
     #: 4096 envs.
     startup_sec: int = Field(ge=0)
+    #: What a worker must own WHOLE. Not how many may share a process at once --
+    #: that is ``envs_per_process``, and the two are independent.
+    #:
+    #: ``scenario``
+    #:     Any subset of a scene's scenarios may be split off. MJX: the batch
+    #:     genuinely holds arbitrary same-scene scenarios.
+    #: ``task``
+    #:     A worker must own a task's whole zero-based scenario range. Classic
+    #:     MuJoCo under vla-eval: the harness rebuilds per ``task_id`` and counts
+    #:     episodes from zero within one, so a worker holding a later slice runs
+    #:     the early init states while every row claims the late ones.
+    #:
+    #: An enum rather than a number, and the reason is how it reads in three
+    #: years rather than how it behaves. A number invites arithmetic --
+    #: ``envs_per_process`` is a number and gets divided into things, which is the
+    #: conflation that let a scenario range be split twelve ways. An enum says it
+    #: is a boundary.
+    #:
+    #: **Declared, never derived.** Measured on the only two engines available:
+    #:
+    #:     scene              engine  envs/proc  partition_unit  workers chosen
+    #:     libero-spatial     mujoco          1            task              12
+    #:     panda-pick-cube    mjx          4096        scenario               1
+    #:
+    #: The planner splits the engine that cannot be split and refuses to split the
+    #: one that can. So a formula linking the two fields is not underdetermined,
+    #: it is wrong in the direction it points -- a derivation would have to
+    #: invert, and a rule that inverts on a sample of two was not nearly right.
+    #:
+    #: It is a property of the engine-plus-BENCHMARK pair, not of the engine
+    #: alone: a different driver over classic MuJoCo could answer ``scenario``.
+    #: Which is why it lives on ``ResourceShape``, already keyed by
+    #: ``(scene, engine, hardware_profile)``.
+    partition_unit: Literal["scenario", "task"] = "task"
     max_envs: int | None = Field(default=None, gt=0)
     measured_at: str | None = None
 

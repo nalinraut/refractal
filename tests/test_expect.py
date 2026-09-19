@@ -73,7 +73,23 @@ class TestItSaysWhatItLearnedFrom(unittest.TestCase):
         rows = prior({"0": [50, 60]}, checkpoints=("pi0",))
         got = expected_seconds(plan, rows)
         self.assertFalse(got.checkpoints_differ)
-        self.assertEqual(got.notes, [])
+        # The task-id note is unconditional, so "no notes" is not the assertion.
+        self.assertFalse(any("property of the policy" in n for n in got.notes))
+
+    def test_the_task_id_caution_names_both_directions(self):
+        """A reader who only sees "0 of 10 matched" learns to distrust misses.
+
+        The join's other failure is silent and opposite: a task that kept its id
+        and changed its content matches, and contributes the wrong distribution.
+        Nothing in a miss-only message would teach anyone to distrust a match, so
+        the note is unconditional and says both.
+        """
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        rows = prior({"0": [50, 60]}, checkpoints=("pi0",))
+        joined = " ".join(expected_seconds(plan, rows).notes)
+        self.assertIn("1 of 1 task(s) matched", joined)   # fires even on success
+        self.assertIn("matches silently", joined)
+        self.assertIn("task_hash would catch the second", joined)
 
     def test_unmatched_tasks_are_flagged_and_fall_back(self):
         """task_id is a LABEL. task_hash would be the honest key and moves when
@@ -83,7 +99,7 @@ class TestItSaysWhatItLearnedFrom(unittest.TestCase):
         rows = prior({"0": [50, 60]}, checkpoints=("pi0",), task_prefix="renamed-")
         got = expected_seconds(plan, rows)
         self.assertEqual(got.matched_tasks, 0)
-        self.assertIn("labels", " ".join(got.notes))
+        self.assertIn("LABEL", " ".join(got.notes))
         self.assertGreater(got.seconds, 0, "it must still produce a number")
 
     def test_infra_failures_are_excluded(self):

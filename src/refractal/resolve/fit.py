@@ -71,8 +71,35 @@ class SceneDemand:
         """Wall-clock for one full batch of ``envs_per_process`` episodes."""
         return (self.max_steps / 1000.0) * self.shape.sec_per_1k_steps
 
+    #: Tasks on this scene, needed when `partition_unit` is "task": a worker must
+    #: then own a task's whole scenario range, so a scene cannot usefully have
+    #: more workers than it has tasks.
+    tasks: int = 1
+
     def useful_worker_ceiling(self) -> int:
-        return max(1, math.ceil(self.episodes / self.shape.envs_per_process))
+        """How many workers this scene can usefully have.
+
+        Two independent limits, and conflating them is what produced a plan whose
+        twelve workers each held a slice of one task's scenario range -- 540 of
+        600 episode groups refused, and 30 of 40 episodes would have been recorded
+        against a scenario that never ran.
+
+        * ``envs_per_process`` bounds how many workers are *useful*: past
+          ``episodes / envs_per_process`` a worker has nothing to batch.
+        * ``partition_unit`` bounds how many are *legal*: at ``task`` a worker
+          must own a task's whole zero-based range, so the scene cannot split
+          finer than one worker per task.
+
+        Measured, and they point in opposite directions. LIBERO has
+        ``envs_per_process: 1`` (useful ceiling = 600) and ``partition_unit:
+        task`` (legal ceiling = 10). MJX has 4096 (useful = 1) and ``scenario``
+        (legal = unbounded). The binding constraint is the *other* one on each
+        engine, which is why neither field can be derived from the other.
+        """
+        useful = max(1, math.ceil(self.episodes / self.shape.envs_per_process))
+        if self.shape.partition_unit == "task":
+            return max(1, min(useful, self.tasks))
+        return useful
 
     def makespan(self, workers: int) -> float:
         """Seconds for this scene at ``workers`` workers, including startup."""

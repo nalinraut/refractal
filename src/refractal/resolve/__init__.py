@@ -162,6 +162,7 @@ def resolve(
                 episodes=len(episodes),
                 shape=shape,
                 max_steps=max(t.max_steps for t in tasks_on_scene),
+                tasks=len(tasks_on_scene),
                 # A backend that addresses one checkpoint and one seed per
                 # invocation pays startup once per (checkpoint x seed). That is
                 # what the vla-eval bridge does, and it is the default because
@@ -262,6 +263,26 @@ def resolve(
     )
 
 
+def _whole_tasks(episodes, n_workers) -> list[list]:
+    """Bin whole tasks into workers, so no cut ever falls inside a task.
+
+    Returns the bins themselves rather than a reordered flat list. Reordering and
+    then slicing at a fixed width was the first attempt and does not work: when
+    tasks differ in size a fixed-width cut lands mid-task anyway, which is the
+    exact failure this exists to prevent, reintroduced one line later.
+
+    Largest task first into the emptiest bin. The alternative is a long tail --
+    one worker holding the biggest task while the rest finish and idle.
+    """
+    by_task: dict[str, list] = {}
+    for episode in episodes:
+        by_task.setdefault(episode.task_id, []).append(episode)
+    bins: list[list] = [[] for _ in range(max(1, n_workers))]
+    for task in sorted(by_task, key=lambda t: (-len(by_task[t]), t)):
+        min(bins, key=len).extend(by_task[task])
+    return bins
+
+
 def _shard(scene_id, episodes, n_workers, device, cpusets, demand) -> list[PlannedWorker]:
     """Contiguous slices, not round-robin.
 
@@ -272,11 +293,25 @@ def _shard(scene_id, episodes, n_workers, device, cpusets, demand) -> list[Plann
 
     Contiguous rather than interleaved keeps episodes for one task adjacent,
     which keeps scene reloads rare inside a worker.
+
+    **``partition_unit`` decides where the cuts may fall**, and capping the
+    worker COUNT is not enough on its own. Ten workers over ten tasks still split
+    a task's scenario range if the slices are taken by episode index: measured on
+    the LIBERO catalog, ten workers and still 540 of 600 groups refused. The
+    ceiling made the count legal and the assignment illegal.
+
+    At ``task`` the episodes are grouped by task first and whole tasks are dealt
+    to workers, so no worker ever holds part of a task's zero-based range. At
+    ``scenario`` any cut is legal and the contiguous slice stands.
     """
-    per = math.ceil(len(episodes) / n_workers)
+    if demand.shape.partition_unit == "task":
+        chunks = _whole_tasks(episodes, n_workers)
+    else:
+        per = math.ceil(len(episodes) / n_workers)
+        chunks = [episodes[i * per : (i + 1) * per] for i in range(n_workers)]
+
     workers = []
-    for shard in range(n_workers):
-        chunk = episodes[shard * per : (shard + 1) * per]
+    for shard, chunk in enumerate(chunks):
         if not chunk:
             continue
         worker_id = f"{scene_id}/{shard}"
