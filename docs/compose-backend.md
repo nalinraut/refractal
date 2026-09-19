@@ -56,7 +56,7 @@ ten fake scenes never had to answer it.
 This is a genuine tension between two correct models rather than a defect —
 Refractal's worker unit is a scene, Compose's is a container, and a single-suite
 run has one of each. Written up as an open planner question in
-[planner-question-worker-unit.md](planner-question-worker-unit.md), including the
+the worker-unit write-up in the development record, including the
 measured reason task-sharding would give up nothing (the harness's environment
 reuse unit is already the task, not the scene) and the reason the obvious fix is
 not obviously right (it would make the worker unit engine-dependent, and `resolve`

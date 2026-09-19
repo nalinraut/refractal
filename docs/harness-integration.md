@@ -422,7 +422,7 @@ _SHARD_SHUFFLE_SEED = 42
 
 `refractal-design.md` Part 12 lists this as a finding a prompt could not have
 produced. Revised text in
-[design-part-12-revised.md](design-part-12-revised.md) — the example survives,
+the revised Part 12 in the development record — the example survives,
 reframed around the distinction it actually demonstrates.
 
 **`dc2c4ba`** — §4 above.
@@ -442,7 +442,7 @@ Refractal's side of the boundary permanently. Standing candidates, in the order
 worth filing:
 
 1. **`_store` is unreachable, so `_build_recorder` cannot be used** — drafted and
-   ready to file at [upstream-issues/recorder-injection.md](upstream-issues/recorder-injection.md).
+   ready to file at the draft issue in the development record.
    Supersedes the earlier "no config hook" framing, which named a design gap;
    this names the mechanism (`no_save` controls both gate conditions in opposite
    directions, and `_store` is assigned inside `run()` so there is nothing to
@@ -454,7 +454,7 @@ worth filing:
    the field means.
 
 The wider reading of the agent-authored PRs is in
-[design-part-12-revised.md](design-part-12-revised.md).
+the revised Part 12 in the development record.
 
 ---
 
@@ -563,7 +563,7 @@ maintainer's convenience — a faster way to close issues someone else specified
 An agent reviewing 1,704 papers *as published methodology* means agent-driven
 work is load-bearing in how the leaderboard exists at all: the 657-result
 artifact is not something the team did by hand and mentioned an agent helped
-with. See [design-part-12-revised.md](design-part-12-revised.md).
+with. See the revised Part 12 in the development record.
 
 ## 9. What the loop found in the plan schema
 

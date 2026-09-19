@@ -280,7 +280,7 @@ def experiment_identity(
     full run even though the smoke set is a strict subset of it.
 
     **This is an open question and a release blocker**, written up in
-    ``docs/question-tier-in-identity.md`` rather than left as an aside here. The
+    the development record rather than left as an aside here. The
     subsetting is deterministic and nested, so the overlap is exactly known rather
     than statistical, which is what makes promotion arguable at all. What settles
     it is whether anyone wants tier promotion in practice -- a usage question, not

@@ -553,7 +553,8 @@ class Run(Strict):
     #: drift, and drift was measured at zero: across ten tasks and three replicate
     #: positions, the pooled rank correlation between position and cell rate was
     #: +0.027 (p=0.839) for pi0 and +0.132 (p=0.230) for pi0.5, with the contrast
-    #: at +0.046 (p=0.723). See docs/ten-task-run.md. A third mode whose only
+    #: at +0.046 (p=0.723), measured across ten tasks and three replicate
+    #: positions. A third mode whose only
     #: justification does not hold is a default somebody picks for a reason that
     #: is not true.
     #:

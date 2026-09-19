@@ -52,14 +52,14 @@ Five, in order. The first two are gating; the rest is procedure.
    how many episodes may share a process at once. It touches `ResourceShape`, the
    most depended-on model in the project, and it is already written down as
    likely to change. See
-   [planner-question-worker-unit.md](planner-question-worker-unit.md). Needs an
+   the worker-unit write-up in the development record. Needs an
    MJX scene to design against honestly, which is the same prerequisite as scene
    affinity on the unexercised list — one fixture, two items.
 
 2. ~~**Settle `tier` in identity**~~ **DONE** — — whether a smoke run and a full run of one
    catalog are one experiment or two. Smaller than the first, and not a tweak: it
    changes what "the same experiment" means. See
-   [question-tier-in-identity.md](question-tier-in-identity.md).
+   the tier write-up in the development record.
 
 3. **Run the seconds test from a built wheel in a clean venv**, without the
    `execute` extra first. This is the step that caught both prior artifact bugs.

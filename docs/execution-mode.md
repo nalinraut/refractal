@@ -11,7 +11,7 @@ deployed.
 **Two modes, not three.** `interleaved` was to be task-outer ordering, to remove
 within-session drift. Drift was then measured at zero — ten tasks, three
 replicate positions, pooled rank correlation +0.027 at p=0.839 for pi0 and +0.132
-at p=0.230 for pi0.5, contrast +0.046 at p=0.723 (`docs/ten-task-run.md`). A mode
+at p=0.230 for pi0.5, contrast +0.046 at p=0.723 (measured across ten tasks and three replicate positions). A mode
 whose only justification does not hold is a default somebody picks for a reason
 that is not true, so it was not built and the invocation overhead it would cost
 was not estimated — that would have been a number nobody could check, attached to
