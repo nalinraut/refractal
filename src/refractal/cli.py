@@ -64,22 +64,41 @@ def cmd_plan(args: argparse.Namespace) -> int:
         f"  {plan.total_episodes} episodes across {len(plan.scenes)} scene(s), "
         f"{workers} worker(s), at most {_fmt_duration(plan.estimated_seconds)}"
     )
-    # A BOUND, not an expectation, and said so because a reader assumes the
-    # other. The makespan model runs every episode to its step cap; episodes that
-    # succeed finish earlier, so the real duration is lower by exactly the rate at
-    # which they do. Measured once: a 220-step plan bounded at 89 min ran in 49,
-    # because episodes averaged 121 steps.
-    #
-    # Deliberately NOT a second, expected-duration number. That would need a
-    # distribution over episode lengths, which only a previous run provides, and
-    # such a distribution is fitted to a checkpoint -- a worse policy times out
-    # more and runs longer, so the estimate would be optimistic in exactly the
-    # case where somebody is waiting on it. A bound plus this sentence is more
-    # honest than a number that is wrong in the direction that hurts.
+    # A BOUND, said so because a reader assumes the other thing. The makespan
+    # model costs every episode at its step cap; episodes that succeed finish
+    # earlier, so the truth is lower by exactly the rate at which they do.
     print(
         "  that is an upper bound: every episode is costed at its full step "
         "limit, and episodes that succeed finish sooner."
     )
+
+    # The second number, when a prior run can supply one. Two numbers, each
+    # labelled with what it is -- rather than one number a reader has to guess
+    # the meaning of. It is printed and never written to plan.json: it is fitted
+    # to particular hardware and particular checkpoints, which makes it
+    # render-time by the project's own rule.
+    if args.expect_from:
+        from .execute import read_episodes
+        from .expect import expected_seconds
+
+        try:
+            prior = read_episodes(args.expect_from, args.expect_plan or plan.plan_id)
+            rows = prior.to_pylist()
+        except Exception as exc:
+            print(f"  warning: no prior run to expect from: {exc}", file=sys.stderr)
+            rows = []
+        expectation = expected_seconds(plan, rows) if rows else None
+        if expectation is None:
+            print("  no usable prior episodes; expected duration not computed",
+                  file=sys.stderr)
+        else:
+            print(
+                f"  expected {_fmt_duration(expectation.seconds)}, from "
+                f"{expectation.sample} prior episode(s) of "
+                f"{expectation.learned_from}"
+            )
+            for note in expectation.notes:
+                print(f"    caution: {note}", file=sys.stderr)
     print(
         f"  tier={plan.tier}  seeds={plan.seeds}  "
         f"checkpoints={[c.id for c in plan.checkpoints]}  mode={plan.execution_mode}"
@@ -386,6 +405,16 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--hardware", required=True, help="hardware profile id, e.g. rtx5090")
     plan.add_argument("-o", "--output", default="plan.json")
     plan.add_argument("-v", "--verbose", action="store_true", help="show per-worker placement")
+    plan.add_argument(
+        "--expect-from", metavar="RESULTS_URI",
+        help="also print an EXPECTED duration, learned from a prior run's episode "
+             "lengths. The bound is always printed; this is the second number. Never "
+             "written to plan.json -- it is fitted to that run's hardware and "
+             "checkpoints, so it is render-time, not part of the experiment")
+    plan.add_argument(
+        "--expect-plan", metavar="PLAN_ID",
+        help="plan_id of the prior run, when it is not this one -- which is the "
+             "normal case, since changing a step budget changes plan_id")
     plan.add_argument(
         "--workers-per-scene", type=int, default=None, metavar="N",
         help="cap workers per scene. Use 1 for --backend vla-eval: the harness counts "

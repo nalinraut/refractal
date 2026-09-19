@@ -499,12 +499,36 @@ where a reader assumes the second.
 So the fix is naming. `refractal plan` now says *at most 41 min* and adds a line
 saying it costs every episode at its full step limit.
 
-Deliberately **not** a second, expected-duration number. That would need a
-distribution over episode lengths, which only a previous run provides — and such
-a distribution is fitted to a checkpoint. A worse policy times out more and runs
-longer, so the estimate would be optimistic **in exactly the case where somebody
-is waiting on it**. A bound plus a sentence beats a number that is wrong in the
-direction that hurts.
+Then the second number, printed **alongside** the bound rather than instead of
+it, via `--expect-from`. Two numbers, each labelled with what it is, which is the
+same lesson as the rest of this document: the problem was never having a bound,
+it was having one number a reader had to guess the meaning of.
+
+It is printed and never written to `plan.json`. It is fitted to particular
+hardware and particular checkpoints, which makes it render-time by the project's
+own rule, and a plan is portable.
+
+The cautions are the point, and they fire on the two ways it misleads:
+
+* **Different checkpoints.** Episode length is a property of the policy. A worse
+  checkpoint times out more and runs longer, so a borrowed distribution
+  under-estimates *exactly when somebody is waiting on a slow run*.
+* **Unmatched tasks.** The join is on `task_id`, a label. `task_hash` would be
+  honest and moves when `max_steps` moves — so it never matches across the change
+  this estimate is most useful for, a re-plan at a different budget. A rename
+  looks like a miss, and the fallback to a pooled mean says so.
+
+**Tested out of sample**, which the calibration was not: learned from the
+220-step run, predicting the 100-step run, **39 min against an actual 39.9 —
+2% error**. The bound was 41.
+
+And writing it reproduced the aggregation error a fourth time, in one line. The
+cap was applied to the *mean* of prior episode lengths rather than to each
+episode before averaging — which lets episodes this plan would have stopped pull
+the average up first. On the real data that is 100 against a correct 95, and it
+made the expected duration exactly equal the bound, which is how it was noticed:
+the second number was useless rather than wrong-looking. Kept as a regression
+test.
 
 Worth noting the near-miss: deriving expected duration from a previous run's step
 distribution is precisely the move that produced the step-budget prediction, and
