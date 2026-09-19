@@ -767,7 +767,7 @@ class TestHarnessSurfaceIsAPrecondition(unittest.TestCase):
 class TestVarianceEstimatorIsCalibrated(unittest.TestCase):
     """The estimator must recover known structure before it is trusted on a policy.
 
-    Every number in statistics-measurements.md was measured against
+    Every number in the measurement write-up was measured against
     `interaction_spread`, a model authored to make the fixture discriminate --
     then the tests were scored against it. The first real policy is the first
     independent source of the effect, so a correction to that doc should be a
@@ -1001,7 +1001,7 @@ class TestDegenerateArmsAreBlocked(unittest.TestCase):
     sd 0.000, where a true null gives 0.973 with sd 0.117. That is roughly eight
     sigma down -- a signature, not a low reading.
 
-    It also corrects docs/statistics-measurements.md, which said a design effect
+    It also corrects the measurement write-up, which said a design effect
     below 1.0 is noise. Below 1 *near 1* is noise; near zero is two arms that are
     the same thing.
     """

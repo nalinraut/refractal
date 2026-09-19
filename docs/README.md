@@ -1,55 +1,62 @@
-# Refractal documentation
+# Refractal
 
-Refractal is a scene-coherent placement and paired-comparison layer over
-[`allenai/vla-evaluation-harness`](https://github.com/allenai/vla-evaluation-harness).
-The harness answers *what did this checkpoint score*. Refractal answers
-**did my change help** — a different question, and the difference is paired
-statistics over content-addressed episodes.
+Refractal runs the same experiment against two checkpoints and tells you whether
+the difference is real.
 
-Seven documents, in the order they become useful.
+It sits on top of an evaluation harness rather than replacing one. The harness
+answers *what did this checkpoint score*; Refractal answers *did my change help*,
+which needs paired statistics over episodes that are content-addressed rather
+than positional.
+
+**New here?** [getting-started.md](getting-started.md) — five commands, about a
+minute, ending on a real verdict. No GPU, no simulator, no checkpoints.
 
 ## Using it
 
-| | when to read it |
+| | read it when |
 |---|---|
-| [statistics-measurements.md](statistics-measurements.md) | Before trusting a `compare` verdict. Why a clustered bootstrap and not a two-proportion z-test, measured rather than argued — including the design effect, what it means when it is below 1, and the circularity in the measurement that a real run has since partly resolved. |
-| [scene-task-split.md](scene-task-split.md) | Before writing a catalog. A scene is the compiled model; the goal belongs to the task. Explains `partition_unit`, `provider_ref`, and why a benchmark whose goal is opaque to `predicate` needs a content hook. |
-| [execution-mode.md](execution-mode.md) | Before choosing `serial` or `concurrent`. Defined by episode ordering rather than by deployment, with the reason a third mode was measured and not built. |
+| [getting-started.md](getting-started.md) | First. Install to verdict, start to finish. |
+| [writing-a-catalog.md](writing-a-catalog.md) | Describing your own experiment. What goes in each of the five files, how to decide what is a scene and what is a task, and which edits invalidate existing results. |
+| [reading-a-comparison.md](reading-a-comparison.md) | Looking at a verdict. Every number in the output, what it means, and when not to trust it. |
+| [execution-mode.md](execution-mode.md) | Choosing between `serial` and `concurrent`. |
 
-## Running it against a real harness
+## Connecting a simulator
 
-| | when to read it |
+| | read it when |
 |---|---|
-| [harness-integration.md](harness-integration.md) | Before using `--backend vla-eval`. The contract with the harness: which hooks, why no fork, what each claim holds up, and the three plan fields that were covered by a hash and never exercised by a consumer. `scripts/verify_harness_claims.py` re-checks six of its claims on every pin move. |
-| [compose-backend.md](compose-backend.md) | Before using `--backend compose`. One container per worker over the `--worker` entrypoint, what stays outside it (the model servers), and four permission failures that are invisible to a root run. |
+| [adapter-contract.md](adapter-contract.md) | Writing an adapter. Five methods, their signatures, and what each owes. |
+| [adapter-example.md](adapter-example.md) | Alongside it. A complete adapter with the catalog that drives it. |
+
+## Running at scale
+
+| | read it when |
+|---|---|
+| [backend-vla-eval.md](backend-vla-eval.md) | Driving `vla-eval` against real model servers. |
+| [backend-compose.md](backend-compose.md) | One container per worker. |
 
 ## Maintaining it
 
-| | when to read it |
+| | read it when |
 |---|---|
-| [releasing.md](releasing.md) | Before publishing. The checklist, and why `dist/` is deleted rather than reused. |
+| [releasing.md](releasing.md) | Publishing. |
 
-## Scripts that check claims about code we do not control
+## Commands
 
-An assertion about someone else's code does not fail when it becomes wrong — it
-sits there being wrong, which is how a claim that the harness hardcodes its
-server address survived nine days and four documents. So the assertions execute:
+| | |
+|---|---|
+| `refractal init DIR` | write a working example catalog |
+| `refractal build CATALOG` | establish facts that need the engine; writes `build.lock` |
+| `refractal plan CATALOG --hardware ID` | compile a catalog into `plan.json` |
+| `refractal run PLAN` | execute it |
+| `refractal render PLAN` | write a deployment file from a plan |
+| `refractal compare RESULTS PLAN_ID` | the verdict |
+| `refractal explain BEFORE AFTER` | why two plans are different experiments |
 
-* `scripts/verify_harness_claims.py` — six claims about vla-eval, each carrying
-  what it holds up. Run on every pin move.
-* `scripts/verify_wheel.py` — the built artefact against the source tree,
-  derived rather than listed. Has caught two real bugs.
-* `scripts/lint_provenance_claims.py` — refuses a comment claiming a value was
-  measured when `measured_at` is empty. In CI.
+## Scripts
 
-`refractal-libero/scripts/verify_libero_claims.py` does the same for LIBERO,
-including an asset digest per version.
-
-## The development record
-
-Nine documents that are *not* here, in `refractal-archive/` alongside this
-repository: the engineering-practice log, the two run write-ups, the original
-spec review, and two questions that are now closed. None is needed to use or
-maintain Refractal. They are kept because the reasoning is harder to reconstruct
-than the code — `patterns.md` in particular is the most reusable thing written
-here and the least about Refractal.
+| | |
+|---|---|
+| `scripts/test.sh` | the test command, used by CI too |
+| `scripts/verify_harness_claims.py` | six assumptions about `vla-eval`; run on every version bump |
+| `scripts/verify_wheel.py` | the built wheel against the source tree |
+| `scripts/lint_provenance_claims.py` | refuses a comment claiming a value was measured when `measured_at` is empty |

@@ -216,7 +216,7 @@ def main(argv: list[str]) -> int:
     print(f"\n{len(broken)} claim(s) no longer hold. What each one was holding up:\n")
     for claim in broken:
         print(f"  {claim.name}\n    {claim.relies_on}\n")
-    print("Update docs/harness-integration.md with the new finding and a date, and fix")
+    print("Record the new finding and a date, and fix")
     print("whatever depended on it, before moving the pin.")
     return 1
 

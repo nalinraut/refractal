@@ -1,6 +1,6 @@
 """Measuring the correlation structure the clustered bootstrap exists for.
 
-Every number in ``docs/statistics-measurements.md`` -- the false-positive tables,
+Every number in the measurement write-up (development record) -- the false-positive tables,
 the power tables, the case for gating on the bootstrap rather than McNemar -- was
 measured against ``FakeBenchmark``'s ``interaction_spread``. That is a *model* of
 within-scenario correlation, and it was authored to make the fixture able to
