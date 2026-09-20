@@ -94,7 +94,7 @@ class TestTheRenderedFileMatchesThePlan(unittest.TestCase):
     def test_no_service_is_a_model_server(self):
         """The servers stay outside: they are on the GPU, bare and warm, and a
         supervised one would put its model load inside the first episode of
-        whichever arm started second."""
+        whichever checkpoint started second."""
         plan = with_workers(make_plan(scenarios=2, checkpoints=("pi0", "pi05")), 1)
         doc = self._doc(plan)
         self.assertNotIn("pi0", doc["services"])

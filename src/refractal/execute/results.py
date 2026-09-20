@@ -81,7 +81,7 @@ EPISODES_SCHEMA = pa.schema(
         # Which model server answered. Provenance by the two-question test: the
         # same checkpoint served from two addresses is the same checkpoint (the
         # args that would change that are already in `plan_id`), so this must
-        # never gate a join. It is here because a self-comparison -- two arms
+        # never gate a join. It is here because a self-comparison -- two checkpoints
         # pointed at one server -- is preventable before a run and otherwise
         # unreconstructable after it, and `artifact_uri` is for artifacts.
         pa.field("server_url", pa.string()),

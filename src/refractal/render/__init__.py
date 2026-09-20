@@ -64,7 +64,7 @@ class ComposeSettings:
     #: ``checkpoint_id -> ws://host:port``. Points at the HOST, not at a service.
     #: The model servers stay outside Compose: they are on the GPU, bare and warm,
     #: and a supervised server would put its model load and first-inference JIT
-    #: inside the first episode of whichever arm started second.
+    #: inside the first episode of whichever checkpoint started second.
     servers: dict[str, str]
     #: Emitted as a literal, e.g. ``"1000:1000"``. Never ``"${UID}:${GID}"`` --
     #: neither is exported by default in a POSIX shell, so the interpolation
@@ -254,7 +254,7 @@ def render_compose(plan: Plan, settings: ComposeSettings) -> str:
         "#\n"
         "# The model servers are NOT here. They run on the host, bare and warm,\n"
         "# because a supervised server would put its model load and first-inference\n"
-        "# JIT inside the first episode of whichever arm started second.\n"
+        "# JIT inside the first episode of whichever checkpoint started second.\n"
         "#\n"
         "# Create the results directory before `docker compose up`. Docker creates a\n"
         "# missing bind-mount target as root whatever `user:` says, and a non-root\n"

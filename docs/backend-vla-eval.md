@@ -29,10 +29,10 @@ $ vla-eval serve -c configs/model_servers/<family>/<config>.yaml --address 0.0.0
 Then send at least one episode through each before the measured run. A first
 inference can take minutes (model load, CUDA context, JIT compilation), and the
 default per-step timeout is 30 seconds, so an unwarmed server errors every
-episode of whichever arm starts first.
+episode of whichever checkpoint starts first.
 
 Refractal does not start servers. A supervised server would pay its warm-up
-inside the first episode of whichever arm ran second, which is inside the thing
+inside the first episode of whichever checkpoint ran second, which is inside the thing
 being measured.
 
 ## The run
@@ -86,7 +86,7 @@ Beyond the identity fields:
 | `is_infra_failure` | a crash or timeout, not a policy failure; excluded from success denominators |
 | `concurrent_with` | other checkpoints running at the same time, under `execution_mode: concurrent` |
 
-`harness_surface` gates comparisons. If it differs between arms, `compare` exits
+`harness_surface` gates comparisons. If it differs between checkpoints, `compare` exits
 2 and names the files that changed. Override with `--allow-harness-mismatch`
 after reading them.
 

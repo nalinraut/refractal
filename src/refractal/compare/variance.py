@@ -122,7 +122,7 @@ def measure_variance(units: Sequence[Unit], a: str, b: str) -> VarianceReport:
     observed_var = statistics.variance(differences)
 
     # Under within-cell independence a cell proportion has variance p(1-p)/s,
-    # and the two arms of a paired difference are independent, so the difference
+    # and the two checkpoints of a paired difference are independent, so the difference
     # has the sum.
     #
     # The divisor is s-1, not s, and this is not a detail. E[p_hat(1-p_hat)] is
@@ -186,7 +186,7 @@ def modelled_variance(
     return {
         "shared_var": shared,
         "interaction_var": interaction,
-        # A paired difference sees the interaction term from both arms and none
+        # A paired difference sees the interaction term from both checkpoints and none
         # of the shared one.
         "expected_difference_var": 2 * interaction,
         "cancels_in_paired_difference": shared,

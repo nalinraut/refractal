@@ -304,7 +304,7 @@ def run_vla_eval(
             f"no server URL for checkpoint(s) {missing}. Every checkpoint the plan runs "
             f"needs one: --server <checkpoint>=<url>. Given: {sorted(servers)}."
         )
-    # Hoisted out of `preflight_servers` deliberately. Two arms pointed at one
+    # Hoisted out of `preflight_servers` deliberately. Two checkpoints pointed at one
     # server is a self-comparison -- a difference near zero with a tight interval
     # and every internal check passing -- and noticing it needs no network, so it
     # must not wait behind a connect that might itself fail for another reason.
@@ -357,7 +357,7 @@ def run_vla_eval(
                     # one calls anyio.run, which needs its own thread rather than
                     # a shared event loop.
                     #
-                    # Ordered seed-outer so the arms contend with each other
+                    # Ordered seed-outer so the checkpoints contend with each other
                     # rather than with a different seed of themselves.
                     for seed in sorted({e.seed for e in for_task}):
                         batch = []

@@ -461,7 +461,7 @@ class TestProvenance(LoopCase):
 class TestTheServerFlag(unittest.TestCase):
     def test_a_url_containing_an_equals_sign_survives(self):
         """Split on the first `=` only. Splitting on all of them and taking
-        [-1] would truncate a query string and point an arm at a different
+        [-1] would truncate a query string and point a checkpoint at a different
         address than the one given -- silently, and in the direction of a
         self-comparison if the truncation happened to collide."""
         from refractal.cli import _servers

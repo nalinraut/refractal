@@ -9,7 +9,7 @@ run:
 
 | mode | what happens | pick it when |
 |---|---|---|
-| `serial` | every task for checkpoint A, then every task for checkpoint B | one policy at a time fits in VRAM, or you want durations comparable across arms |
+| `serial` | every task for checkpoint A, then every task for checkpoint B | one policy at a time fits in VRAM, or you want durations comparable across checkpoints |
 | `concurrent` | both checkpoints at once, each against its own server | you want the wall clock halved and do not need to compare durations |
 
 It is recorded on every row and is **not** part of the experiment's identity, so
@@ -17,7 +17,7 @@ a run in either mode joins a comparison with the other.
 
 ## `concurrent`
 
-Both arms run at the same time against separate servers. Requires both servers
+Both checkpoints run at the same time against separate servers. Requires both servers
 resident, so check VRAM before choosing it.
 
 Rows produced under it carry `concurrent_with`, naming the other checkpoints that

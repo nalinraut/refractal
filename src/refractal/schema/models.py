@@ -546,7 +546,7 @@ class Run(Strict):
     #:     option when VRAM cannot hold both policies at once.
     #: ``concurrent``
     #:     Both checkpoints at the same time, each against its own server. Halves
-    #:     wall clock. Arms contend, so durations are not comparable and the rows
+    #:     wall clock. Checkpoints contend, so durations are not comparable and the rows
     #:     record which other checkpoints were running alongside.
     #:
     #: ``interleaved`` is deliberately absent. It existed to remove within-session

@@ -361,11 +361,11 @@ class TestBorderlineRealDifference(unittest.TestCase):
 
 
 class TestACeilingIsNamed(unittest.TestCase):
-    """An arm pinned at 0% or 100% on every episode.
+    """A checkpoint pinned at 0% or 100% on every episode.
 
     Added after a real run put pi0.5 at 60/60 on both tasks. `compare` printed
     "within-cell ICC 0.000, between-scenario Var 0.00000" -- the receipt -- and
-    said nothing about what it implies: a further improvement to that arm cannot
+    said nothing about what it implies: a further improvement to that checkpoint cannot
     be observed, and the interval's bound on that side is arithmetic rather than
     evidence.
 
@@ -552,9 +552,9 @@ class TestMultipleCheckpoints(unittest.TestCase):
         """rates: {checkpoint: success_rate} for one task.
 
         The salt varies per checkpoint, which is not cosmetic. Sharing one salt
-        made every arm draw the same outcomes, so two checkpoints at the same rate
+        made every checkpoint draw the same outcomes, so two checkpoints at the same rate
         were byte-identical -- a self-comparison wearing two names. The fixture
-        looked right and every test passed, until the degenerate-arms guard
+        looked right and every test passed, until the degenerate-checkpoints guard
         started asking. Independent draws at the same rate is what a true null
         actually is.
         """
@@ -997,12 +997,12 @@ class TestTheBlockMessageNamesTheChangedFiles(unittest.TestCase):
 class TestDegenerateArmsAreBlocked(unittest.TestCase):
     """The second, independent guard against a checkpoint compared to itself.
 
-    Measured: two arms drawn from one source give a design effect of 0.000 with
+    Measured: two checkpoints drawn from one source give a design effect of 0.000 with
     sd 0.000, where a true null gives 0.973 with sd 0.117. That is roughly eight
     sigma down -- a signature, not a low reading.
 
     It also corrects the measurement write-up, which said a design effect
-    below 1.0 is noise. Below 1 *near 1* is noise; near zero is two arms that are
+    below 1.0 is noise. Below 1 *near 1* is noise; near zero is two checkpoints that are
     the same thing.
     """
 

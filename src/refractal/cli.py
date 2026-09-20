@@ -126,7 +126,7 @@ def _servers(pairs: list[str] | None) -> dict[str, str]:
     """Parse ``--server ckpt=url`` into the mapping the bridge preflights.
 
     Split on the *first* ``=`` only: a URL may contain one in a query string, and
-    silently truncating it would point an arm at the wrong server -- which is the
+    silently truncating it would point a checkpoint at the wrong server -- which is the
     failure the whole pairing design exists to make unrepresentable.
     """
     def bad(message: str) -> "SystemExit":

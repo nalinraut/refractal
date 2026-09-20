@@ -134,7 +134,7 @@ process that ran it.
   [the worked example](adapter-example.md)), and Refractal drives it.
 - **Change the catalog.** [Writing a catalog](writing-a-catalog.md) covers what
   goes in each file and which edits invalidate existing results.
-- **Run the arms against real model servers** with `--backend vla-eval`, or one
+- **Run the checkpoints against real model servers** with `--backend vla-eval`, or one
   container per worker with `--backend compose`.
 
 ## What the example is not

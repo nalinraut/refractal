@@ -104,7 +104,7 @@ Treat a marginal result as marginal.
 **`the rate moved but few scenarios flipped their majority`**: a uniform shift
 rather than a set of scenarios breaking. Read the 2×2 before acting.
 
-**`X is at 100% on every episode of this task`**: that arm is at a ceiling. A
+**`X is at 100% on every episode of this task`**: that checkpoint is at a ceiling. A
 change that improved it could not be measured here, and the interval's bound on
 that side comes from arithmetic rather than from data. Widen the task set before
 reading it as a limit.
@@ -126,8 +126,8 @@ Exit 2, with the reason. The common ones:
 - **Duplicate episode ids**: one episode counted twice, which would weight a
   scenario double.
 - **A harness surface mismatch**: the code driving the episodes changed between
-  arms. Override with `--allow-harness-mismatch` after reading what moved.
-- **Degenerate arms**: the two checkpoints produced byte-identical outcomes,
+  checkpoints. Override with `--allow-harness-mismatch` after reading what moved.
+- **Degenerate checkpoints**: the two checkpoints produced byte-identical outcomes,
   usually meaning both were pointed at the same server.
 
 ## Options

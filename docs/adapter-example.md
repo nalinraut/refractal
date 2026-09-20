@@ -72,7 +72,7 @@ class BenchAdapter(StepBenchmark):
         # THE SCENARIO. These keys are whatever the catalog's `params` declared.
         # Refractal never inspects this dict. It hashes it and passes it
         # through. If the catalog says `cup_x` and this reads `cube_x`, every
-        # episode silently starts from the default, the two arms face identical
+        # episode silently starts from the default, both checkpoints face identical
         # conditions, and the comparison is between a thing and itself. Nothing
         # anywhere raises. Grep both files for the names.
         #
@@ -197,7 +197,7 @@ scenario_sets:
 
 **Parameter names that do not match.** `scenarios.yaml` says `cup_x`; `reset`
 reads `cup_x`. If those diverge, every episode starts from the default position.
-The run completes, the rates look plausible, and both arms faced the same
+The run completes, the rates look plausible, and both checkpoints faced the same
 conditions.
 
 **Observation keys that do not match.** `make_obs` returns `front`; the model

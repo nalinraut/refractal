@@ -189,7 +189,7 @@ def evaluate(
             "checkpoints being compared: the geometry changed between runs, so these "
             "results are not comparable. Re-run, or compare within one geometry."
         )
-    identical = _arms_look_identical(eligibility, checkpoints)
+    identical = _checkpoints_look_identical(eligibility, checkpoints)
     if identical:
         verdict.blocking.append(identical)
 
@@ -321,23 +321,23 @@ def evaluate(
                     f"(McNemar p={contrast.mcnemar.p_value:.3f}). A uniform shift, not a set "
                     "of scenarios breaking -- read the 2x2 before acting."
                 )
-            # An arm pinned at 0% or 100% on every episode. Not a degenerate
+            # A checkpoint pinned at 0% or 100% on every episode. Not a degenerate
             # comparison -- the contrast is real and the interval is honest -- but
             # the measurement is one-sided in a way the numbers do not show.
             #
             # Added after a real run put pi0.5 at 60/60. `compare` printed
             # "within-cell ICC 0.000, between-scenario Var 0.00000", which is the
             # receipt, and said nothing about what it implies: a further
-            # improvement to that arm cannot be observed, and the interval's bound
+            # improvement to that checkpoint cannot be observed, and the interval's bound
             # on that side is set by arithmetic rather than by evidence.
-            for arm, label in ((contrast.baseline, "baseline"),
-                               (contrast.candidate, "candidate")):
-                rate = task.rates.get(arm)
+            for checkpoint, label in ((contrast.baseline, "baseline"),
+                                      (contrast.candidate, "candidate")):
+                rate = task.rates.get(checkpoint)
                 if rate is None or 0.0 < rate < 1.0:
                     continue
                 contrast.notes.append(
-                    f"{arm} ({label}) is at {rate:.0%} on every episode of this task. The "
-                    "contrast is real, but this arm has no room to move: a change that "
+                    f"{checkpoint} ({label}) is at {rate:.0%} on every episode of this task. "
+                    "The contrast is real, but this checkpoint has no room to move: a change that "
                     f"{'improved' if rate == 1.0 else 'worsened'} it could not be measured "
                     "here, and the interval's bound on that side comes from the ceiling, "
                     "not from the data. Widen the task set before reading it as a limit "
@@ -379,12 +379,12 @@ def evaluate(
 
 #: Below this, a design effect is not a low reading -- it is a signature. At ~120
 #: scenarios the estimator's sd is ~0.14 about a true value of 1, so 0.25 is about
-#: five sigma down. Nothing produces that by chance; two arms that are the same
+#: five sigma down. Nothing produces that by chance; two checkpoints that are the same
 #: thing produce exactly 0.
 DEGENERATE_DESIGN_EFFECT = 0.25
 
 
-def _arms_look_identical(eligibility: Eligibility, checkpoints: Sequence[str]) -> str | None:
+def _checkpoints_look_identical(eligibility: Eligibility, checkpoints: Sequence[str]) -> str | None:
     """Catch a comparison of a checkpoint against itself.
 
     The failure this exists for: two checkpoints pointed at one model server.
@@ -399,7 +399,7 @@ def _arms_look_identical(eligibility: Eligibility, checkpoints: Sequence[str]) -
     differences look exactly like a true null and this cannot distinguish them.
     The reliable guard is `check_server_assignment` in the bridge, before the
     run; this is the second, independent one -- and it also catches ways of
-    duplicating an arm that have nothing to do with URLs, such as copied rows.
+    duplicating a checkpoint that have nothing to do with URLs, such as copied rows.
     """
     if len(checkpoints) < 2 or len(eligibility.units) < 10:
         return None
@@ -412,7 +412,8 @@ def _arms_look_identical(eligibility: Eligibility, checkpoints: Sequence[str]) -
         f"{checkpoints[0]!r} and {checkpoints[1]!r} produced outcomes with no "
         f"scenario-level variation between them (design effect "
         f"{report.design_effect:.3f}, observed Var {report.observed_var:.6f} across "
-        f"{report.units} scenarios). Two arms that are the same thing look exactly like "
+        f"{report.units} scenarios). Two checkpoints that are the same thing look exactly "
+        "like "
         "this. The usual cause is two checkpoints pointed at one model server, which "
         "produces a clean-looking null that no downstream check can question."
     )

@@ -10,3 +10,8 @@ __pycache__/
 /dist/
 /results/
 /plan.json
+
+# mkdocs build output. Regenerable from docs/ + mkdocs.yml, and when it was
+# tracked it went stale: a wording fix in docs/ left the built HTML asserting
+# the old text.
+site/
