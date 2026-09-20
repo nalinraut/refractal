@@ -38,10 +38,18 @@ from refractal.schema.plan import (
 PROVIDER = "vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark"
 
 
+def _frame_for(index: int):
+    """A 4x4 frame filled with the episode's index, so it can be identified."""
+    import numpy as np
+
+    return np.full((4, 4, 3), index, dtype=np.uint8)
+
+
 class FakeHarness:
     """Satisfies the ``invoke`` contract and records what it was asked to do."""
 
-    def __init__(self, *, successes=None, short_by=0, silent=False, steps_per_episode=1):
+    def __init__(self, *, successes=None, short_by=0, silent=False, steps_per_episode=1,
+                 frames_per_episode=0):
         self.configs: list[dict] = []
         self.successes = successes
         self.short_by = short_by
@@ -50,6 +58,10 @@ class FakeHarness:
         #: nothing -- an episode dying at step 0. Different failures.
         self.silent = silent
         self.steps_per_episode = steps_per_episode
+        #: Frames the benchmark hands the recorder per episode. Each is filled
+        #: with the episode's index so a test can tell which episode a written
+        #: strip actually came from.
+        self.frames_per_episode = frames_per_episode
 
     def __call__(self, config, recorder_cls):
         self.configs.append(dict(config))
@@ -63,6 +75,8 @@ class FakeHarness:
                 )
                 for _ in range(self.steps_per_episode):
                     recorder.record_step(reward=1.0)
+                for _ in range(self.frames_per_episode):
+                    recorder.record_video(_frame_for(index))
         episodes = []
         for index in range(count - self.short_by):
             ok = True if self.successes is None else self.successes[index % len(self.successes)]
@@ -703,3 +717,93 @@ class TestConcurrentMode(LoopCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVideoIsAskedForAndAccountedFor(LoopCase):
+    """The receipt for frames, at the granularity `verify_written` does not reach.
+
+    Asking for video and getting none is silent: the harness renders nothing, the
+    recorder is handed nothing, and the run completes reporting success with an
+    output directory that is merely smaller than expected. On a fifty-minute run
+    that is the whole cost paid before anyone notices.
+    """
+
+    def strips(self, plan):
+        from refractal.execute.results import comparison_prefix
+
+        root = Path(comparison_prefix(self.results, plan.plan_id)) / "frames"
+        return sorted(root.glob("*.webp")) if root.exists() else []
+
+    def test_no_frames_when_video_was_requested_is_refused(self):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        with self.assertRaises(BridgeError) as ctx:
+            self.run_loop(plan, FakeHarness(frames_per_episode=0),
+                          only=("pi0",), record_video=True)
+        self.assertIn("video was requested", str(ctx.exception))
+        self.assertEqual(self.strips(plan), [])
+
+    def test_without_video_no_frames_are_expected_or_written(self):
+        """The guard fires on a broken promise, not on the absence of one."""
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness(frames_per_episode=0), only=("pi0",))
+        self.assertEqual(self.strips(plan), [])
+
+    def test_a_strip_is_written_per_episode_and_holds_its_frames(self):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness(frames_per_episode=3),
+                      only=("pi0",), record_video=True, frame_every=1)
+        rows = self.rows(plan)
+        self.assertEqual(len(self.strips(plan)), len(rows))
+        from PIL import Image
+
+        for path in self.strips(plan):
+            with Image.open(path) as img:
+                self.assertEqual(img.width // img.height, 3, path.name)
+
+    def test_frames_land_on_the_row_they_came_from(self):
+        """The harness names episodes with its own counter; rows are named by a
+        content-addressed digest. Keying the buffer by one and looking it up by
+        the other finds nothing -- silently, on every episode. Caught in a real
+        run by the receipt above, which is why this pins the correspondence
+        rather than only the count.
+        """
+        import numpy as np
+        from PIL import Image
+
+        plan = make_plan(scenarios=3, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness(frames_per_episode=1),
+                      only=("pi0",), record_video=True, frame_every=1)
+        rows = self.rows(plan)
+        self.assertEqual(len(rows), 3)
+
+        from refractal.execute.results import comparison_prefix
+
+        root = Path(comparison_prefix(self.results, plan.plan_id)) / "frames"
+        # Rows come back in the order the episodes ran, which is the order the
+        # harness constructed recorders, which is the index each frame carries.
+        for index, row in enumerate(rows):
+            name = row["episode_id"].replace("sha256:", "")[:32] + ".webp"
+            with Image.open(root / name) as img:
+                value = int(np.asarray(img.convert("RGB"))[0, 0, 0])
+            self.assertEqual(
+                value, index,
+                f"{name} holds frames from episode {value}, not {index}",
+            )
+
+    def test_a_truncated_strip_is_refused_rather_than_rounded(self):
+        """A strip is N square frames. A width that is not a whole multiple of
+        the height is a partial write, and partial loss is an error here for the
+        same reason it is in `verify_written`."""
+        from PIL import Image
+
+        from refractal.execute.results import OutputMissingError, ResultWriter
+
+        writer = ResultWriter(results_uri=self.results, plan_id="sha256:" + "0" * 64)
+        directory = f"{writer.prefix}/frames"
+        writer.fs.makedirs(directory, exist_ok=True)
+        path = f"{directory}/truncated.webp"
+        with writer.fs.open(path, "wb") as handle:
+            Image.new("RGB", (10, 4)).save(handle, format="WEBP")
+        with self.assertRaises(OutputMissingError) as ctx:
+            writer.verify_frames([path], worker_id="w")
+        self.assertIn("not a whole number of square frames", str(ctx.exception))

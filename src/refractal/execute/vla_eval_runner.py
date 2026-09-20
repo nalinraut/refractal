@@ -53,6 +53,7 @@ from .vla_eval import (
     check_server_assignment,
     StepBuffer,
     build_eval_config,
+    FrameBuffer,
     check_index_contract,
     group_by_seed,
     make_parquet_orchestrator,
@@ -179,6 +180,8 @@ def _run_group(
     output_dir: str,
     invoke: "Invoke",
     writer: ResultWriter,
+    record_video: bool = False,
+    frame_every: int = 10,
     session_id: str,
     execution_mode: str,
     harness_version: str,
@@ -229,9 +232,11 @@ def _run_group(
         server_url=servers[checkpoint_id],
         output_dir=scratch,
         max_steps=_max_steps(group),
+        record_video=record_video,
     )
     buffer = StepBuffer()
-    recorder_cls = make_parquet_recorder(buffer.collect)
+    frames = FrameBuffer(keep_every=frame_every) if record_video else None
+    recorder_cls = make_parquet_recorder(buffer.collect, frames)
 
     started_at = dt.datetime.now(dt.timezone.utc)
     result = invoke(config, recorder_cls)
@@ -270,11 +275,38 @@ def _run_group(
         f"-{checkpoint_id}-seed{seed}"
     )
     path = writer.write_episodes(checkpoint_id, scene.scene_id, rows, part=part)
+    label = f"{worker_id}/{task_id}/{checkpoint_id}/seed{seed}"
     writer.verify_written(
-        {r["episode_id"] for r in rows},
-        [path] if path else [],
-        worker_id=f"{worker_id}/{task_id}/{checkpoint_id}/seed{seed}",
+        {r["episode_id"] for r in rows}, [path] if path else [], worker_id=label
     )
+
+    # The receipt for video, at the granularity `verify_written` does not reach.
+    #
+    # Asking for frames and getting none is silent: the harness renders nothing,
+    # the recorder is handed nothing, and the run completes reporting success
+    # with an output directory that is merely smaller than expected. On a
+    # fifty-minute run that is the whole cost paid before anyone notices.
+    #
+    # So compare the request against what arrived, and read the strips back
+    # rather than trusting a count kept by the code that wrote them.
+    if record_video:
+        strip_paths = writer.write_strips(frames, [r["episode_id"] for r in rows])
+        if not strip_paths:
+            raise BridgeError(
+                f"{label}: video was requested and the harness produced no frames "
+                f"across {len(rows)} episode(s). Either `record_video` is not "
+                "reaching the harness spec, or the recorder's `record_video` is "
+                "not being called. Nothing downstream would have noticed: the "
+                "episodes wrote rows and the run would have reported success."
+            )
+        kept = writer.verify_frames(strip_paths, worker_id=label)
+        if kept == 0:
+            raise BridgeError(
+                f"{label}: {len(strip_paths)} strip(s) were written and decode to "
+                "zero frames."
+            )
+    if frames is not None:
+        frames.clear()
     return len(rows), path
 
 
@@ -288,6 +320,8 @@ def run_vla_eval(
     output_dir: str = "./vla-eval-output",
     invoke: Invoke | None = None,
     resume: bool = True,
+    record_video: bool = False,
+    frame_every: int = 10,
 ) -> VlaEvalSummary:
     """Drive the harness once per (worker, checkpoint, seed) and write Parquet."""
     # Derived from the episodes, not from ``plan.checkpoints``. The episodes are
@@ -344,6 +378,8 @@ def run_vla_eval(
                         output_dir=output_dir,
                         invoke=invoke,
                         writer=writer,
+                        record_video=record_video,
+                        frame_every=frame_every,
                         session_id=session_id,
                         execution_mode=plan.execution_mode,
                         harness_version=harness_version,

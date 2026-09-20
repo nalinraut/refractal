@@ -204,6 +204,83 @@ class ResultWriter:
         self.fs.mv(staging, final)
         return final
 
+    def write_strips(self, frames, episode_ids, *, quality: int = 80) -> list[str]:
+        """One sprite strip per episode: frames left to right in a single WebP.
+
+        One file per episode rather than one per frame, because a 600-episode
+        run at every tenth step is ~7,600 frames and a static site serving that
+        many files pays for each one. A strip is also a single decode, so the
+        page can drive it from one clock and cannot desynchronise.
+
+        Written temp-then-rename, for the same reason the Parquet parts are.
+        """
+        try:
+            from PIL import Image
+        except ImportError as exc:      # pragma: no cover - environment-dependent
+            raise RuntimeError(
+                "video was requested but Pillow is not installed, so frames "
+                "cannot be encoded. Install it, or run without video."
+            ) from exc
+
+        directory = f"{self.prefix}/frames"
+        self.fs.makedirs(directory, exist_ok=True)
+        written: list[str] = []
+        # Positional, because the buffer is keyed by the harness's episode id and
+        # the rows by Refractal's. Same correspondence the outcome mapping uses.
+        by_episode = frames.in_order()
+        # Nothing at all is the receipt's case, not this one: the caller turns
+        # an empty result into "video was requested and none arrived", which
+        # names the actual problem. A mismatch means SOME episodes recorded and
+        # the positional match is therefore unsafe, which is this one.
+        if not by_episode:
+            return []
+        if len(by_episode) != len(episode_ids):
+            raise OutputMissingError(
+                f"the recorder saw {len(by_episode)} episode(s) and the plan named "
+                f"{len(episode_ids)}. Frames cannot be matched to rows positionally "
+                "when the counts disagree."
+            )
+        for episode_id, got in zip(episode_ids, by_episode):
+            if not got:
+                continue
+            tiles = [Image.fromarray(f) for f in got]
+            w, h = tiles[0].size
+            strip = Image.new("RGB", (w * len(tiles), h))
+            for i, tile in enumerate(tiles):
+                strip.paste(tile, (i * w, 0))
+            name = episode_id.replace("sha256:", "")[:32]
+            final = f"{directory}/{name}.webp"
+            staging = f"{directory}/.tmp-{uuid.uuid4().hex}.webp"
+            with self.fs.open(staging, "wb") as handle:
+                strip.save(handle, format="WEBP", quality=quality, method=5)
+            self.fs.mv(staging, final)
+            written.append(final)
+        return written
+
+    def verify_frames(self, paths: Iterable[str], *, worker_id: str) -> int:
+        """Read the strips back and confirm they decode.
+
+        Reads the artifact, not a counter. A tally kept by the code that did the
+        writing is produced by the same path that would have failed, which is
+        the whole reason `verify_written` reads the part files rather than
+        trusting its own count.
+        """
+        from PIL import Image
+
+        total = 0
+        for path in paths:
+            with self.fs.open(path, "rb") as handle:
+                img = Image.open(handle)
+                img.load()
+                if img.height == 0 or img.width % img.height:
+                    raise OutputMissingError(
+                        f"{worker_id}: {path} is {img.width}x{img.height}, which is "
+                        "not a whole number of square frames. The strip is truncated "
+                        "or was written from frames of differing size."
+                    )
+                total += img.width // img.height
+        return total
+
     def episode_ids_in(self, paths: Iterable[str]) -> list[str]:
         """Episode ids from specific part files, **with duplicates preserved**.
 

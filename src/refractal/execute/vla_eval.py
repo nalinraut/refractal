@@ -465,6 +465,7 @@ def build_eval_config(
     server_url: str,
     output_dir: str,
     max_steps: int,
+    record_video: bool = False,
 ) -> dict[str, Any]:
     """The vla-eval config for one worker against one checkpoint.
 
@@ -502,7 +503,11 @@ def build_eval_config(
                 # Recording on: the gate is `rec_cfg is None or self._store is
                 # None`, and ParquetOrchestrator moves the second. Leaving this
                 # unset would close the first and record nothing.
-                "recording": {"record_step": True, "record_video": False},
+                # `record_video` is what makes the harness render and forward
+                # frames at all. With it False the recorder's `record_video` is
+                # never called, so turning the recorder into a frame sink
+                # without also turning this on changes nothing.
+                "recording": {"record_step": True, "record_video": record_video},
             }
         ],
     }
@@ -536,7 +541,72 @@ def rows_from_benchmark_result(
     return [to_episode_row(episode, by_index[i]) for i, episode in enumerate(episodes)]
 
 
-def make_parquet_recorder(collect) -> type:
+class FrameBuffer:
+    """Every `keep_every`-th frame of each episode, in capture order.
+
+    Subsampled at capture rather than afterwards: a 220-step episode at 224px
+    is ~33 MB of raw RGB held per worker, and only every tenth frame is ever
+    written. Keeping all of them costs memory for frames that are discarded.
+
+    KEYED BY THE HARNESS'S EPISODE ID, which is not Refractal's. The recorder is
+    constructed with whatever the harness calls the episode -- its own counter --
+    while a row carries the content-addressed `episode_id` that identifies the
+    episode across runs. The two never match, and looking one up by the other
+    silently finds nothing, which is how this was found: the receipt reported
+    zero frames on a run that had captured them.
+
+    So the correspondence here is positional, and it is the same positional
+    correspondence `rows_from_benchmark_result` already relies on: episodes are
+    constructed, recorded and reported in one order. `in_order` exposes that
+    order so a caller can zip it against rows rather than guess at a key.
+    """
+
+    def __init__(self, keep_every: int = 10) -> None:
+        self.keep_every = keep_every
+        self._frames: dict[str, list[Any]] = {}
+        self._seen: dict[str, int] = {}
+
+    def begin(self, harness_episode_id: str) -> None:
+        """Register an episode when its recorder is built, not at its first frame.
+
+        An episode that dies before producing one still happened and still has a
+        row. Registering on the first frame instead would leave it out of the
+        order entirely, and the positional match against rows would then be off
+        by one for every episode after it.
+        """
+        self._seen.setdefault(harness_episode_id, 0)
+
+    def collect(self, harness_episode_id: str, frame: Any) -> None:
+        n = self._seen.get(harness_episode_id, 0)
+        self._seen[harness_episode_id] = n + 1
+        # A benchmark that cannot produce a frame passes None. Dropping it here
+        # keeps the buffer encodable, and an episode that yields only None ends
+        # up with no frames, which the receipt then reports.
+        if n % self.keep_every == 0 and frame is not None:
+            self._frames.setdefault(harness_episode_id, []).append(frame)
+
+    def in_order(self) -> list[list[Any]]:
+        """Frame lists, one per episode, in the order the episodes ran."""
+        return [self._frames.get(k, []) for k in self._seen]
+
+    @property
+    def episodes_seen(self) -> int:
+        return len(self._seen)
+
+    @property
+    def episodes_with_frames(self) -> int:
+        return sum(1 for v in self._frames.values() if v)
+
+    @property
+    def total(self) -> int:
+        return sum(len(v) for v in self._frames.values())
+
+    def clear(self) -> None:
+        self._frames.clear()
+        self._seen.clear()
+
+
+def make_parquet_recorder(collect, frames=None) -> type:
     """Build the recorder subclass, lazily.
 
     Lazily because the base class lives in the harness, and this module has to
@@ -574,6 +644,8 @@ def make_parquet_recorder(collect) -> type:
             # SQLite store this recorder has no use for.
             self._episode_id = episode_id
             self._sid, self._eid, self._eval_id = sid, eid, eval_id
+            if frames is not None:
+                frames.begin(episode_id)
 
         @property
         def is_active(self) -> bool:
@@ -605,7 +677,11 @@ def make_parquet_recorder(collect) -> type:
                 collect(self._episode_id, name, value)
 
         def record_video(self, frame: Any) -> None:
-            return None
+            # Was a no-op. A recorder that silently discards what it is handed
+            # is the same shape as a store that silently stays null: the run
+            # completes, reports success, and the frames are gone.
+            if frames is not None:
+                frames.collect(self._episode_id, frame)
 
         def close(self, *args: Any, **kwargs: Any) -> None:
             return None

@@ -179,6 +179,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 session_id=session_id,
                 output_dir=args.harness_output,
                 resume=not args.no_resume,
+                record_video=args.video,
+                frame_every=args.frame_every,
             )
         except BridgeError as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -483,6 +485,15 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("plan", help="path to plan.json")
     run_cmd.add_argument("-o", "--results", default="./results", help="results URI")
     run_cmd.add_argument("--catalog", help="catalog to copy in as provenance")
+    run_cmd.add_argument(
+        "--video", action="store_true",
+        help="capture episode frames. The worker FAILS if frames were asked for "
+             "and none arrived, rather than finishing quietly with nothing.",
+    )
+    run_cmd.add_argument(
+        "--frame-every", type=int, default=10, metavar="N",
+        help="keep every Nth frame (default 10).",
+    )
     run_cmd.add_argument(
         "--backend", choices=("local", "vla-eval", "compose"), default="local",
         help="'local' simulates; 'vla-eval' drives the harness in this process "
