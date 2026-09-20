@@ -406,6 +406,31 @@ class TestTheIndexContract(unittest.TestCase):
                 self._episodes(["s0", "s1", "s3"]), self._scenarios([0, 1, 3])
             )
 
+    def test_a_scenario_without_an_index_is_not_this_contract_s_business(self):
+        """A scene that varies something physical has no counter to disagree with.
+
+        The contract exists because some providers select from a pinned array by
+        an integer the harness supplies. A scenario varying a position names no
+        index, and demanding one raised KeyError on every such plan -- including
+        at render time, which is supposed to be answerable from the plan alone
+        with nothing installed.
+        """
+        episodes = self._episodes(["p0", "p1"])
+        physical = {"p0": {"cube_x": 0.1}, "p1": {"cube_x": 0.2}}
+        check_index_contract(episodes, physical)      # must not raise
+
+    def test_a_mixture_of_indexed_and_not_is_refused(self):
+        """Half a group selecting from an array and half not is a catalog error.
+
+        Skipping the unindexed ones would let them run whichever state the
+        counter happened to reach.
+        """
+        episodes = self._episodes(["p0", "p1"])
+        mixed = {"p0": {"init_state_index": 0}, "p1": {"cube_x": 0.2}}
+        with self.assertRaises(BridgeError) as ctx:
+            check_index_contract(episodes, mixed)
+        self.assertIn("and the rest do not", str(ctx.exception))
+
     def test_an_unknown_scenario_is_refused_rather_than_skipped(self):
         with self.assertRaises(BridgeError) as ctx:
             check_index_contract(self._episodes(["s0", "s9"]), self._scenarios([0]))

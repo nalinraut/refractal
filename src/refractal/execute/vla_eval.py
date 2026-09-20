@@ -403,6 +403,39 @@ def check_index_contract(episodes: list[PlannedEpisode], scenarios: Mapping[str,
             "group_by_seed() — and run one invocation per seed."
         )
 
+    # A scenario that names no index is not selecting from a pinned array, and
+    # this contract does not apply to it. An MJX scene varies `cube_x` and
+    # `cube_y`; there is no counter to disagree with, and demanding the key
+    # raised KeyError on every such plan -- including at render time, which is
+    # meant to be a pure function of the plan and answerable anywhere.
+    #
+    # Checked across the whole group rather than per episode: a group where some
+    # scenarios carry an index and some do not is a catalog error worth naming,
+    # not something to skip past.
+    # An episode naming a scenario the plan does not define is a different and
+    # worse failure than one naming a scenario without an index. Checked first,
+    # because `.get(...) or {}` would quietly turn the first into the second --
+    # which it did, and a test that existed for the unknown-scenario case caught
+    # it.
+    unknown = [e for e in episodes if e.scenario_hash not in scenarios]
+    if unknown:
+        raise BridgeError(
+            f"{len(unknown)} episode(s) name a scenario this scene does not define, "
+            f"for example {unknown[0].scenario_hash}. The index contract cannot be "
+            "checked against a scenario that is not in the plan."
+        )
+
+    indexed = [e for e in episodes if "init_state_index" in scenarios[e.scenario_hash]]
+    if not indexed:
+        return
+    if len(indexed) != len(episodes):
+        raise BridgeError(
+            f"{len(indexed)} of {len(episodes)} episode(s) in this group name an "
+            "`init_state_index` and the rest do not. Either every scenario on a scene "
+            "selects from the provider's pinned array or none does; a mixture means "
+            "the ones without an index would run whichever state the counter reached."
+        )
+
     wanted = sorted(
         scenarios[e.scenario_hash]["init_state_index"]
         for e in episodes

@@ -2,52 +2,68 @@
 
 **Run the same evaluation twice and know whether the difference is real.**
 
-You have a robot policy. You changed something. You want to know if the new
-version is better.
+You have a policy. You changed something. You want to know if the new version is
+better.
 
 Today you run a benchmark, get 78%, run the old one, get 74%, and guess. That
-number hides everything that matters: *which* situations got better, whether
-four points is real or noise, whether some of those "failures" were your
-container crashing, and whether the new version got worse at something while
-getting better overall.
+number hides everything that matters: *which* situations got better, whether four
+points is real or noise, whether some of those "failures" were your container
+crashing, and whether the new version got worse at something while getting better
+overall.
 
 Refractal turns "run a benchmark" into "run an experiment."
 
 ```console
-$ pip install refractal
+$ pip install "refractal[execute,compare]"
+$ mkdir demo && cd demo
 $ refractal init .
-$ refractal plan catalog --hardware laptop
+$ refractal plan catalog --hardware laptop -o plan.json
   cube-bowl-v1        30 scenarios     360 episodes    2 worker(s)  <=37 min
   ------------------------------------------------------------------
   360 episodes across 1 scene(s), 2 worker(s), at most 37 min
-  wrote plan.json  (plan_schema 1, plan_id sha256:dc5e1755911f...)
+  that is an upper bound: every episode is costed at its full step limit,
+  and episodes that succeed finish sooner.
+  wrote plan.json  (plan_schema 1, plan_id sha256:82b73f180a7a...)
 
-$ refractal run plan.json --catalog catalog
-$ refractal compare results <plan_id>
+$ refractal run plan.json -o results --catalog catalog
+$ refractal compare results $(python -c "import json;print(json.load(open('plan.json'))['plan_id'])")
 ```
 
-> **Status: alpha.** The planning, execution, comparison and build stages are
-> implemented and tested. The simulator adapter, the Compose backend and
-> resource-shape probing are not — see [What is not here yet](#what-is-not-here-yet).
+About a minute end to end, with no GPU, no simulator and no checkpoints: the
+example runs against a built-in fake benchmark, so the machinery is real and only
+the robot is not.
+
+**[Start here →](docs/getting-started.md)**
+
+## Documentation
+
+| | |
+|---|---|
+| [Getting started](docs/getting-started.md) | Install to verdict, start to finish. |
+| [Writing a catalog](docs/writing-a-catalog.md) | Describing your own experiment, and which edits invalidate existing results. |
+| [Reading a comparison](docs/reading-a-comparison.md) | Every number in the output and when not to trust it. |
+| [Adapter contract](docs/adapter-contract.md) · [example](docs/adapter-example.md) | Connecting your own simulator. |
+| [Against vla-eval](docs/backend-vla-eval.md) · [In containers](docs/backend-compose.md) | Running at scale. |
+| [Execution modes](docs/execution-mode.md) · [Releasing](docs/releasing.md) | |
 
 ## What it does
 
 **Declares experiments, not benchmark invocations.** You describe scenes, tasks
 and scenario grids in YAML. Refractal expands that into a concrete list of
 episodes, each with a content-addressed identity, works out how many workers the
-run needs and whether they fit in memory, and writes a plan you can read, diff
-and commit before spending anything.
+run needs and whether they fit in memory, and writes a plan you can read, diff and
+commit before spending anything.
 
-**Compares episode-by-episode, with statistics that fit the design.** The same
+**Compares episode by episode, with statistics that fit the design.** The same
 scenarios face every checkpoint, so the data is *paired*. Refractal reports the
 full 2×2 per task, runs McNemar on scenario-level outcomes, and gates on a
-clustered bootstrap that resamples whole scenarios — because five seeds at one
-pose are one observation of that pose, not five.
+clustered bootstrap that resamples whole scenarios, because five seeds at one
+pose are one observation of that pose rather than five.
 
-**Refuses rather than guessing.** A plan that oversubscribes VRAM is not
-emitted. A comparison across two scene geometries is blocked, not reported. A
-filter whose body changed since it was last evaluated invalidates the cached
-result instead of answering from it.
+**Refuses rather than guessing.** A plan that oversubscribes VRAM is not emitted.
+A comparison across two scene geometries is blocked, not reported. A worker
+assignment the backend cannot execute is refused at planning time rather than
+discovered forty minutes in.
 
 ## Three things it gets right that aggregate scores cannot
 
@@ -56,25 +72,24 @@ result instead of answering from it.
 join; change what the task *means* and they correctly stop. Reordering a list
 cannot silently change what an attempt was.
 
-**Infra failures leave the denominator.** A crashed worker is its own column,
-not a policy failure. And because dropping it breaks the pairing a paired test
-needs, the seed is dropped from *every* checkpoint, with the loss reported
-rather than absorbed.
+**Infra failures leave the denominator.** A crashed worker is its own column, not
+a policy failure. And because dropping it breaks the pairing a paired test needs,
+the seed is dropped from *every* checkpoint, with the loss reported rather than
+absorbed.
 
 **Multiplicity is corrected across the whole family.** The gate fires if any
-contrast trips, so every contrast is one family. Three tasks at a nominal 5% is
-a family-wise error rate near 14%; four checkpoints across three tasks is
-eighteen contrasts and about 60%. Holm-adjusted, with the uncorrected number
-printed so the correction does not read as pedantry.
+contrast trips, so every contrast is one family. Three tasks at a nominal 5% is a
+family-wise error rate near 14%; four checkpoints across three tasks is eighteen
+contrasts and about 60%. Holm-adjusted, with the uncorrected number printed so
+the correction does not read as pedantry.
 
 ## Comparing more than two checkpoints
 
-Two is the common case, not a special one. A single checkpoint is a comparison
-of size one; three is a training sweep, and produces something a leaderboard
-cannot:
+Two is the common case, not a special one. A single checkpoint is a comparison of
+size one; three is a training sweep, and produces something a leaderboard cannot:
 
 ```
-vial-rack-v1 / vial-slot-4   (119 scenarios)
+scene-v1 / task-4   (119 scenarios)
   rates:  ckpt-46: 49.4%   ckpt-47: 49.8%   ckpt-48: 37.5%   (baseline ckpt-46)
   outcome patterns:
        35  none solve
@@ -98,7 +113,7 @@ hypothesis you can go replay. Three lost scenarios would be noise.
 |---|---|
 | 0 | no regression |
 | 1 | regression detected |
-| 2 | **cannot be answered** — different scene geometry, or a harness change that may have altered what was measured |
+| 2 | **cannot be answered**: different scene geometry, duplicated episodes, or a change to the code that ran them |
 
 The third is not a regression and is never reported as one. "The two runs used
 different geometry" is a different sentence from "the policy got worse", and
@@ -107,46 +122,69 @@ conflating them teaches people to ignore the gate.
 ## Architecture
 
 Refractal is a compiler, not a runtime. A catalog goes in, a `plan.json` comes
-out, and the plan executes. The schedule is decided once and recorded, which
-makes placement part of the provenance rather than an accident of the day.
+out, and the plan executes. The schedule is decided once and recorded, which makes
+placement part of the provenance rather than an accident of the day.
 
-| package | does | touches infrastructure? |
+| package | does | needs infrastructure? |
 |---|---|---|
 | `refractal.schema` | catalog, validation, identity | no |
 | `refractal.resolve` | catalog → `plan.json` | no |
 | `refractal.build` | facts that need the engine → `build.lock` | yes |
-| `refractal.execute` | runs a plan; backends | yes |
+| `refractal.execute` | runs a plan; three backends | yes |
+| `refractal.render` | plan → deployment file | no |
 | `refractal.compare` | Parquet → verdict | no |
 
-`refractal plan` runs on a laptop with no simulator, no GPU and no Docker. That
-is enforced by a test, not by convention: it is the property that lets you
+`refractal plan` runs on a laptop with no simulator, no GPU and no Docker. That is
+enforced by a test rather than by convention: it is the property that lets you
 inspect a plan and its cost before committing to it.
 
-Results are Parquet at an fsspec URI, so `./results` and `s3://bucket/results`
-are the same code path. Every write is atomic, which is what makes resume safe.
+Results are Parquet at an fsspec URI, so `./results` and `s3://bucket/results` are
+the same code path. Every write is atomic, which is what makes resume safe, and
+resume works by episode identity rather than by a counter.
+
+## Backends
+
+| | |
+|---|---|
+| `--backend local` | simulates outcomes; no infrastructure |
+| `--backend vla-eval` | drives the harness against running model servers |
+| `--backend compose` | one container per worker, over the same entrypoint |
+
+`refractal render` writes the Compose file without Docker installed, so you can
+read it before running it.
 
 ## Install
 
 ```console
-pip install refractal              # plan and build
-pip install refractal[execute]     # + run
-pip install refractal[compare]     # + compare
+pip install refractal                    # plan and build
+pip install "refractal[execute]"         # + run
+pip install "refractal[compare]"         # + compare
+pip install "refractal[vla-eval]"        # + the harness backend
 ```
 
 Comparison needs no numerical stack: exact McNemar is a binomial tail, the
 bootstrap is resampling, and Cochran's Q is a permutation test.
 
+## Status
+
+Alpha. Every stage is implemented and tested, and the identity-bearing fields are
+still able to move between versions, which is what the `a` in `0.1.0a1` is for.
+
+Validated against real model servers as well as the synthetic backend: 1,362
+episodes across five runs, including a 600-episode comparison whose success rate
+was predicted from an earlier run's data before it was run and came back within
+two points.
+
 ## What is not here yet
 
-- **The simulator adapter.** Nothing has touched MuJoCo. `refractal run
-  --backend local` executes plans against a synthetic benchmark, which is what
-  the schema and the statistics are tested against.
-- **`--backend compose` and `--backend k8s`.**
-- **Resource-shape probing.** `refractal build` carries forward hand-declared
-  shapes and records that they were declared rather than measured.
 - **Trajectory quality metrics.** The `steps.parquet` schema is declared and
-  nothing writes it, deliberately: writing it against synthetic data would bake
-  in guesses about what a real adapter can record.
+  nothing writes it, deliberately: writing it against synthetic data would bake in
+  guesses about what a real adapter can record.
+- **`--backend k8s`.** The `--worker` entrypoint that Compose renders against is
+  the same one a Kubernetes job would use.
+- **Resource-shape probing.** `refractal build` carries hand-declared shapes
+  forward and records whether they were measured. A lint refuses a comment
+  claiming a measurement when nothing recorded one.
 
 ## Built on vla-evaluation-harness
 
@@ -158,23 +196,23 @@ observation and action specs, and the episode loop. Refractal decides which
 episodes to run, gives them content-addressed identities, and compares the
 results.
 
-Everything `--backend vla-eval` does is the harness doing it. Refractal
-subclasses two of its classes and otherwise stays out of the way, which is why
-the integration is a pinned dependency rather than a vendored copy, and why
+Everything `--backend vla-eval` does is the harness doing it. Refractal subclasses
+two of its classes and otherwise stays out of the way, which is why the
+integration is a pinned dependency rather than a vendored copy, and why
 `scripts/verify_harness_claims.py` exists: the assumptions Refractal makes about
 someone else's code are checked rather than assumed.
 
 The harness is Apache-2.0, as is Refractal. No code is copied from it.
 
-If you use Refractal for published work, cite the harness as well. The
-evaluation is theirs; the comparison is ours.
+If you use Refractal for published work, cite the harness as well. The evaluation
+is theirs; the comparison is ours.
 
 ## Acknowledgements
 
 - [`allenai/vla-evaluation-harness`](https://github.com/allenai/vla-evaluation-harness)
   (Allen Institute for AI, Apache-2.0), which runs every episode.
-- The benchmark suites and model servers it wraps, each under its own licence
-  and each the work of its own authors.
+- The benchmark suites and model servers it wraps, each under its own licence and
+  each the work of its own authors.
 
 ## Licence
 
