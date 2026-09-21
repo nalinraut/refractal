@@ -143,3 +143,107 @@ class TestShippedExamplesResolve(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+#: Crossings from a planning layer into an execution layer that are allowed,
+#: each with the reason it is allowed. A crossing not named here fails; a
+#: crossing named here that no longer exists also fails, because permission that
+#: outlives its use is permission nobody is checking.
+DECLARED_CROSSINGS = {
+    ("compare/verdict.py", "refractal.execute.harness"): (
+        "`harness_surface` is a precondition `compare` enforces, and the value "
+        "is already in the rows it reads. The import exists only to turn "
+        "'something moved' into a list of files and the assumptions that rest "
+        "on them. Lazy, inside the function, so it creates no load-time "
+        "dependency on anything `execute` needs."
+    ),
+}
+
+#: The layers that must not depend on how a run happens.
+PLANNING_LAYERS = ("resolve", "compare")
+EXECUTION_LAYERS = ("execute", "render")
+
+
+def _imports(path: Path, package_root: Path) -> set[str]:
+    """Every module this file imports, absolute, relative ones resolved.
+
+    Parsed rather than grepped: a lazy import inside a function is still a
+    dependency, and a string search cannot tell `from ..execute import x` from
+    the word execute in a docstring.
+    """
+    import ast
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    here = path.relative_to(package_root).parent.parts
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = ("refractal", *here[: len(here) - node.level + 1])
+                found.add(".".join((*base, node.module) if node.module else base))
+            elif node.module:
+                found.add(node.module)
+    return found
+
+
+class TestPlanningDoesNotDependOnExecution(unittest.TestCase):
+    """`resolve` and `compare` must not know how a run happens.
+
+    They were clean when this was written, and nothing was stopping the next
+    change from making them otherwise. That is the shape this project keeps
+    finding: a property true by inspection with no guard on it.
+
+    Video is the example that prompted it. Recording frames is render-time, it
+    is deliberately absent from `plan_id`, and it reaches only `execute` and
+    `render`. None of that was enforced.
+    """
+
+    def setUp(self):
+        self.root = Path(SRC) / "refractal"
+
+    def _crossings(self):
+        found = []
+        for layer in PLANNING_LAYERS:
+            for path in sorted((self.root / layer).rglob("*.py")):
+                rel = str(path.relative_to(self.root))
+                for module in _imports(path, self.root):
+                    tail = module.split(".")
+                    if "refractal" in tail:
+                        after = tail[tail.index("refractal") + 1:]
+                        if after and after[0] in EXECUTION_LAYERS:
+                            found.append((rel, module))
+        return found
+
+    def test_every_crossing_is_declared(self):
+        undeclared = [c for c in self._crossings() if c not in DECLARED_CROSSINGS]
+        self.assertEqual(
+            undeclared, [],
+            "planning layers reached into execution without a declared reason. "
+            "Either move the dependency, or add it to DECLARED_CROSSINGS with "
+            "why it is allowed.",
+        )
+
+    def test_no_declared_crossing_is_stale(self):
+        """An allowlist entry that no longer matches anything is dead permission."""
+        actual = set(self._crossings())
+        for entry in DECLARED_CROSSINGS:
+            self.assertIn(
+                entry, actual,
+                f"{entry} is declared as an allowed crossing and no longer "
+                "exists. Remove it, so the list keeps meaning something.",
+            )
+
+    def test_recording_concepts_stay_out_of_planning(self):
+        """The specific case that prompted the rule, named so it cannot drift."""
+        for layer in PLANNING_LAYERS:
+            for path in sorted((self.root / layer).rglob("*.py")):
+                text = path.read_text(encoding="utf-8")
+                for word in ("record_video", "FrameBuffer", "frame_every",
+                             "write_strips", "artifact_uri"):
+                    self.assertNotIn(
+                        word, text,
+                        f"{path.name} mentions {word}: whether a run recorded "
+                        "frames is render-time and must not reach planning.",
+                    )
