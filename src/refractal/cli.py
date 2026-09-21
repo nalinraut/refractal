@@ -251,6 +251,9 @@ def _run_compose(args: argparse.Namespace, plan) -> int:
                     pair.split("=", 1) for pair in (args.image or []) if "=" in pair
                 ),
                 source_mounts=list(args.mount or []),
+                record_video=args.video,
+                frame_every=args.frame_every,
+                gpus=args.gpus,
             ),
         )
     except RenderError as exc:
@@ -308,6 +311,9 @@ def cmd_render(args: argparse.Namespace) -> int:
                 ),
                 host_gateway=not args.no_host_gateway,
                 source_mounts=list(args.mount or []),
+                record_video=args.video,
+                frame_every=args.frame_every,
+                gpus=args.gpus,
             ),
         )
     except RenderError as exc:
@@ -489,6 +495,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--video", action="store_true",
         help="capture episode frames. The worker FAILS if frames were asked for "
              "and none arrived, rather than finishing quietly with nothing.",
+    )
+    run_cmd.add_argument(
+        "--gpus", type=int, default=0, metavar="N",
+        help="GPUs to reserve per worker under --backend compose. Rendering "
+             "needs one; without it a container dies on its first frame.",
     )
     run_cmd.add_argument(
         "--frame-every", type=int, default=10, metavar="N",

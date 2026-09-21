@@ -84,6 +84,15 @@ class ComposeSettings:
     #: Added to every service when the servers are addressed as
     #: ``host.docker.internal``, which on Linux needs the mapping declared.
     host_gateway: bool = True
+    #: Capture episode frames inside the container. Safe to set: the worker
+    #: fails if frames were requested and none arrived, so a container that
+    #: cannot render stops rather than finishing quietly with nothing.
+    record_video: bool = False
+    frame_every: int = 10
+    #: GPUs reserved per worker. Rendering needs one -- the image runs MuJoCo
+    #: under EGL -- and without a reservation the container starts, builds an
+    #: environment and dies on its first frame rather than at preflight.
+    gpus: int = 0
 
     def image_for(self, engine: str) -> str:
         image = {**DEFAULT_IMAGES, **self.images}.get(engine)
@@ -209,6 +218,8 @@ def _service(
         command += ["--server", f"{checkpoint}={settings.servers[checkpoint]}"]
     if settings.catalog_dir is not None:
         command += ["--catalog", CATALOG_PATH]
+    if settings.record_video:
+        command += ["--video", "--frame-every", str(settings.frame_every)]
 
     volumes = [f"{settings.plan_file}:{PLAN_PATH}:ro"]
     if settings.catalog_dir is not None:
@@ -235,6 +246,15 @@ def _service(
     service["mem_limit"] = f"{shape.memory_mb}m"
     if settings.host_gateway:
         service["extra_hosts"] = ["host.docker.internal:host-gateway"]
+    if settings.gpus:
+        # Compose's own device-reservation shape. `gpus:` as a top-level key is
+        # the older form and is ignored by some versions without saying so.
+        # `capabilities` is a flat list of strings. Nested, Compose rejects the
+        # file at validation: "capabilities.0 must be a string". The schema is
+        # Docker's, so the shape is pinned by a test rather than by memory.
+        service["deploy"] = {"resources": {"reservations": {"devices": [
+            {"driver": "nvidia", "count": settings.gpus,
+             "capabilities": ["gpu"]}]}}}
     return service
 
 

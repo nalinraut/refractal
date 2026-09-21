@@ -246,3 +246,38 @@ class TestWorkerRestrictionIsAFilterNotAPlan(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGpuReservationMatchesComposeSchema(unittest.TestCase):
+    """The device-reservation shape is Docker's, and it validates the file.
+
+    Written the wrong way first: `capabilities: [["gpu"]]`, nested, which
+    renders and reads plausibly and which `docker compose up` rejects with
+    "capabilities.0 must be a string". The renderer has no way to know, so the
+    shape is pinned here rather than left to memory.
+    """
+
+    def _service(self, **kw):
+        plan = make_plan(scenarios=1, checkpoints=("pi0",))
+        doc = yaml.safe_load(render_compose(plan, ComposeSettings(
+            servers={"pi0": "ws://h:8000"}, **kw)))
+        return next(iter(doc["services"].values()))
+
+    def test_no_deploy_key_without_gpus(self):
+        self.assertNotIn("deploy", self._service())
+
+    def test_capabilities_is_a_list_of_strings(self):
+        device = self._service(gpus=1)["deploy"]["resources"]["reservations"]["devices"][0]
+        self.assertEqual(device["capabilities"], ["gpu"])
+        for item in device["capabilities"]:
+            self.assertIsInstance(item, str)
+        self.assertEqual(device["count"], 1)
+        self.assertEqual(device["driver"], "nvidia")
+
+    def test_video_flags_reach_the_container_command(self):
+        command = self._service(record_video=True, frame_every=7)["command"]
+        self.assertIn("--video", command)
+        self.assertEqual(command[command.index("--frame-every") + 1], "7")
+
+    def test_no_video_flags_when_not_asked_for(self):
+        self.assertNotIn("--video", self._service()["command"])
