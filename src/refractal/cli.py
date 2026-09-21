@@ -152,6 +152,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     from .schema.plan import PlanSchemaError, read_plan, restrict_to_worker
 
     plan = read_plan(args.plan)
+    whole_plan = plan
     if args.worker:
         # A filter, not a different plan: plan_id and every episode id are
         # untouched, so this worker's rows join the others' as though one process
@@ -181,6 +182,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 resume=not args.no_resume,
                 record_video=args.video,
                 frame_every=args.frame_every,
+                provenance_plan=whole_plan,
             )
         except BridgeError as exc:
             print(f"error: {exc}", file=sys.stderr)

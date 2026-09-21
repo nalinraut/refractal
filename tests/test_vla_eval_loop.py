@@ -16,6 +16,7 @@ tests that do not opt out of it.
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -807,3 +808,55 @@ class TestVideoIsAskedForAndAccountedFor(LoopCase):
         with self.assertRaises(OutputMissingError) as ctx:
             writer.verify_frames([path], worker_id="w")
         self.assertIn("not a whole number of square frames", str(ctx.exception))
+
+
+class TestTheStoredPlanDescribesTheWholeExperiment(LoopCase):
+    """`--worker` is a filter, and a filtered plan is not the experiment.
+
+    Under `--backend compose` every container runs one worker and every
+    container writes the plan to the same path. Writing its own restriction
+    there leaves the results directory carrying a plan that says 60 episodes
+    across 1 worker while its plan_id digests 600 across 10 -- an identity
+    document contradicting its own digest, which is worse than none.
+    """
+
+    def stored(self, plan):
+        from refractal.execute.results import comparison_prefix
+
+        path = Path(comparison_prefix(self.results, plan.plan_id)) / "plan.json"
+        return json.loads(path.read_text())
+
+    def test_a_worker_stores_the_unrestricted_plan(self):
+        from refractal.schema.plan import restrict_to_worker
+
+        whole = make_plan(scenarios=2, checkpoints=("pi0",),
+                          scenes=("libero-0", "libero-1"))
+        target = whole.scenes[0].workers[0].worker_id
+        one = restrict_to_worker(whole, target)
+        # The fixture has to put the invariant in position: if the filter drops
+        # nothing, a broken implementation passes.
+        self.assertLess(one.total_episodes, whole.total_episodes)
+
+        self.run_loop(one, FakeHarness(), only=("pi0",), provenance_plan=whole)
+        stored = self.stored(whole)
+        self.assertEqual(stored["total_episodes"], whole.total_episodes)
+        self.assertEqual(
+            sum(len(s["workers"]) for s in stored["scenes"]),
+            sum(len(s.workers) for s in whole.scenes),
+        )
+
+    def test_the_stored_plan_still_carries_the_running_plan_id(self):
+        """The filter preserves plan_id; the provenance plan must agree."""
+        from refractal.schema.plan import restrict_to_worker
+
+        whole = make_plan(scenarios=2, checkpoints=("pi0",),
+                          scenes=("libero-0", "libero-1"))
+        one = restrict_to_worker(whole, whole.scenes[0].workers[0].worker_id)
+        self.assertEqual(one.plan_id, whole.plan_id)
+        self.run_loop(one, FakeHarness(), only=("pi0",), provenance_plan=whole)
+        self.assertEqual(self.stored(whole)["plan_id"], one.plan_id)
+
+    def test_without_a_provenance_plan_the_running_plan_is_stored(self):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness(), only=("pi0",))
+        self.assertEqual(self.stored(plan)["total_episodes"], plan.total_episodes)

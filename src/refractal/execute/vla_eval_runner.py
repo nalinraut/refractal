@@ -322,6 +322,7 @@ def run_vla_eval(
     resume: bool = True,
     record_video: bool = False,
     frame_every: int = 10,
+    provenance_plan: Plan | None = None,
 ) -> VlaEvalSummary:
     """Drive the harness once per (worker, checkpoint, seed) and write Parquet."""
     # Derived from the episodes, not from ``plan.checkpoints``. The episodes are
@@ -346,7 +347,16 @@ def run_vla_eval(
     servers = preflight_servers(servers)
 
     writer = ResultWriter(results_uri, plan.plan_id)
-    writer.write_plan(plan.to_json())
+    # The WHOLE plan, not this worker's slice of it.
+    #
+    # Under `--backend compose` every container runs `--worker`, and `--worker`
+    # is a filter: same plan_id, same episode ids, fewer workers. Each container
+    # then writes its own restriction to the same path and the last one wins, so
+    # the results directory ends up carrying a plan that says 60 episodes across
+    # 1 worker while its plan_id digests 600 across 10.
+    #
+    # An identity document that contradicts its own digest is worse than none.
+    writer.write_plan((provenance_plan or plan).to_json())
     if catalog_root is not None:
         writer.copy_catalog(catalog_root)
 
