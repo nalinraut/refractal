@@ -860,3 +860,72 @@ class TestTheStoredPlanDescribesTheWholeExperiment(LoopCase):
         plan = make_plan(scenarios=2, checkpoints=("pi0",))
         self.run_loop(plan, FakeHarness(), only=("pi0",))
         self.assertEqual(self.stored(plan)["total_episodes"], plan.total_episodes)
+
+
+class TestConcurrentThreadsAreIsolated(LoopCase):
+    """Two checkpoints at once must not share a simulator.
+
+    A thread steps an environment and talks to its own server. If both threads
+    drove one environment, pi0's actions and pi0.5's actions would land in one
+    scene and both would record outcomes from a state neither controlled. The
+    numbers would stay plausible, which is what makes it worth a test rather
+    than a reading of the code.
+
+    Refractal's half of that is what these assert: each thread gets its own
+    config, its own recorder class, and its own scratch directory. The
+    environment itself is built inside `invoke`, once per call, so two calls
+    with nothing shared between them is two environments.
+    """
+
+    def _plan(self, **kw):
+        plan = make_plan(**kw)
+        object.__setattr__(plan, "execution_mode", "concurrent")
+        return plan
+
+    def captured(self, plan):
+        """Every (config, recorder_cls) the loop handed the harness."""
+        seen = []
+
+        class Recording(FakeHarness):
+            def __call__(self, config, recorder_cls):
+                seen.append((dict(config), recorder_cls))
+                return super().__call__(config, recorder_cls)
+
+        self.run_loop(plan, Recording())
+        return seen
+
+    def test_each_thread_gets_its_own_config(self):
+        seen = self.captured(self._plan(scenarios=2, seeds=(0,),
+                                        checkpoints=("pi0", "pi05")))
+        self.assertEqual(len(seen), 2)
+        a, b = (c for c, _ in seen)
+        self.assertIsNot(a, b)
+        # And they are not the same config with a different label: the server
+        # is what makes an episode belong to a checkpoint.
+        self.assertNotEqual(a["server"]["url"], b["server"]["url"])
+
+    def test_each_thread_gets_its_own_scratch_directory(self):
+        """The harness writes `<output_dir>/<benchmark>.tmp` and replaces it.
+
+        The name depends only on the benchmark, so two orchestrators sharing an
+        output_dir race on one path and the loser dies on a missing file.
+        """
+        seen = self.captured(self._plan(scenarios=2, seeds=(0,),
+                                        checkpoints=("pi0", "pi05")))
+        dirs = [c["output_dir"] for c, _ in seen]
+        self.assertEqual(len(set(dirs)), len(dirs), dirs)
+
+    def test_each_thread_gets_its_own_recorder(self):
+        """Shared recorder state would merge two checkpoints' steps and frames."""
+        seen = self.captured(self._plan(scenarios=2, seeds=(0,),
+                                        checkpoints=("pi0", "pi05")))
+        classes = [r for _, r in seen]
+        self.assertIsNot(classes[0], classes[1])
+
+    def test_serial_also_separates_scratch(self):
+        """Serial shares the directory too, just never at the same instant. A
+        re-run landing on an old temp file is the same collision, later."""
+        seen = self.captured(make_plan(scenarios=2, seeds=(0,),
+                                       checkpoints=("pi0", "pi05")))
+        dirs = [c["output_dir"] for c, _ in seen]
+        self.assertEqual(len(set(dirs)), len(dirs), dirs)

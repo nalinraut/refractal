@@ -7,6 +7,8 @@ read is most of the value with none of the risk.
 
 from __future__ import annotations
 
+from pathlib import Path
+import tempfile
 import unittest
 
 import yaml
@@ -281,3 +283,41 @@ class TestGpuReservationMatchesComposeSchema(unittest.TestCase):
 
     def test_no_video_flags_when_not_asked_for(self):
         self.assertNotIn("--video", self._service()["command"])
+
+
+class TestTheRenderCommandAcceptsWhatItEmits(unittest.TestCase):
+    """`render` writes the file `run --backend compose` would run.
+
+    They build ComposeSettings from the same fields, so a flag added to one
+    parser and not the other leaves the other reading an attribute that does
+    not exist. The render tests call `render_compose` directly, so nothing here
+    exercised the command line until a plan was rendered from it.
+    """
+
+    def _render(self, tmp, *extra):
+        from refractal.cli import main
+
+        plan = Path(tmp) / "plan.json"
+        plan.write_text(make_plan(scenarios=1, checkpoints=("pi0",)).to_json())
+        out = Path(tmp) / "compose.yml"
+        code = main(["render", str(plan), "-o", str(out),
+                     "--server", "pi0=ws://h:8000", *extra])
+        self.assertEqual(code, 0)
+        return yaml.safe_load(out.read_text())
+
+    def test_render_runs_without_the_run_only_flags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = self._render(tmp)
+            service = next(iter(doc["services"].values()))
+            self.assertNotIn("--video", service["command"])
+            self.assertNotIn("deploy", service)
+
+    def test_render_emits_video_and_gpus_when_asked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = self._render(tmp, "--video", "--frame-every", "5", "--gpus", "1")
+            service = next(iter(doc["services"].values()))
+            self.assertIn("--video", service["command"])
+            self.assertEqual(
+                service["command"][service["command"].index("--frame-every") + 1], "5")
+            self.assertEqual(
+                service["deploy"]["resources"]["reservations"]["devices"][0]["count"], 1)

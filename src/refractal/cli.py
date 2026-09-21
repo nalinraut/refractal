@@ -582,6 +582,20 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--catalog", default="./catalog",
                         help="host path to mount read-only as provenance")
     render.add_argument("--results", default="./results", help="host path for results")
+    # `render` writes the same file `run --backend compose` would, so it needs
+    # the same knobs. Added to `run` only at first, which left `cmd_render`
+    # reading `args.video` off a parser that had never heard of it -- and the
+    # render tests call `render_compose` directly, so nothing caught it until a
+    # plan was rendered from the command line.
+    render.add_argument(
+        "--video", action="store_true",
+        help="emit --video in each service's command")
+    render.add_argument(
+        "--frame-every", type=int, default=10, metavar="N",
+        help="keep every Nth frame (default 10)")
+    render.add_argument(
+        "--gpus", type=int, default=0, metavar="N",
+        help="GPUs to reserve per worker")
     render.add_argument("--plan-file", help="host path to the plan, if not the path given")
     render.add_argument("--image", action="append", metavar="ENGINE=IMAGE")
     render.add_argument(
