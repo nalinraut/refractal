@@ -27,6 +27,11 @@ nav:
   - Connecting a simulator:
       - Adapter contract: adapter-contract.md
       - Adapter example: adapter-example.md
+  - Perturbations:
+      - What and why: perturbations/index.md
+      - Declaring: perturbations/declaring.md
+      - Adapters: perturbations/adapters.md
+      - Sweeps: perturbations/sweeps.md
   - Running at scale:
       - Against vla-eval: backend-vla-eval.md
       - In containers: backend-compose.md
