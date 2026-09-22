@@ -51,6 +51,7 @@ from .physics import actuator_facts, physics_digest, physics_manifest
 from .harness import describe_installed_harness
 from .results import ResultWriter
 from .vla_eval import (
+    ReceiptBuffer,
     BridgeError,
     EpisodeRow,
     check_server_assignment,
@@ -100,6 +101,38 @@ def default_invoke(
             "server connected and the benchmark imported."
         )
     return results[0]
+
+
+def _declared_level(specs: list | None) -> float | None:
+    """The single level to group a curve on, or None when there is not one.
+
+    None for an unperturbed episode AND for one carrying two perturbations:
+    there is then no one level to place it at, and silently picking the first
+    would put a point on a curve it does not belong to. `perturbation_count`
+    tells the two apart -- 0 is the baseline and belongs, 2 or more is off any
+    single axis.
+    """
+    if not specs or len(specs) != 1:
+        return None
+    args = dict(specs[0].get("args") or {})
+    for key in ("factor", "level", "scale"):
+        if key in args:
+            try:
+                return float(args[key])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _specs_for(outcome: Any) -> list:
+    """The specs planned for the episode this outcome describes.
+
+    Straight off the outcome, which carries its `PlannedEpisode`. An earlier
+    version looked the episode up by id in the worker's list -- a positional
+    correspondence where a direct reference already existed, which is the
+    failure mode this file warns about elsewhere and silently returned nothing.
+    """
+    return list(outcome.episode.perturbations)
 
 
 class PhysicsSurface:
@@ -165,6 +198,8 @@ def _row(
     harness_surface: str,
     physics_version: str,
     physics_surface: str,
+    receipt: Any = None,
+    episode_perturbations: list | None = None,
     server_url: str,
     started_at: dt.datetime,
     ended_at: dt.datetime,
@@ -201,7 +236,13 @@ def _row(
         "harness_surface": harness_surface,
         # Written, never left unset: a null here must only ever mean the row
         # predates the column, not that nobody counted.
-        "perturbation_count": 0,
+        # Declared: what was ASKED, from the spec, which the runner knows even
+        # when the episode ended before its trigger. Whether it actually fired
+        # is the receipt's job, and `compare` decides between them -- an episode
+        # that outran its trigger is not a point on its level's curve.
+        "perturbation_count": len(episode_perturbations or ()),
+        "perturbation_level": _declared_level(episode_perturbations),
+        "perturbations_fired": receipt or None,
         "physics_version": physics_version,
         "physics_surface": physics_surface,
         "success": row.success,
@@ -305,7 +346,8 @@ def _run_group(
     )
     buffer = StepBuffer()
     frames = FrameBuffer(keep_every=frame_every) if record_video else None
-    recorder_cls = make_parquet_recorder(buffer.collect, frames)
+    receipts = ReceiptBuffer()
+    recorder_cls = make_parquet_recorder(buffer.collect, frames, receipts)
 
     started_at = dt.datetime.now(dt.timezone.utc)
     result = invoke(config, recorder_cls)
@@ -322,11 +364,25 @@ def _run_group(
         )
     buffer.clear()
 
+    # Positional, like the frames: the buffer is keyed by the harness's episode
+    # counter and the rows by Refractal's content-addressed id. Zipped rather
+    # than looked up, which is the same correspondence rows_from_benchmark_result
+    # already relies on.
+    collected = receipts.in_order()
+    if collected and len(collected) != len(outcomes):
+        raise BridgeError(
+            f"{len(collected)} perturbation receipt(s) for {len(outcomes)} "
+            "episode(s). The positional match between receipts and rows is not "
+            "safe, so nothing is written rather than attaching each receipt to "
+            "whichever row happens to line up."
+        )
     rows = [
         _row(
             outcome,
             scene,
             worker_id,
+            receipt=(collected[index] if collected else None),
+            episode_perturbations=_specs_for(outcome),
             session_id=session_id,
             execution_mode=execution_mode,
             harness_version=harness_version,
@@ -338,7 +394,7 @@ def _run_group(
             ended_at=ended_at,
             concurrent_with=concurrent_with,
         )
-        for outcome in outcomes
+        for index, outcome in enumerate(outcomes)
     ]
     part = (
         f"{worker_id.replace('/', '-')}"

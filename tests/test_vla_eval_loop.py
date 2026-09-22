@@ -78,6 +78,11 @@ class FakeHarness:
                     recorder.record_step(reward=1.0)
                 for _ in range(self.frames_per_episode):
                     recorder.record_video(_frame_for(index))
+                # What the perturbed benchmark does: hands its receipt over the
+                # same channel the frames use, once per episode.
+                receipt = getattr(self, "receipts", {}).get(index)
+                if receipt is not None:
+                    recorder.record_perturbations(receipt)
         episodes = []
         for index in range(count - self.short_by):
             ok = True if self.successes is None else self.successes[index % len(self.successes)]
@@ -90,6 +95,76 @@ class FakeHarness:
                 }
             )
         return {"tasks": [{"episodes": episodes}]}
+
+
+class PerturbingHarness(FakeHarness):
+    """A harness whose benchmark runs a real timeline over a fake simulator.
+
+    The point of this class is the JOIN. Every link in the route has unit tests
+    and they all pass while the join between them is broken -- that is how a
+    spec reached the plan, looked right in every test, and could never have
+    fired. So this drives the whole path: the config the bridge built, through
+    a real `Timeline`, into a receipt the bridge has to collect and write.
+
+    Only the simulator is fake. The specs come from the plan, the timeline is
+    Refractal's, and the receipt is read back out of Parquet.
+    """
+
+    def __init__(self, *, ends_at=None, **kw):
+        super().__init__(**kw)
+        #: Steps each episode survives. An episode that ends before its trigger
+        #: is the case the whole speed-bias rule exists for, so it is a first
+        #: class fixture here rather than an afterthought.
+        self.ends_at = ends_at
+
+    class Sim:
+        def __init__(self):
+            self.limits = {"gripper0_finger1": 20.0}
+
+        def resolve(self, name):
+            if name not in self.limits:
+                raise KeyError(name)
+            return name
+
+        def get_actuator_limit(self, name):
+            return self.limits[name]
+
+        def scale_actuator(self, name, factor):
+            self.limits[name] *= factor
+
+        def get_body_pose(self, name):
+            raise KeyError(name)
+
+        set_body_pose = apply_force = get_applied_wrench = get_body_pose
+
+    def __call__(self, config, recorder_cls):
+        from refractal.perturbations import Timeline, rng_for_episode
+
+        benchmark = config["benchmarks"][0]
+        specs_by_episode = dict(benchmark.get("params", {}).get("perturbations") or {})
+        self.receipts = getattr(self, "receipts", {})
+        for index in range(benchmark["episodes_per_task"]):
+            entry = specs_by_episode.get(str(index)) or {}
+            sim = self.Sim()
+            timeline = Timeline(entry.get("specs", ()), sim,
+                                rng_for_episode(str(entry.get("episode_id", index))))
+            fired = []
+            for step in range(self.ends_at if self.ends_at is not None else 250):
+                fired.extend(timeline.step(step))
+            self.receipts[index] = [
+                {"effect": e.type, "target": e.target,
+                 "specified_step": e.specified_at, "fired_step": e.fired_at,
+                 "reason": None, "before": [float(e.before)],
+                 "after": [float(e.after)]}
+                for e in fired
+            ] + [
+                {"effect": s["type"], "target": s["target"],
+                 "specified_step": s["at_step"], "fired_step": None,
+                 "reason": f"the episode ended at step {self.ends_at}",
+                 "before": None, "after": None}
+                for s in timeline.unfired()
+            ]
+        return super().__call__(config, recorder_cls)
 
 
 def make_plan(*, scenarios=3, seeds=(0,), checkpoints=("pi0", "pi05"), scenes=("libero-0",)):
@@ -304,6 +379,82 @@ class TestWhatLandsInParquet(LoopCase):
         for row in self.rows(plan):
             self.assertIsNotNone(row["started_at"])
             self.assertLessEqual(row["started_at"], row["ended_at"])
+
+
+class TestTheWholeRouteEndToEnd(LoopCase):
+    """A spec declared in a plan, fired against a simulator, read back from
+    Parquet.
+
+    Written before the route existed, and failing, on purpose. Every link here
+    has unit tests that pass while the join between them is broken -- which has
+    now happened three times in this feature alone: the bridge's count, the
+    episode-level specs, and the receipt column. Per-link tests cannot see it,
+    because each one tests the link it was written beside.
+
+    **Its value is that it fails when ANY link breaks.** A green end-to-end test
+    that only exercises some of them is worth nothing, so once this passes each
+    of the four links gets broken in turn to confirm it goes red.
+    """
+
+    SPEC = {"at_step": 5, "type": "scale_actuator",
+            "target": "gripper0_finger1", "args": {"factor": 0.3}}
+
+    def _perturbed_plan(self, at_step=5):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        spec = dict(self.SPEC, at_step=at_step)
+        for scene in plan.scenes:
+            for scenario in scene.scenarios:
+                object.__setattr__(scenario, "perturbations", [dict(spec)])
+            for worker in scene.workers:
+                for episode in worker.episodes:
+                    object.__setattr__(episode, "perturbations", [dict(spec)])
+        return plan
+
+    def test_a_spec_fires_and_its_receipt_reaches_the_parquet(self):
+        plan = self._perturbed_plan(at_step=5)
+        self.run_loop(plan, PerturbingHarness())
+        rows = self.rows(plan)
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertEqual(row["perturbation_count"], 1)
+            self.assertAlmostEqual(row["perturbation_level"], 0.3)
+            (event,) = row["perturbations_fired"]
+            self.assertEqual(event["effect"], "scale_actuator")
+            self.assertEqual(event["specified_step"], 5)
+            self.assertEqual(event["fired_step"], 5)
+            self.assertEqual(event["before"], [20.0])
+            self.assertEqual(event["after"], [6.0])
+
+    def test_an_episode_that_ends_before_its_trigger_records_why(self):
+        """The branch guarding the speed bias, proven over the whole route.
+
+        Unit-tested already; that is not enough. An episode that outran its
+        trigger is unusable in both directions -- it cannot join the curve, and
+        its perturbed scenario_hash keeps it out of the baseline too -- so the
+        null fired_step and its reason have to survive all the way to the
+        artifact, where `compare` reads them.
+        """
+        plan = self._perturbed_plan(at_step=400)
+        self.run_loop(plan, PerturbingHarness(ends_at=150))
+        rows = self.rows(plan)
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertEqual(row["perturbation_count"], 1,
+                             "it was still ASSIGNED a perturbation")
+            self.assertAlmostEqual(row["perturbation_level"], 0.3,
+                                   msg="the declared level is what was asked")
+            (event,) = row["perturbations_fired"]
+            self.assertIsNone(event["fired_step"], "it never fired")
+            self.assertIn("150", event["reason"] or "")
+
+    def test_an_unperturbed_plan_writes_no_receipt(self):
+        """Every run so far. The route must cost them nothing."""
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, PerturbingHarness())
+        for row in self.rows(plan):
+            self.assertEqual(row["perturbation_count"], 0)
+            self.assertIsNone(row["perturbation_level"])
+            self.assertIn(row["perturbations_fired"], (None, []))
 
 
 class TestResume(LoopCase):

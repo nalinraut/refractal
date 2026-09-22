@@ -13,7 +13,6 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .errors import NotImplementedInV1
 from .importstr import validate_import_string
 
 API_VERSION = "refractal.dev/v1alpha1"
@@ -504,6 +503,16 @@ class PerturbationSpec(Strict):
 
     ``at_step`` only, for now. Sustained perturbations (``until_step``) are a
     later column, not a restructure.
+
+    No longer refused. It was, from the moment the identity was settled until
+    the moment a receipt could reach the row -- because a spec accepted by the
+    schema and dropped by the backend records as though it fired and never did,
+    which is the failure this whole design is built around. The refusal lifted
+    in the same change that closed the route, so there was never a window where
+    the schema accepted what nothing could run.
+
+    What refuses now is the planner, per target and per scene: an actuator the
+    scene lacks, or one with no torque limit to scale.
     """
 
     at_step: int = Field(ge=0)
@@ -550,15 +559,6 @@ class ScenarioSet(Strict):
         validate_import_string(self.generator)
         if self.filter is not None:
             validate_import_string(self.filter)
-        if self.perturbations:
-            raise NotImplementedInV1(
-                f"scenario_set {self.id!r} declares perturbations. The schema and the "
-                "identity are in place -- scenario_hash covers them and "
-                "base_scenario_hash is the axis a sweep joins on -- but nothing "
-                "executes them yet, so a spec written now would be recorded as though "
-                "it had fired and never would have. Refused rather than accepted "
-                "silently. Leave it empty until the timeline lands."
-            )
         return self
 
 

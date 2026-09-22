@@ -3,7 +3,6 @@ import unittest
 from pydantic import ValidationError
 
 from refractal.schema import ParamSpec, Run, Task
-from refractal.schema.errors import NotImplementedInV1
 from refractal.schema.models import ScenarioSet, ScenesFile
 
 
@@ -93,20 +92,31 @@ class TestParamSpec(unittest.TestCase):
 
 
 class TestReservedFields(unittest.TestCase):
-    def test_non_empty_perturbations_raises(self):
-        with self.assertRaises(NotImplementedInV1):
-            ScenarioSet.model_validate(
-                {
-                    "id": "s",
-                    "scene": "sc",
-                    "generator": "refractal.generators:linspace_grid",
-                    "generator_seed": 1,
-                    "params": {"x": {"value": 1}},
-                    "perturbations": [
-                        {"at_step": 200, "type": "scale_actuator", "target": "gripper"}
-                    ],
-                }
-            )
+    def test_non_empty_perturbations_are_accepted_now(self):
+        """They were refused from the moment the identity was settled until the
+        moment a receipt could reach the row. A spec the schema accepts and the
+        backend drops records as though it fired and never did, so the refusal
+        lifted in the same change that closed the route -- there was no window
+        where the schema accepted what nothing could run.
+
+        What refuses now is the planner, per target: an actuator the scene does
+        not have, or one with no torque limit to scale.
+        """
+        scenario_set = ScenarioSet.model_validate(
+            {
+                "id": "s",
+                "scene": "sc",
+                "generator": "refractal.generators:linspace_grid",
+                "generator_seed": 1,
+                "params": {"x": {"value": 1}},
+                "perturbations": [
+                    {"at_step": 200, "type": "scale_actuator", "target": "gripper"}
+                ],
+            }
+        )
+        (spec,) = scenario_set.perturbations
+        self.assertEqual((spec.at_step, spec.type, spec.target),
+                         (200, "scale_actuator", "gripper"))
 
     def test_the_old_key_names_its_replacement(self):
         """`extra="forbid"` would say "Extra inputs are not permitted", and send

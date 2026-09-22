@@ -458,6 +458,25 @@ def check_index_contract(episodes: list[PlannedEpisode], scenarios: Mapping[str,
         )
 
 
+def perturbation_map(episodes: list[PlannedEpisode]) -> dict[str, Any]:
+    """Episode position -> what to do to it, and the id to seed its RNG from.
+
+    Position rather than ``episode_id`` because the benchmark only knows the
+    harness's counter. The real id rides along as a value so the perturbation
+    RNG is seeded from the episode's identity -- the one seed in this system
+    that is a genuine reproducibility guarantee, and useless if it is seeded
+    from a position that means something different in the next run.
+    """
+    return {
+        str(index): {
+            "episode_id": episode.episode_id,
+            "specs": [dict(spec) for spec in episode.perturbations],
+        }
+        for index, episode in enumerate(episodes)
+        if episode.perturbations
+    }
+
+
 def build_eval_config(
     *,
     scene: Any,
@@ -499,7 +518,26 @@ def build_eval_config(
                 # `task_id` lives there -- and the harness does
                 # `benchmark_cls(**params)`, where an identifying key that is not
                 # a constructor argument raises TypeError.
-                "params": dict(getattr(external, "params", None) or {}),
+                "params": {
+                    **dict(getattr(external, "params", None) or {}),
+                    # The spec channel. The harness does `benchmark_cls(**params)`,
+                    # so this is how a perturbation reaches a benchmark the
+                    # harness constructs -- and it is keyed by POSITION, because
+                    # the harness identifies an episode by its index within a
+                    # task and Refractal identifies it by content. The two never
+                    # match, so the correspondence is the same positional one
+                    # every other channel here relies on.
+                    #
+                    # Omitted entirely when nothing is perturbed, so an
+                    # unperturbed run hands the benchmark exactly what it always
+                    # did and a benchmark with no such parameter still
+                    # constructs.
+                    **(
+                        {"perturbations": perturbation_map(episodes)}
+                        if any(e.perturbations for e in episodes)
+                        else {}
+                    ),
+                },
                 # Recording on: the gate is `rec_cfg is None or self._store is
                 # None`, and ParquetOrchestrator moves the second. Leaving this
                 # unset would close the first and record nothing.
@@ -539,6 +577,45 @@ def rows_from_benchmark_result(
             "must not be written as though it completed."
         )
     return [to_episode_row(episode, by_index[i]) for i, episode in enumerate(episodes)]
+
+
+class ReceiptBuffer:
+    """One perturbation receipt per episode, in the order episodes were built.
+
+    Positional, for exactly the reason ``FrameBuffer`` is: the recorder is
+    constructed with the harness's own episode counter, while a row carries the
+    content-addressed id. Looking one up by the other finds nothing, silently --
+    which is how the frame version of this bug was found, by a receipt reporting
+    zero frames on a run that had captured them.
+
+    Registered at construction rather than at first use, so an episode that dies
+    before it can hand anything over still occupies its place in the order. Its
+    receipt is ``None``: nothing was handed over, which is not the same as a
+    benchmark that perturbs nothing and hands over an empty list.
+    """
+
+    def __init__(self) -> None:
+        self._receipts: dict[str, Any] = {}
+        self._order: list[str] = []
+
+    def begin(self, harness_episode_id: str) -> None:
+        key = str(harness_episode_id)
+        if key not in self._receipts:
+            self._order.append(key)
+            self._receipts[key] = None
+
+    def collect(self, harness_episode_id: str, receipt: Any) -> None:
+        self._receipts[str(harness_episode_id)] = receipt
+
+    def in_order(self) -> list[Any]:
+        return [self._receipts[key] for key in self._order]
+
+    def clear(self) -> None:
+        self._receipts.clear()
+        self._order.clear()
+
+    def __len__(self) -> int:
+        return len(self._order)
 
 
 class FrameBuffer:
@@ -606,7 +683,7 @@ class FrameBuffer:
         self._seen.clear()
 
 
-def make_parquet_recorder(collect, frames=None) -> type:
+def make_parquet_recorder(collect, frames=None, receipts=None) -> type:
     """Build the recorder subclass, lazily.
 
     Lazily because the base class lives in the harness, and this module has to
@@ -646,6 +723,13 @@ def make_parquet_recorder(collect, frames=None) -> type:
             self._sid, self._eid, self._eval_id = sid, eid, eval_id
             if frames is not None:
                 frames.begin(episode_id)
+            if receipts is not None:
+                # Registered at construction, like the frame buffer, so the
+                # positional correspondence to rows holds even for an episode
+                # that dies before recording anything. Registering on first use
+                # would silently shift every later episode's receipt onto the
+                # wrong row.
+                receipts.begin(episode_id)
 
         @property
         def is_active(self) -> bool:
@@ -671,6 +755,22 @@ def make_parquet_recorder(collect, frames=None) -> type:
             # caller. An affordance, not a feature -- and "a path to one SQLite
             # file" does not generalise to a URI plus a partition key anyway.
             return ""
+
+        def record_perturbations(self, receipt: Any) -> None:
+            """Take the episode's perturbation receipt from the benchmark.
+
+            NOT part of `RECORDER_SURFACE`, which is what the harness expects a
+            recorder to have. This is Refractal's own addition, called only by a
+            benchmark that perturbs -- so it travels the same benchmark ->
+            recorder -> bridge channel the frames do, rather than needing a
+            second route back out of the harness.
+
+            A benchmark that never perturbs never calls it, and that is not the
+            same as calling it with nothing: an absent receipt and an empty one
+            are different claims, and the buffer keeps them apart.
+            """
+            if receipts is not None:
+                receipts.collect(self._episode_id, receipt)
 
         def record_step(self, **fields: Any) -> None:
             for name, value in fields.items():
@@ -786,6 +886,7 @@ __all__ = [
     "BridgeError",
     "EpisodeRow",
     "NullRecordingStore",
+    "ReceiptBuffer",
     "StepBuffer",
     "to_episode_row",
     "build_eval_config",
