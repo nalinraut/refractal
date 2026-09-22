@@ -125,6 +125,9 @@ class Eligibility:
     #: about identity and the container discarded multiplicity.
     duplicate_rows: list[tuple[str, str, int]] = field(default_factory=list)
     scene_hash_conflicts: dict[str, set[str]] = field(default_factory=dict)
+    #: task_id -> the differing task_hash values seen under it. A provider
+    #: release that moves a goal without touching the instruction lands here.
+    task_hash_conflicts: dict[str, set[str]] = field(default_factory=dict)
 
     def summary_lines(self) -> list[str]:
         lines = [
@@ -184,6 +187,9 @@ def build_units(
     harness_versions: set[str] = set()
     harness_surfaces: set[str] = set()
     scene_hashes: dict[str, set[str]] = defaultdict(set)
+    # Keyed by task_id, not by task_hash: two hashes under one id is the
+    # conflict, and keying by the hash would make every conflict look unique.
+    task_hashes: dict[str, set[str]] = defaultdict(set)
     duplicates: list[tuple[str, str, int]] = []
     infra = 0
 
@@ -201,6 +207,7 @@ def build_units(
         if row.get("harness_surface"):
             harness_surfaces.add(row["harness_surface"])
         scene_hashes[row["scene_id"]].add(row["scene_hash"])
+        task_hashes[row["task_id"]].add(row["task_hash"])
         if row["is_infra_failure"]:
             infra += 1
         seeds = grouped[key.as_tuple()][row["checkpoint_id"]]
@@ -225,6 +232,9 @@ def build_units(
         duplicate_rows=duplicates,
         scene_hash_conflicts={
             scene: hashes for scene, hashes in scene_hashes.items() if len(hashes) > 1
+        },
+        task_hash_conflicts={
+            task: hashes for task, hashes in task_hashes.items() if len(hashes) > 1
         },
     )
 

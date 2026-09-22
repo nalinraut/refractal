@@ -174,6 +174,35 @@ class TestOverlapAndProvenance(unittest.TestCase):
         self.assertIn("s", eligibility.scene_hash_conflicts)
         self.assertEqual(len(eligibility.scene_hash_conflicts["s"]), 2)
 
+    def test_task_hash_disagreement_is_surfaced(self):
+        """A provider moving a goal must be loud too.
+
+        The instance that prompted this is fixed -- `plan_id` now covers
+        provider-recorded task content, so two runs whose goals differ go to
+        different comparison directories. This catches the next one: any route
+        by which rows with two definitions of one task end up pooled, including
+        a directory assembled by hand or results predating the fix.
+        """
+        rows = synthetic({A: {"x": [True] * 3}, B: {"x": [True] * 3}})
+        for row in rows:
+            if row["checkpoint_id"] == B:
+                row["task_hash"] = "sha256:different-goal"
+        eligibility = build_units(rows, checkpoints=[A, B], min_seeds=2)
+        self.assertIn("t", eligibility.task_hash_conflicts)   # "t" is the task
+        self.assertEqual(len(eligibility.task_hash_conflicts["t"]), 2)
+
+    def test_a_changed_goal_blocks_the_verdict(self):
+        """Surfaced is not enough; it has to refuse."""
+        rows = synthetic({A: {"x": [True] * 3}, B: {"x": [True] * 3}})
+        for row in rows:
+            if row["checkpoint_id"] == B:
+                row["task_hash"] = "sha256:different-goal"
+        verdict = evaluate(build_units(rows, checkpoints=[A, B], min_seeds=2),
+                           [A, B], resamples=200, seed=1)
+        self.assertTrue(verdict.blocking)
+        self.assertTrue(any("task_hash" in b for b in verdict.blocking))
+        self.assertNotEqual(verdict.exit_code, 0)
+
     def test_sessions_are_tracked(self):
         rows = synthetic({A: {"x": [True] * 3}, B: {"x": [True] * 3}})
         rows[-1]["session_id"] = "session-b"

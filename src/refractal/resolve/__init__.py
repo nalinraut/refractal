@@ -252,7 +252,7 @@ def resolve(
 
     return Plan(
         plan_schema=PLAN_SCHEMA,
-        plan_id=catalog.plan_id(recorded),
+        plan_id=catalog.plan_id(recorded, task_hashes),
         identity=catalog.experiment_identity(recorded),
         catalog_hash=catalog.catalog_file_hash(),
         refractal_version=__version__,

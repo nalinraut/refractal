@@ -189,6 +189,14 @@ def evaluate(
             "checkpoints being compared: the geometry changed between runs, so these "
             "results are not comparable. Re-run, or compare within one geometry."
         )
+    for task_id, hashes in sorted(eligibility.task_hash_conflicts.items()):
+        verdict.blocking.append(
+            f"task {task_id!r} has {len(hashes)} different task_hash values across the "
+            "episodes being pooled: the goal changed between runs, so these results "
+            "are not comparable. A provider release can move a goal region while "
+            "keeping the instruction string, which is why the goal's own facts are "
+            "in the digest. Re-run, or compare within one definition."
+        )
     identical = _checkpoints_look_identical(eligibility, checkpoints)
     if identical:
         verdict.blocking.append(identical)

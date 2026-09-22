@@ -120,7 +120,9 @@ class Catalog:
         return out
 
     def experiment_identity(
-        self, scene_hashes: Mapping[str, str] | None = None
+        self,
+        scene_hashes: Mapping[str, str] | None = None,
+        task_hashes: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         return experiment_identity(
             scenes=self.scenes,
@@ -128,11 +130,23 @@ class Catalog:
             scenario_sets=self.scenario_sets,
             run=self.run,
             scene_hashes=self.scene_hashes(scene_hashes),
+            task_hashes=task_hashes,
         )
 
-    def plan_id(self, scene_hashes: Mapping[str, str] | None = None) -> str:
-        """Also the ``comparison_id``: results and the experiment share one name."""
-        return plan_id(self.experiment_identity(scene_hashes))
+    def plan_id(
+        self,
+        scene_hashes: Mapping[str, str] | None = None,
+        task_hashes: Mapping[str, str] | None = None,
+    ) -> str:
+        """Also the ``comparison_id``: results and the experiment share one name.
+
+        ``task_hashes`` comes from ``task_hashes_for``, which folds in whatever
+        ``build`` recorded from the provider. Pass it whenever you have it: a
+        plan computed without it disagrees with its own episodes about what a
+        task is, which is how `plan_id` came to miss a changed goal that every
+        `episode_id` caught.
+        """
+        return plan_id(self.experiment_identity(scene_hashes, task_hashes))
 
     def catalog_file_hash(self) -> str:
         """Digest of the catalog files as they sit on disk.

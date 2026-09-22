@@ -645,6 +645,63 @@ class TestExternallyDefinedScenes(unittest.TestCase):
             self.assertNotEqual(first.scenes[0].scene_hash, second.scenes[0].scene_hash)
             self.assertNotEqual(first.plan_id, second.plan_id)
 
+    class GoalProbe(Probe):
+        """A probe that also defines its tasks' goals, as the LIBERO one does."""
+
+        def __init__(self, scene_digest, goal_digest):
+            super().__init__(scene_digest)
+            self.goal = goal_digest
+
+        def task_facts(self, scene, task):
+            return {"provider": "stand-in", "goal": self.goal}
+
+    def test_a_changed_goal_moves_the_plan_id_as_well_as_the_episodes(self):
+        """The bug this closes: two functions computed task identity two ways.
+
+        The expansion folded in what `build` recorded from the provider;
+        `experiment_identity` did not. So a release that moved a goal changed
+        every `episode_id` and left `plan_id` alone, and two runs whose goals
+        differed were "the same experiment" by the definition of the function
+        whose whole job is that question.
+
+        Nothing false-joined -- `compare` pairs on the row's `task_hash` -- but
+        both sets landed in one comparison directory, and half the units had a
+        single checkpoint. The right outcome reached by accident.
+        """
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            self._catalog(tmp, root)
+            scene_digest = "sha256:" + "11" * 32
+
+            build(root, hardware_profile=HARDWARE,
+                  probe=self.GoalProbe(scene_digest, "goal-a"))
+            first = resolve(root, hardware_profile=HARDWARE)
+
+            # Same scene, same model, same everything a human authored. The
+            # provider moved the goal underneath it.
+            build(root, hardware_profile=HARDWARE,
+                  probe=self.GoalProbe(scene_digest, "goal-b"))
+            second = resolve(root, hardware_profile=HARDWARE)
+
+            self.assertEqual(first.scenes[0].scene_hash, second.scenes[0].scene_hash,
+                             "the scene did not change; only the goal did")
+            self.assertNotEqual(first.plan_id, second.plan_id,
+                                "a changed goal must fork the comparison")
+
+    def test_a_task_with_no_recorded_content_keeps_its_plan_id(self):
+        """The other half, and what makes this a bug fix rather than a change of
+        meaning: a catalog that defines its own goals has no provider content,
+        and its `plan_id` is what it always was."""
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            self._catalog(tmp, root)
+            digest = "sha256:" + "11" * 32
+
+            build(root, hardware_profile=HARDWARE, probe=self.Probe(digest))
+            without = resolve(root, hardware_profile=HARDWARE).plan_id
+            build(root, hardware_profile=HARDWARE, probe=self.Probe(digest))
+            self.assertEqual(without, resolve(root, hardware_profile=HARDWARE).plan_id)
+
 
 class TestLockSchemaRefusal(unittest.TestCase):
     """The version gate on build.lock, exercised.

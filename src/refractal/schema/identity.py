@@ -294,6 +294,7 @@ def experiment_identity(
     scenario_sets: Iterable[ScenarioSet],
     run: Run,
     scene_hashes: Mapping[str, str],
+    task_hashes: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """What makes two runs "the same experiment". Hashes to ``plan_id``.
 
@@ -344,7 +345,26 @@ def experiment_identity(
             key=lambda d: d["id"],
         ),
         "tasks": sorted(
-            ({"id": t.id, "task_hash": task_hash(t), "scene": t.scene} for t in tasks),
+            (
+                {
+                    "id": t.id,
+                    # The SAME hash the episodes carry. Computing it here from
+                    # the authored fields alone was a bug, not a policy: the
+                    # expansion folds in what `build` recorded from the
+                    # provider, so a LIBERO release that moved a starting pose
+                    # changed every episode_id and left plan_id untouched. Two
+                    # runs whose goals differed were then the same experiment
+                    # by this function's own definition -- the failure this
+                    # project exists to prevent, inside its identity function.
+                    #
+                    # Falls back to the authored hash for a task with no
+                    # recorded content, which is every task in a catalog that
+                    # defines its own goals. Their plan_ids do not move.
+                    "task_hash": (task_hashes or {}).get(t.id) or task_hash(t),
+                    "scene": t.scene,
+                }
+                for t in tasks
+            ),
             key=lambda d: d["id"],
         ),
         "scenario_sets": sorted(
