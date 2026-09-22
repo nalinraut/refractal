@@ -53,7 +53,9 @@ __all__ = [
     "Timeline",
     "effect",
     "PROTOCOLS",
+    "TEMPORALITIES",
     "declaration",
+    "temporality_of",
     "is_sweepable",
     "level_arg_of",
     "effects",
@@ -134,12 +136,33 @@ class Fired:
     target: str
     specified_at: int
     fired_at: int
+    #: What the effect faced and what it produced, read either side of it.
+    #:
+    #: For a state mutation these are values: the torque limit before and after.
+    #: For a transform they are DIGESTS of the observation at the first
+    #: application -- one pair rather than one per step, and still read from the
+    #: artifact rather than claimed.
+    #:
+    #: The obligation is the same in both cases and has one purpose: show that
+    #: the effect happened. Only the evidence differs by protocol.
     before: Any
     after: Any
     #: True when this event ENDED a sustained perturbation rather than starting
     #: one. Both are real events with real before and after values, and a receipt
     #: showing two indistinguishable entries would not say which was which.
     ends: bool = False
+    #: How many times the effect was applied, for a transform that applies on
+    #: every step it is active. 1 for a state mutation, which acts once.
+    #:
+    #: One event per window, not one per step: an image corruption over 200 steps
+    #: would otherwise be 200 events with 200 image pairs, absurd to record and
+    #: useless to read. The evidence is the pair taken at the FIRST application
+    #: plus this count.
+    #:
+    #: **Equal before and after with a non-zero count is the failure case** -- a
+    #: transform that passed its input through. That is the "applied to nothing"
+    #: reading, and it is why a count alone would not do.
+    applications: int = 1
     @property
     def changed(self) -> bool:
         return self.before != self.after
@@ -156,10 +179,40 @@ Effect = Callable[[Primitives, str, dict, random.Random], tuple[Any, Any]]
 #: the world and has no handle to resolve.
 PROTOCOLS = ("world", "observation", "action")
 
+#: How an effect relates to time. **Orthogonal to the protocol**, and it is the
+#: one thing the timeline needs to know.
+#:
+#: ``mutation``
+#:     Acts on entering active and again on leaving. State persists between, so
+#:     applying it on every active step would apply it repeatedly -- x0.5 four
+#:     times over rather than once.
+#: ``wrapper``
+#:     In place while active, absent otherwise. Nothing to undo; you stop
+#:     applying it. An observation is produced fresh each step, so a transform
+#:     applied once corrupts one frame and the next arrives clean.
+#:
+#: These cut ACROSS the protocols rather than aligning with them. World effects
+#: are mostly mutations and observation effects mostly wrappers, but that is a
+#: tendency: a world effect clamping a joint every step while active is a
+#: wrapper, and an action effect that permanently reconfigures something is a
+#: mutation.
+#:
+#: So the timeline stays protocol-BLIND and becomes temporality-AWARE, which is
+#: the one thing it should know. It reports active spans; the declared
+#: temporality decides whether that means two calls or many.
+#:
+#: The receipt shape follows from this rather than from the protocol -- two
+#: shapes for two temporalities, not three for three protocols.
+TEMPORALITIES = ("mutation", "wrapper")
+
 _EFFECTS: dict[str, Effect] = {}
 #: name -> how to undo it, as ARGUMENTS for the same effect. Absent means the
 #: effect cannot be ended, and ``until_step`` on it is refused.
 _INVERSES: dict[str, Callable[[dict], dict]] = {}
+#: name -> temporality. Declared, because it cannot be inferred: an effect that
+#: writes to the model may be either, and only its author knows which.
+_TEMPORALITY: dict[str, str] = {}
+
 #: name -> the argument that IS the level, or None when the effect is
 #: categorical and has no level at all.
 #:
@@ -191,6 +244,7 @@ def effect(
     *,
     protocol: str,
     needs: tuple[str, ...],
+    temporality: str = "mutation",
     level_arg: str | None = None,
     inverse: Callable[[dict], dict] | None = None,
 ) -> Callable[[Effect], Effect]:
@@ -220,6 +274,13 @@ def effect(
             f"effect {name!r} declares protocol {protocol!r}; known protocols "
             f"are {list(PROTOCOLS)}"
         )
+    if temporality not in TEMPORALITIES:
+        raise ValueError(
+            f"effect {name!r} declares temporality {temporality!r}; known "
+            f"temporalities are {list(TEMPORALITIES)}. A mutation acts on the "
+            "transitions and persists between them; a wrapper is in place while "
+            "active and has nothing to undo."
+        )
     if not needs:
         raise ValueError(
             f"effect {name!r} declares no primitives. An effect that needs "
@@ -231,11 +292,17 @@ def effect(
         _EFFECTS[name] = fn
         _DECLARED[name] = (protocol, tuple(needs))
         _LEVEL_ARGS[name] = level_arg
+        _TEMPORALITY[name] = temporality
         if inverse is not None:
             _INVERSES[name] = inverse
         return fn
 
     return register
+
+
+def temporality_of(name: str) -> str | None:
+    """``mutation`` or ``wrapper`` -- how the timeline should call this."""
+    return _TEMPORALITY.get(name)
 
 
 def level_arg_of(name: str) -> str | None:
@@ -401,6 +468,11 @@ class Timeline:
             until = spec.get("until_step")
             if until is None:
                 continue
+            if temporality_of(spec["type"]) == "wrapper":
+                # A wrapper has nothing to undo -- you stop applying it -- so it
+                # is not expanded into two triggers. Its hook reads `active_at`
+                # and applies it on every step of the span.
+                continue
             if not has_inverse(spec["type"]):
                 raise PerturbationError(
                     f"{spec['type']!r} cannot carry until_step: it has no inverse, "
@@ -434,8 +506,55 @@ class Timeline:
             # the next reset because this object does not either.
             self.primitives.resolve(spec["target"])
 
+    def active_at(self, index: int) -> list[dict]:
+        """Every spec active at this step. **The schedule, for any protocol.**
+
+        The timeline owns *when*, entirely; each protocol's hook owns what
+        happens. This is the one query both ask, so the timeline never branches
+        on protocol and there is one source of truth about timing.
+
+        A spec with no ``until_step`` is active for exactly one step. One with a
+        window is active for every step in ``[at_step, until_step)``.
+
+        How a protocol uses that differs, and that difference is the protocols'
+        business rather than the schedule's:
+
+        * **World** effects act on the *transitions* -- entering active, and
+          leaving it -- because they mutate state and state persists. Firing on
+          every active step would apply the change repeatedly.
+        * **Observation and action** effects act on *every step they are
+          active*, because there is no state to persist: the observation is
+          produced fresh each step, so a transform applied once corrupts one
+          frame and the next arrives clean.
+
+        Sustained is therefore the default for a transform and the special case
+        for a state mutation -- exactly inverted -- which is why this answers
+        with a window rather than an event.
+        """
+        active = []
+        for spec in self.specs:
+            start = int(spec["at_step"])
+            until = spec.get("until_step")
+            if until is None:
+                if index == start:
+                    active.append(dict(spec))
+            elif start <= index < int(until):
+                active.append(dict(spec))
+        return active
+
     def step(self, index: int) -> list[Fired]:
-        """Fire whatever is due at or before ``index``. Returns what fired."""
+        """Fire whatever is due at or before ``index``. Returns what fired.
+
+        **The world protocol's use of the schedule.** State mutations act on the
+        transitions, so a window arrives here already expanded into two triggers
+        -- the effect at its start, its inverse at its end -- and each fires
+        once. A transform protocol would use ``active_at`` instead and apply
+        itself on every active step.
+
+        Due-at-or-before rather than due-exactly-at, so a loop that does not
+        visit every index still fires rather than skipping silently. The step it
+        actually fired at is recorded alongside the one it asked for.
+        """
         fired: list[Fired] = []
         while self._index < len(self._pending):
             spec = self._pending[self._index]

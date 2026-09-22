@@ -493,6 +493,125 @@ class TestEveryEffectMeetsItsObligations(unittest.TestCase):
                 self.assertEqual(one, original, f"{name} mutated its spec")
 
 
+class TestTheScheduleIsProtocolAgnostic(unittest.TestCase):
+    """`active_at` answers when, for any protocol. The hooks answer what.
+
+    Sustained is the DEFAULT for a transform and the special case for a state
+    mutation, exactly inverted -- an observation is produced fresh every step,
+    so a transform applied once corrupts one frame and the next arrives clean,
+    while a state mutation persists because the state does.
+
+    So the schedule answers with a window rather than an event, and the timeline
+    never branches on protocol.
+    """
+
+    def test_an_instantaneous_spec_is_active_for_exactly_one_step(self):
+        line = Timeline([spec(at_step=3)], sim(), random.Random(0))
+        self.assertEqual([i for i in range(8) if line.active_at(i)], [3])
+
+    def test_a_window_is_active_for_every_step_in_it(self):
+        line = Timeline([dict(spec(at_step=2, factor=0.5), until_step=5)],
+                        sim(), random.Random(0))
+        self.assertEqual([i for i in range(8) if line.active_at(i)], [2, 3, 4])
+
+    def test_the_window_excludes_its_end(self):
+        """Half-open, so a perturbation ending at 5 and one starting at 5 do not
+        overlap for a step."""
+        line = Timeline([dict(spec(at_step=2, factor=0.5), until_step=5)],
+                        sim(), random.Random(0))
+        self.assertTrue(line.active_at(4))
+        self.assertFalse(line.active_at(5))
+
+    def test_it_reports_the_spec_not_an_expansion(self):
+        """A window is ONE spec here, whatever the world protocol does with it
+        internally. A transform hook needs the window, not two triggers it would
+        have to reassemble."""
+        one = dict(spec(at_step=2, factor=0.5), until_step=5)
+        line = Timeline([one], sim(), random.Random(0))
+        (active,) = line.active_at(3)
+        self.assertEqual(active["until_step"], 5)
+        self.assertEqual(active["args"]["factor"], 0.5)
+
+    def test_overlapping_windows_are_both_reported(self):
+        line = Timeline([
+            dict(spec(at_step=0, factor=0.5), until_step=6),
+            dict(spec(at_step=3, factor=0.6), until_step=9),
+        ], sim(), random.Random(0))
+        self.assertEqual([len(line.active_at(i)) for i in range(10)],
+                         [1, 1, 1, 2, 2, 2, 1, 1, 1, 0])
+
+    def test_the_world_protocol_still_acts_on_transitions(self):
+        """Not on every active step. Firing a state mutation repeatedly would
+        apply it once per step -- 20 x 0.5 four times over, not once."""
+        world = sim()
+        line = Timeline([dict(spec(at_step=1, factor=0.5), until_step=4)],
+                        world, random.Random(0))
+        for i in range(6):
+            line.step(i)
+        self.assertEqual(world.limits["gripper"], 20.0)
+        self.assertEqual(len(line.fired), 2, "entering and leaving, not four")
+
+
+class TestTemporalityIsOrthogonalToProtocol(unittest.TestCase):
+    """Two declarations, cutting across each other.
+
+    Protocol says WHERE an effect hooks. Temporality says HOW it relates to
+    time. World effects are mostly mutations and observation effects mostly
+    wrappers, but that is a tendency rather than a rule -- a world effect
+    clamping a joint every step while active is a wrapper.
+
+    So the timeline is protocol-blind and temporality-aware: it reports active
+    spans, and the declared temporality decides whether that means two calls or
+    many.
+    """
+
+    def test_every_effect_declares_both(self):
+        from refractal.perturbations import (
+            PROTOCOLS, TEMPORALITIES, declaration, temporality_of,
+        )
+
+        for name in effects():
+            with self.subTest(effect=name):
+                protocol, _ = declaration(name)
+                self.assertIn(protocol, PROTOCOLS)
+                self.assertIn(temporality_of(name), TEMPORALITIES)
+
+    def test_an_unknown_temporality_cannot_register(self):
+        from refractal.perturbations import effect as register
+
+        with self.assertRaises(ValueError) as ctx:
+            register("bogus", protocol="world", needs=("x",),
+                     temporality="permanent")(lambda *a: (0, 0))
+        self.assertIn("mutation", str(ctx.exception))
+
+    def test_a_wrapper_is_not_expanded_into_two_triggers(self):
+        """It has nothing to undo. Expanding one would enqueue an inverse that
+        does not exist, and the world protocol's refusal would fire on an effect
+        that never needed it."""
+        from refractal.perturbations import _EFFECTS, _DECLARED, _TEMPORALITY
+
+        _EFFECTS["blur"] = lambda p, t, a, r: ("d0", "d1")
+        _DECLARED["blur"] = ("observation", ("transform_observation",))
+        _TEMPORALITY["blur"] = "wrapper"
+        try:
+            world = sim()
+            one = {"at_step": 1, "until_step": 4, "type": "blur",
+                   "target": "gripper", "args": {"severity": 3}}
+            line = Timeline([one], world, random.Random(0))
+            # Active across the span, and no inverse trigger was enqueued.
+            self.assertEqual([i for i in range(6) if line.active_at(i)], [1, 2, 3])
+            self.assertEqual(len(line.unfired()), 1,
+                             "one spec, not a start and an end")
+        finally:
+            for table in (_EFFECTS, _DECLARED, _TEMPORALITY):
+                table.pop("blur", None)
+
+    def test_a_mutation_still_expands(self):
+        line = Timeline([dict(spec(at_step=1, factor=0.5), until_step=4)],
+                        sim(), random.Random(0))
+        self.assertEqual(len(line.unfired()), 2, "the effect and its inverse")
+
+
 class TestSweepableIsDeclaredNotGuessed(unittest.TestCase):
     """Not every perturbation has a level, and that is not a failure to find one.
 
