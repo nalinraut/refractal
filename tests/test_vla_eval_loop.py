@@ -171,6 +171,50 @@ class PerturbingHarness(FakeHarness):
         return super().__call__(config, recorder_cls)
 
 
+class ObservationPerturbingHarness(FakeHarness):
+    """Drives the WRAPPER path of a real timeline, with a known exposure.
+
+    A wrapper can be legitimately identity on some steps, so the fraction on
+    which it changed anything is a measurement rather than a constant. This
+    fixture fixes that fraction: the observation arrives already blank on the
+    steps where the effect must be identity, and carrying content on the rest.
+
+    **What this cannot prove**, and refractal-libero's own suite and claims
+    cover instead: that a real adapter routes the digests into the right
+    fields. This fake writes the receipt itself, so that boundary is invisible
+    from here -- which is the same warning the mutation fixture above carries,
+    and it applied once already.
+    """
+
+    #: Steps on which the observation carries content, so the effect is not a
+    #: no-op. Ten steps, three of them live: exposure exactly 0.3.
+    STEPS = 10
+    LIVE = (1, 4, 7)
+
+    def __call__(self, config, recorder_cls):
+        from refractal.perturbations import Timeline, rng_for_episode
+
+        benchmark = config["benchmarks"][0]
+        specs_by_episode = dict(benchmark.get("params", {}).get("perturbations") or {})
+        self.receipts = getattr(self, "receipts", {})
+        for index in range(benchmark["episodes_per_task"]):
+            entry = specs_by_episode.get(episode_key(index)) or {}
+            timeline = Timeline(entry.get("specs", ()), None,
+                                rng_for_episode(str(entry.get("episode_id", index))))
+            for step in range(self.STEPS):
+                content = [1.0, 2.0] if step in self.LIVE else [0.0, 0.0]
+                timeline.apply(step, "observation", {"states": content})
+            self.receipts[index] = [
+                {"effect": e.type, "target": e.target or "",
+                 "specified_step": e.specified_at, "fired_step": e.fired_at,
+                 "reason": None, "before_digest": e.before,
+                 "after_digest": e.after, "applications": e.applications,
+                 "applications_changed": e.applications_changed}
+                for e in timeline.fired
+            ]
+        return super().__call__(config, recorder_cls)
+
+
 def make_plan(*, scenarios=3, seeds=(0,), checkpoints=("pi0", "pi05"), scenes=("libero-0",)):
     """A plan of the shape the LIBERO catalog compiles to: external scenes, one
     task per worker, ``init_state_index`` starting at zero."""
@@ -1173,3 +1217,62 @@ class TestConcurrentThreadsAreIsolated(LoopCase):
                                        checkpoints=("pi0", "pi05")))
         dirs = [c["output_dir"] for c, _ in seen]
         self.assertEqual(len(set(dirs)), len(dirs), dirs)
+
+
+class TestExposureReachesTheParquet(LoopCase):
+    """What the episode was ASSIGNED and what it RECEIVED are different
+    columns, and the second is only knowable after the run.
+
+    A transform can be identity on some steps -- two rotation conventions agree
+    exactly over half of all orientations -- so an episode is perturbed only on
+    the steps its trajectory spends where they differ. On LIBERO, from one
+    fixed action sequence, that ranged from 2.5% to 15% across start states.
+
+    So a result that says "N points" without saying at what exposure is not a
+    claim anyone can check, and two checkpoints with different exposures were
+    not given the same treatment. The column is what makes the conditioning
+    possible, which means it has to survive the whole route rather than be
+    correct in a helper.
+
+    The helper's arithmetic is unit-tested elsewhere. Mutating the wiring --
+    writing a null into the row instead of calling it -- broke nothing, which
+    is what this class exists to fix.
+    """
+
+    SPEC = {"at_step": 0, "type": "drop_observation", "target": "states",
+            "args": {"fill": "zeros"}}
+
+    def _plan(self):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        for scene in plan.scenes:
+            for scenario in scene.scenarios:
+                object.__setattr__(scenario, "perturbations", [dict(self.SPEC)])
+            for worker in scene.workers:
+                for episode in worker.episodes:
+                    object.__setattr__(episode, "perturbations", [dict(self.SPEC)])
+        return plan
+
+    def test_the_measured_exposure_lands_in_its_own_column(self):
+        plan = self._plan()
+        self.run_loop(plan, ObservationPerturbingHarness())
+        rows = self.rows(plan)
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertAlmostEqual(
+                row["perturbation_exposure"], 0.3,
+                msg="three of ten applications changed the observation")
+
+    def test_it_is_not_the_declared_level(self):
+        """`drop_observation` is categorical, so it has no level at all -- and
+        an exposure nonetheless. The two columns are independent."""
+        plan = self._plan()
+        self.run_loop(plan, ObservationPerturbingHarness())
+        for row in self.rows(plan):
+            self.assertIsNone(row["perturbation_level"])
+            self.assertIsNotNone(row["perturbation_exposure"])
+
+    def test_an_unperturbed_episode_has_no_exposure(self):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, ObservationPerturbingHarness())
+        for row in self.rows(plan):
+            self.assertIsNone(row["perturbation_exposure"])
