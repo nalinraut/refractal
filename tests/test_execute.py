@@ -53,6 +53,98 @@ class ExecuteCase(unittest.TestCase):
         return run_local(self.plan, self.results, **kwargs)
 
 
+class TestThePerturbationReceiptType(unittest.TestCase):
+    """The receipt column, written and read back through Parquet.
+
+    Asserted against the artifact rather than in memory, because the question
+    is whether the declared type can hold what the runner will put in it --
+    which an in-memory dict cannot answer.
+
+    The column is empty today. Once a sweep writes to it the type is permanent,
+    so the shape is settled first.
+    """
+
+    def _round_trip(self, events, level):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        from refractal.execute.results import EPISODES_SCHEMA
+
+        row = {name: None for name in EPISODES_SCHEMA.names}
+        row.update({
+            "episode_id": "sha256:e", "scenario_hash": "sha256:s",
+            "base_scenario_hash": "sha256:b", "scene_id": "sc",
+            "scene_hash": "sha256:sc", "task_id": "t", "task_hash": "sha256:t",
+            "checkpoint_id": "pi0", "seed": 0, "session_id": "sess",
+            "worker_id": "w", "execution_mode": "concurrent", "success": True,
+            "is_infra_failure": False, "steps": 271, "elapsed_sec": 4.2,
+            "perturbations_fired": events, "perturbation_level": level,
+        })
+        table = pa.Table.from_pylist([row], schema=EPISODES_SCHEMA)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "e.parquet"
+            pq.write_table(table, path, compression="zstd")
+            return pq.read_table(path).to_pylist()[0]
+
+    @staticmethod
+    def _event(**kw):
+        base = {"effect": "scale_actuator", "target": "gripper0_finger1",
+                "specified_step": 200, "fired_step": 200, "reason": None,
+                "before": [20.0], "after": [10.0]}
+        base.update(kw)
+        return base
+
+    def test_two_events_keep_their_own_values(self):
+        """The case parallel columns cannot hold: which value belongs to which
+        step. A struct per event keeps each one's facts together."""
+        back = self._round_trip([
+            self._event(specified_step=200, fired_step=200, before=[20.0], after=[10.0]),
+            self._event(specified_step=250, fired_step=250, before=[10.0], after=[6.0]),
+        ], 0.3)
+        self.assertEqual(
+            [(e["specified_step"], e["before"], e["after"])
+             for e in back["perturbations_fired"]],
+            [(200, [20.0], [10.0]), (250, [10.0], [6.0])],
+        )
+
+    def test_an_unfired_spec_rides_in_the_same_column(self):
+        """So one column answers `did everything fire`, rather than a join."""
+        back = self._round_trip([
+            self._event(fired_step=None, reason="the episode ended at step 271",
+                        after=None),
+        ], None)
+        (event,) = back["perturbations_fired"]
+        self.assertIsNone(event["fired_step"])
+        self.assertIn("ended", event["reason"])
+
+    def test_before_and_after_hold_a_scalar_and_a_wrench(self):
+        """scale_actuator reads one limit; apply_force reads six numbers out of
+        xfrc_applied. One column, lengths 1 and 6, no column per effect."""
+        back = self._round_trip([
+            self._event(before=[20.0], after=[10.0]),
+            self._event(effect="apply_force", target="bowl",
+                        before=[0.0] * 6, after=[0.0, 0.0, 5.0, 0.0, 0.0, 0.0]),
+        ], 0.5)
+        lengths = [len(e["after"]) for e in back["perturbations_fired"]]
+        self.assertEqual(lengths, [1, 6])
+
+    def test_the_level_is_a_number_and_not_in_the_struct(self):
+        """It is the grouping key: a curve groups on a plain value rather than
+        reaching into an audit record. A string would sort `"20.0"` next to
+        `"3.0"` and stop grouping without saying so."""
+        back = self._round_trip([self._event()], 0.3)
+        self.assertIsInstance(back["perturbation_level"], float)
+        self.assertLess(back["perturbation_level"], 0.5)
+        self.assertNotIn("level", back["perturbations_fired"][0])
+
+    def test_an_unperturbed_episode_carries_nulls(self):
+        """Every episode recorded so far, and every one in the unperturbed arm
+        of a sweep."""
+        back = self._round_trip(None, None)
+        self.assertIsNone(back["perturbations_fired"])
+        self.assertIsNone(back["perturbation_level"])
+
+
 class TestSchemaAndLayout(ExecuteCase):
     def test_every_episode_lands_exactly_once(self):
         summary = self.run_once()

@@ -74,22 +74,59 @@ EPISODES_SCHEMA = pa.schema(
         # two episodes differing only in torque scale are different episodes;
         # this is what lets `compare` still see them as the same base.
         pa.field("base_scenario_hash", pa.string(), nullable=False),
-        # What was asked for, and what actually happened. A map because the set
-        # of perturbation types varies -- same reasoning as `phase_outcomes`.
+        # The receipt: one struct per perturbation, fired or not.
         #
-        # `perturbations` is the spec, restated from the scenario so a result
-        # file explains itself without the plan. `perturbations_fired` is the
-        # receipt: which ones ran, at which step. They are separate columns
-        # because a request and its fulfilment must be comparable, and the
-        # failure this catches is a sweep whose specs never fired -- every
-        # episode looking exactly like a clean unperturbed run.
+        # A list of structs rather than parallel columns, because two
+        # perturbations in one episode would otherwise need parallel arrays to
+        # say which value belongs to which step -- and parallel arrays drift.
+        # Each event's facts stay together.
         #
-        # A trigger at step 200 in an episode that ended at 150 legitimately did
-        # not fire, so absence alone is not the error. `perturbations_fired`
-        # records the step, and `compare` refuses a sweep where nothing fired at
-        # all, the same way a filter that rejects every scenario is refused.
-        pa.field("perturbations", pa.map_(pa.string(), pa.string())),
-        pa.field("perturbations_fired", pa.map_(pa.string(), pa.int32())),
+        # Not a map of strings either. Every query would parse them, and "20.0"
+        # sorts and compares differently from 20.0; stringly-typed columns are
+        # how a groupable value silently stops grouping.
+        #
+        # `before` and `after` are lists because they are not always scalars:
+        # scale_actuator reads one torque limit, apply_force reads a six-element
+        # wrench out of xfrc_applied. One column holds both at length 1 and 6,
+        # rather than a column per effect.
+        #
+        # Unfired specs live here too, with a null `fired_step` and a `reason`.
+        # One column then answers "did everything fire", instead of a join
+        # between what was asked and what happened. A trigger at step 200 in an
+        # episode that ended at 150 legitimately did not fire -- absence alone
+        # is not the error -- but a sweep where nothing fired anywhere is, the
+        # same way a filter that rejects every scenario is.
+        pa.field(
+            "perturbations_fired",
+            pa.list_(
+                pa.struct(
+                    [
+                        pa.field("effect", pa.string(), nullable=False),
+                        pa.field("target", pa.string(), nullable=False),
+                        pa.field("specified_step", pa.int32(), nullable=False),
+                        #: Null when it never came due.
+                        pa.field("fired_step", pa.int32()),
+                        #: Why not, when `fired_step` is null.
+                        pa.field("reason", pa.string()),
+                        pa.field("before", pa.list_(pa.float64())),
+                        pa.field("after", pa.list_(pa.float64())),
+                    ]
+                )
+            ),
+        ),
+        # The grouping key, kept OUT of the receipt on purpose.
+        #
+        # The receipt records what happened; `compare` groups by what was asked.
+        # A torque-margin curve should group on a plain number rather than
+        # reaching into an audit struct -- the receipt is for checking and the
+        # level is for analysis, and conflating them makes both worse.
+        #
+        # Null when an episode has no perturbation, and also when it has more
+        # than one: there is then no single level to group on, and silently
+        # picking one would be worse than saying so. A sweep over two
+        # simultaneous levels needs a key this column cannot express, which is
+        # an open question rather than something to fudge here.
+        pa.field("perturbation_level", pa.float64()),
         pa.field("scene_id", pa.string(), nullable=False),
         pa.field("scene_hash", pa.string(), nullable=False),
         pa.field("task_id", pa.string(), nullable=False),
