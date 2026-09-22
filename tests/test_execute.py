@@ -89,6 +89,30 @@ class TestAReceiptMustSayWhatItMeans(unittest.TestCase):
         self._write([{"effect": "scale_actuator", "target": "g",
                       "specified_step": 0, "fired_step": 0, "reason": None}])
 
+    def test_an_assigned_perturbation_with_no_entries_is_refused(self):
+        """The emptiest receipt: assigned perturbations, and nothing recorded.
+
+        Every per-event rule passes trivially over no events, so the narrowest
+        check could not see it. Reachable, and reached: the adapter kept
+        mutation events in its own list while wrapper windows lived on the
+        timeline, so an episode perturbing only the observation reported
+        nothing at all.
+        """
+        from refractal.schema.errors import RefractalError
+
+        with self.assertRaises(RefractalError) as ctx:
+            check = __import__("refractal.execute.results",
+                               fromlist=["x"]).check_receipts
+            check([{"episode_id": "e", "perturbation_count": 1,
+                    "perturbations_fired": []}])
+        self.assertIn("receipt is empty", str(ctx.exception))
+
+    def test_an_unperturbed_episode_may_of_course_report_nothing(self):
+        check = __import__("refractal.execute.results",
+                           fromlist=["x"]).check_receipts
+        check([{"episode_id": "e", "perturbation_count": 0,
+                "perturbations_fired": []}])
+
     def test_a_wrapper_that_changed_nothing_is_refused(self):
         """The wrapper's own way of arriving empty.
 

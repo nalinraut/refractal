@@ -836,8 +836,21 @@ class Timeline:
         happens. This is the one query both ask, so the timeline never branches
         on protocol and there is one source of truth about timing.
 
-        A spec with no ``until_step`` is active for exactly one step. One with a
-        window is active for every step in ``[at_step, until_step)``.
+        A spec with no ``until_step`` is active from ``at_step`` **to the end
+        of the episode**. One with a window is active in
+        ``[at_step, until_step)``, half-open.
+
+        Open-ended rather than one step, which this got wrong while only the
+        world protocol existed. There, ``at_step`` is the instant a mutation
+        fires and the change persists by itself, so "active for one step" and
+        "in force from here on" are the same sentence -- and the mutation path
+        never asks this question anyway, it walks its own pointer.
+
+        A wrapper has no persistence. One step means one frame transformed and
+        every later one arriving clean, which is not what "no end" means to
+        anyone declaring it, and not what the catalog documents. The mutation's
+        reading of ``at_step`` had leaked into a schedule that is supposed to
+        be protocol-blind.
 
         How a protocol uses that differs, and that difference is the protocols'
         business rather than the schedule's:
@@ -859,7 +872,7 @@ class Timeline:
             start = int(spec["at_step"])
             until = spec.get("until_step")
             if until is None:
-                if index == start:
+                if index >= start:
                     active.append(dict(spec))
             elif start <= index < int(until):
                 active.append(dict(spec))
@@ -935,6 +948,16 @@ class Timeline:
             spec = self._pending[self._index]
             if spec["at_step"] > index:
                 break
+            # Mutations only. A wrapper is in `_pending` because the pointer
+            # walks one sorted list for every spec, and calling one here would
+            # invoke it with the mutation signature -- a different arity, and
+            # a second application on top of the one its own hook already did.
+            #
+            # Skipped rather than kept out of the list, so the two paths agree
+            # about ordering and about what the episode was asked to do.
+            if temporality_of(spec["type"]) != "mutation":
+                self._index += 1
+                continue
             before, after = _EFFECTS[spec["type"]](
                 self.primitives, spec["target"], dict(spec.get("args", {})), self.rng
             )

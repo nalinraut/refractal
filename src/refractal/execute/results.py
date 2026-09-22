@@ -351,6 +351,21 @@ def check_receipts(rows: Iterable[dict[str, Any]]) -> None:
     not at all.
     """
     for row in rows:
+        # An episode that was ASSIGNED perturbations and reports none is the
+        # emptiest receipt there is, and the narrowest check missed it: every
+        # per-event rule passes trivially over no events.
+        #
+        # It is reachable. The adapter accumulated mutation events in its own
+        # list while wrapper windows lived on the timeline, so an episode
+        # perturbing only the observation reported nothing at all.
+        if row.get("perturbation_count") and not row.get("perturbations_fired"):
+            raise RefractalError(
+                f"episode {row.get('episode_id')!r} was assigned "
+                f"{row['perturbation_count']} perturbation(s) and its receipt "
+                "is empty -- not a perturbation that did not fire, which "
+                "records a reason, but no entry of any kind. Nothing collected "
+                "what happened."
+            )
         for event in row.get("perturbations_fired") or ():
             # Before the fired_step guard below, not after it. A wrapper always
             # HAS a fired step, so a check placed after that `continue` can

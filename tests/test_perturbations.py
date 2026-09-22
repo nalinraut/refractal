@@ -579,9 +579,22 @@ class TestTheScheduleIsProtocolAgnostic(unittest.TestCase):
     never branches on protocol.
     """
 
-    def test_an_instantaneous_spec_is_active_for_exactly_one_step(self):
+    def test_a_spec_with_no_end_is_active_to_the_end(self):
+        """This asserted "active for exactly one step" and was wrong.
+
+        It encoded the world protocol's reading of `at_step` -- the instant a
+        mutation fires, after which the change persists on its own -- into a
+        schedule that answers for every protocol. The mutation path does not
+        even ask this question; it walks its own pointer. So nothing noticed.
+
+        A wrapper has nothing that persists. Under the old answer, a
+        perturbation declared with no end transformed exactly one observation
+        and every later one arrived clean, while the catalog documented it as
+        lasting to the end of the episode.
+        """
         line = Timeline([spec(at_step=3)], sim(), random.Random(0))
-        self.assertEqual([i for i in range(8) if line.active_at(i)], [3])
+        self.assertEqual([i for i in range(8) if line.active_at(i)],
+                         [3, 4, 5, 6, 7])
 
     def test_a_window_is_active_for_every_step_in_it(self):
         line = Timeline([dict(spec(at_step=2, factor=0.5), until_step=5)],
@@ -650,8 +663,22 @@ class TestWrappersApplyOnEveryActiveStep(unittest.TestCase):
         blanked = [s == b"\x00\x00" for s in seen]
         self.assertEqual(blanked, [False, True, True, True, False, False])
 
-    def test_an_instantaneous_wrapper_transforms_exactly_one_step(self):
+    def test_a_wrapper_with_no_end_transforms_every_later_step(self):
+        """This asserted one step, matching the schedule's old answer.
+
+        Both were the world protocol's reading of `at_step`. A mutation fires
+        once and the change stays; a wrapper transforms one frame and the next
+        arrives clean -- so "no end" meant a single corrupted observation while
+        the catalog promised the rest of the episode.
+        """
         line = self._line()
+        blanked = [line.apply(i, "observation", self.OBS)["images"]["wrist"]
+                   == b"\x00\x00" for i in range(4)]
+        self.assertEqual(blanked, [False, True, True, True])
+
+    def test_one_step_is_available_and_has_to_be_asked_for(self):
+        """`until_step` one past `at_step`, since the window is half-open."""
+        line = self._line(until_step=2)
         blanked = [line.apply(i, "observation", self.OBS)["images"]["wrist"]
                    == b"\x00\x00" for i in range(4)]
         self.assertEqual(blanked, [False, True, False, False])
@@ -957,3 +984,128 @@ class TestTheModuleNeedsNoSimulator(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAWrapperCanBeIdentityOnSomeSteps(unittest.TestCase):
+    """The evidence is how many applications CHANGED the value, not the first
+    pair -- and the first real effect is the reason.
+
+    Swapping a rotation convention is identity whenever the quaternion already
+    lies in the hemisphere the other convention normalizes to, and differs by a
+    full turn when it does not. Measured on LIBERO's reset pose, the wrist sits
+    within 2e-4 of that boundary, so which side a given episode starts on is
+    decided by floating-point noise.
+
+    Judging by the first pair would therefore call a correctly applied effect a
+    no-op on roughly half of episodes. `applications_changed` is what makes the
+    receipt say what actually happened.
+    """
+
+    def _timeline(self, alternatives):
+        from refractal.perturbations import Timeline
+
+        fake = FakeSim()
+        fake.alternatives = alternatives
+        return Timeline(
+            specs=[{"at_step": 0, "type": "substitute_observation",
+                    "target": "states",
+                    "args": {"kind": "state", "name": "other"}}],
+            primitives=fake,
+            rng=random.Random(0),
+        )
+
+    def test_changed_counts_only_the_applications_that_differed(self):
+        """Identity on the first step and different on the second. Both counts
+        must move independently."""
+        same = {"states": [1.0, 2.0]}
+        timeline = self._timeline({("state", "other"): [1.0, 2.0]})
+        timeline.apply(0, "observation", dict(same))
+        timeline.apply(1, "observation", {"states": [7.0, 7.0]})
+
+        (event,) = [e for e in timeline.fired if e.applications]
+        self.assertEqual(event.applications, 2, "applied on both steps")
+        self.assertEqual(event.applications_changed, 1,
+                         "changed on the second only -- the first returned "
+                         "what was already there")
+
+    def test_the_first_pair_can_be_equal_on_a_working_effect(self):
+        """Which is why the first pair is an exemplar and not a verdict."""
+        timeline = self._timeline({("state", "other"): [1.0, 2.0]})
+        timeline.apply(0, "observation", {"states": [1.0, 2.0]})
+        timeline.apply(1, "observation", {"states": [7.0, 7.0]})
+
+        (event,) = [e for e in timeline.fired if e.applications]
+        self.assertEqual(event.before, event.after,
+                         "step one was identity, so the exemplar pair matches")
+        self.assertTrue(event.applications_changed,
+                        "and the effect still demonstrably did something")
+
+    def test_never_changing_anything_leaves_the_count_at_zero(self):
+        """The real 'applied to nothing', which `check_receipts` refuses."""
+        timeline = self._timeline({("state", "other"): [1.0, 2.0]})
+        for index in range(3):
+            timeline.apply(index, "observation", {"states": [1.0, 2.0]})
+
+        (event,) = [e for e in timeline.fired if e.applications]
+        self.assertEqual(event.applications, 3)
+        self.assertEqual(event.applications_changed, 0)
+
+
+class TestTheTwoPathsDoNotRunEachOthersSpecs(unittest.TestCase):
+    """One timeline, both hooks, and a spec belongs to exactly one of them.
+
+    `step` walks a single sorted list holding every spec, because ordering has
+    to be one thing. So it has to skip what is not its own: a wrapper called
+    through the mutation path gets the wrong arity, and if the signatures ever
+    happened to line up it would apply a second time on top of its own hook.
+
+    An episode that perturbs the observation calls both hooks every step, so
+    this is the ordinary path rather than an exotic one -- it was simply never
+    tested with both a wrapper present and `step` being called.
+    """
+
+    def _line(self):
+        from refractal.perturbations import Timeline
+
+        return Timeline(
+            specs=[{"at_step": 0, "type": "substitute_observation",
+                    "target": "states",
+                    "args": {"kind": "state", "name": "joints"}}],
+            primitives=sim(),
+            rng=random.Random(0),
+        )
+
+    def test_stepping_never_fires_a_wrapper(self):
+        line = self._line()
+        for index in range(4):
+            self.assertEqual(line.step(index), [],
+                             "the mutation path has nothing to do here")
+
+    def test_and_the_wrapper_still_applies_exactly_once_per_step(self):
+        """The skip must not cost the wrapper its own application."""
+        line = self._line()
+        for index in range(4):
+            line.step(index)
+            line.apply(index, "observation", {"states": [1.0, 2.0]})
+        (event,) = [e for e in line.fired if e.applications]
+        self.assertEqual(event.applications, 4)
+
+    def test_a_mixed_timeline_runs_each_spec_on_its_own_path(self):
+        line = __import__("refractal.perturbations", fromlist=["x"]).Timeline(
+            specs=[
+                spec(at_step=0, factor=0.5),
+                {"at_step": 0, "type": "substitute_observation",
+                 "target": "states", "args": {"kind": "state", "name": "joints"}},
+            ],
+            primitives=sim(),
+            rng=random.Random(0),
+        )
+        (fired,) = line.step(0)
+        self.assertEqual(fired.type, "scale_actuator",
+                         "only the mutation fires through step")
+        line.apply(0, "observation", {"states": [1.0, 2.0]})
+        self.assertEqual(
+            sorted(e.type for e in line.fired),
+            ["scale_actuator", "substitute_observation"],
+            "and both appear in the receipt, each from its own path",
+        )
