@@ -71,6 +71,9 @@ service name; the servers are not in this file.
 
 ## Flags
 
+`render` and `run --backend compose` take the same rendering flags, because the
+second calls the first. These are they:
+
 | | |
 |---|---|
 | `--server CKPT=URL` | one per checkpoint, pointing at the host |
@@ -78,10 +81,36 @@ service name; the servers are not in this file.
 | `--catalog DIR` | mounted read-only as provenance |
 | `--results DIR` | the only writable mount |
 | `--image ENGINE=IMAGE` | override the image for an engine |
-| `--mount HOST:CONTAINER` | extra read-only mount |
+| `--mount HOST:CONTAINER` | extra read-only mount, repeatable |
 | `--no-host-gateway` | omit the `host.docker.internal` mapping |
+| `--gpus N` | GPUs to reserve per worker |
+| `--video` | emit `--video` in each service's command |
+| `--frame-every N` | keep every Nth frame, default 10 |
+
+`render` additionally takes `--target compose` (the only target; k8s is out of
+scope), `-o/--output` for where to write, and `--plan-file` for the host path to
+the plan when it differs from the path you passed.
+
+`run --backend compose` additionally takes:
+
+| | |
+|---|---|
 | `--compose-file PATH` | where to write, default `docker-compose.yml` |
 | `--detach` | `up -d` instead of waiting |
+
+## Video
+
+`--video` records frames and writes one WebP sprite strip per episode into
+`frames/` beside the results, laid left to right at `--frame-every`.
+
+A worker asked for frames that produces none fails rather than finishing quietly,
+because a silent empty `frames/` looks identical to a run nobody asked to record
+and is only noticed after the GPU time is spent.
+
+Recording is off unless asked for. It is not free, and whether to spend that is
+not a property of the experiment -- which is why it is a flag here and not a
+field in the catalog. Two runs of one plan, one recorded and one not, are the
+same experiment and join.
 
 ## When render refuses
 
@@ -140,3 +169,30 @@ per task; a scene that vectorises usually gets one worker total, because the
 batch already holds every episode.
 
 Several scenes give several workers regardless.
+
+### Why every service is pinned
+
+Compose has no scheduler. Without `cpuset` the containers contend for cores, and
+contention does not raise -- it makes every timing measurement noise, differently
+on each run, which for a tool whose output is a claim about a measured difference
+is the worst available failure.
+
+The pin is as wide as the worker: `cpu_cores` from the resource shape, which is
+per environment, times the environments one worker holds. Under `execution_mode:
+concurrent` that is the checkpoint count, so the `cpuset: "0"` in the example
+above becomes `"0-1"` when two checkpoints are compared.
+
+A pin narrower than the worker's threads is the same failure moved inside the
+container, where a worker's own threads contend instead of its neighbours', and
+it reads as the cost of containerisation rather than as a misconfiguration.
+
+### What containers do and do not buy
+
+They parallelise the simulator. They do not parallelise inference, which on a VLA
+evaluation is most of the per-step cost: the workers hold environments, and the
+model servers are outside, shared, and answering whatever arrives. Adding workers
+fills those servers' queues; whether the queue becomes a batch is a property of
+the server, not of this file.
+
+Size the fleet to the servers, not to the cores. Ten containers against two
+servers on one card killed a server outright, mid-run and silently.

@@ -45,6 +45,33 @@ anything.
 decides whether two runs are comparable. Change a step budget or a predicate and
 it moves; change the output directory or the worker layout and it does not.
 
+The estimate above is an upper bound from the catalog's declared figures. Once
+you have actually run something, `--expect-from RESULTS` prints an expected
+duration learned from it alongside the bound, which is the more useful number:
+
+```console
+$ refractal plan catalog --hardware laptop --expect-from ./results -o plan.json
+  ...
+  360 episodes across 1 scene(s), 2 worker(s), at most 37 min
+  that is an upper bound: every episode is costed at its full step limit,
+  and episodes that succeed finish sooner.
+  expected 21 min, from 360 prior episode(s) of ['baseline', 'candidate']
+```
+
+Add `--expect-plan PLAN_ID` when the prior results are from a different
+experiment than the one being planned. If nothing usable is found it says
+`no usable prior episodes; expected duration not computed` and prints the bound
+alone, rather than quietly falling back to it.
+
+| | |
+|---|---|
+| `--hardware PROFILE` | which profile in `hardware.yaml` to plan against |
+| `--expect-from DIR` | prior results to learn an expected duration from |
+| `--expect-plan ID` | the `plan_id` of those results, if not this plan |
+| `--pack-below-startup-sec N` | pack starved scenes sequentially when scene construction costs more than the parallelism saves; default 30 |
+
+`refractal init .` takes `--force` to overwrite files that are already there.
+
 ## 3. Run it
 
 ```console

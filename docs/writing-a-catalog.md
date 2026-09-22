@@ -159,6 +159,16 @@ worker of that scene needs on it.
         measured_at: "2026-09-19"
 ```
 
+**Every figure here is per environment, except `memory_mb`.** A worker may hold
+more than one environment, and the planner multiplies. Under `execution_mode:
+concurrent` a worker runs one thread per checkpoint, each with its own
+environment, so comparing two checkpoints doubles what a worker occupies:
+`cpu_cores: 1` above reserves two cores per worker, and the container Compose
+renders is pinned to two.
+
+`memory_mb` is the exception and is per worker. It says so in the schema; the
+declared values were measured that way.
+
 Two of these are easy to confuse and are independent:
 
 | field | question |
@@ -177,6 +187,12 @@ which is silent, while refusing to split only costs parallelism.
 `sec_per_1k_steps` is the wall clock a **worker** experiences, which includes
 waiting on the policy. Timing the simulator alone will give you a number several
 times too small, and it will look measured.
+
+Three fields in this block have now been wrong in use before they were wrong in
+name -- `sec_per_1k_steps` (worker or simulator), `startup_sec` (per invocation
+or per episode), and `cpu_cores` (per worker or per environment). Each survived
+because the two readings agree in the ordinary case and diverge silently outside
+it. When you add a field here, say what it is per.
 
 Set `measured_at` when you have measured. A comment saying "measured" beside an
 empty `measured_at` fails `scripts/lint_provenance_claims.py`, because that

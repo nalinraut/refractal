@@ -87,8 +87,28 @@ Beyond the identity fields:
 | `concurrent_with` | other checkpoints running at the same time, under `execution_mode: concurrent` |
 
 `harness_surface` gates comparisons. If it differs between checkpoints, `compare` exits
-2 and names the files that changed. Override with `--allow-harness-mismatch`
+2 and names the files that changed. Override with `compare --allow-harness-mismatch`
 after reading them.
+
+## Frames
+
+`--video` asks the harness to record, and writes one WebP sprite strip per
+episode into `frames/` beside the results -- every `--frame-every`-th frame, laid
+left to right in one image. `--frame-every` defaults to 10.
+
+Decide before the run. Recording is off by default and cannot be added
+afterwards without running the episodes again, so the choice of rate and of which
+episodes get video is made when the run starts.
+
+A worker asked for frames that produces none **fails**. The frames come back
+from the harness keyed by its own episode numbering while the rows are keyed by
+content-addressed ids, and an empty `frames/` is indistinguishable from a run
+nobody asked to record -- which is the sort of thing found after the GPU time is
+spent. The receipt is checked instead.
+
+Recording does not change what the experiment is. A recorded run and an
+unrecorded one of the same plan share a `plan_id` and join in one comparison,
+which is why this is a flag and not a catalog field.
 
 ## Keeping the pin safe
 
@@ -99,12 +119,12 @@ assumed:
 $ python scripts/verify_harness_claims.py
 Verifying harness claims against installed vla-eval 0.6.0
 
-  [ok  ] the recorder gate is `self._store is None`
-  [ok  ] no model server reads db_path
-  [ok  ] _ALL_RECORD_FIELDS is per-benchmark and advisory
-  [ok  ] spec cross-validation is inline in _run_benchmark_inner
-  [ok  ] the work-item loop is inline, not an overridable method
-  [ok  ] the model server address is configurable, not hardcoded
+  [ok  ] the recorder gate is `self._store is None`               found in orchestrator.py
+  [ok  ] no model server reads db_path                            no callers
+  [ok  ] _ALL_RECORD_FIELDS is per-benchmark and advisory         validated via getattr, 17 benchmark(s) declare one
+  [ok  ] spec cross-validation is inline in _run_benchmark_inner  36 lines, inline
+  [ok  ] the work-item loop is inline, not an overridable method  inline
+  [ok  ] the model server address is configurable, not hardcoded  overridable from YAML
 
 All 6 claims hold.
 ```

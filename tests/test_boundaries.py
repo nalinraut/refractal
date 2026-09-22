@@ -9,6 +9,7 @@ It is also the rule most likely to be broken by accident, because breaking it
 looks like a convenience. Hence the test.
 """
 
+import re
 import shutil
 import subprocess
 import sys
@@ -247,3 +248,61 @@ class TestPlanningDoesNotDependOnExecution(unittest.TestCase):
                         f"{path.name} mentions {word}: whether a run recorded "
                         "frames is render-time and must not reach planning.",
                     )
+
+
+class TestTheDocsNameFlagsThatExist(unittest.TestCase):
+    """Every ``--flag`` the docs mention is one the CLI offers.
+
+    The docs drifted exactly here: the Compose flags table listed two flags that
+    live on ``run`` as though they were ``render``'s, and omitted six that had
+    been added since it was written. Nothing failed, because nothing looked.
+
+    A doc that names a flag which does not exist is worse than no doc -- the
+    reader types it, argparse exits 2, and the tool looks broken rather than the
+    page looking stale.
+    """
+
+    #: Flags belonging to other tools, appearing in console transcripts the docs
+    #: show for context: uv, pip, twine, and a model server's own command line.
+    FOREIGN = {
+        "--python", "--no-cache-dir", "--repository", "--address", "--short",
+    }
+
+    @staticmethod
+    def _cli_flags() -> set[str]:
+        import argparse
+
+        from refractal.cli import build_parser
+
+        found: set[str] = set()
+
+        def walk(parser: argparse.ArgumentParser) -> None:
+            for action in parser._actions:
+                found.update(o for o in action.option_strings if o.startswith("--"))
+                if isinstance(action, argparse._SubParsersAction):
+                    for sub in action.choices.values():
+                        walk(sub)
+
+        walk(build_parser())
+        return found
+
+    def test_no_doc_names_a_flag_the_cli_does_not_have(self):
+        docs = Path(__file__).resolve().parents[1] / "docs"
+        self.assertTrue(docs.is_dir(), "docs/ not found")
+        offered = self._cli_flags()
+        mentioned: dict[str, set[str]] = {}
+        for page in sorted(docs.glob("*.md")):
+            for flag in set(re.findall(r"--[a-z][a-z0-9-]+", page.read_text("utf-8"))):
+                mentioned.setdefault(flag, set()).add(page.name)
+
+        unknown = {
+            flag: sorted(pages)
+            for flag, pages in mentioned.items()
+            if flag not in offered and flag not in self.FOREIGN
+        }
+        self.assertEqual(
+            unknown,
+            {},
+            "docs name flags the CLI does not offer (add to FOREIGN if the flag "
+            f"belongs to another tool): {unknown}",
+        )
