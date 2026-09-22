@@ -213,11 +213,31 @@ base column entirely, all five base scenarios matching.
 
 One more thing the results carry, because it decides how a sweep is grouped:
 
-| | |
+| the episode has | its level |
 |---|---|
-| no perturbations | the **baseline**, and it belongs on the curve at its top |
-| one perturbation | its level, which is what the curve groups by |
-| two or more | no single level, so it is off any single axis |
+| no perturbations | none — it is the **baseline**, and belongs on the curve at its top |
+| one **sweepable** perturbation | its level, which is what the curve groups by |
+| one **categorical** perturbation | none, correctly — see below |
+| two or more | none — no single level, so it is off any single axis |
 
-The count is recorded alongside, because the second and third cases both have no
-level and mean opposite things.
+The count is recorded alongside, because three of those four have no level and
+mean different things.
+
+### Not every perturbation has a level
+
+Torque scale is continuous, so a sweep is natural: 1.0, 0.1, 0.05, and a curve
+through them.
+
+Some perturbations are **categorical**. A state source is correct, wrong, or
+some third thing — there is no ordering and nothing between the values. You
+cannot sweep it, and an axis with two points is a comparison rather than a
+curve. That is fine: a matched comparison at each value is what `compare`
+already does, and it needs no sweep machinery at all.
+
+Which kind an effect is, the effect declares. It is not inferred from what its
+arguments are called — an effect naming its level something unexpected would
+otherwise silently become categorical, losing the column a curve groups by with
+nothing to say so.
+
+`scale_actuator` is sweepable, with `factor` as its level. `displace_body` and
+`apply_force` are not.

@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from ..schema.plan import Plan, PlannedEpisode, PlannedScene
+from ..perturbations import level_arg_of
 from .physics import ABSENT as PHYSICS_ABSENT
 from .physics import actuator_facts, physics_digest, physics_manifest
 from .harness import describe_installed_harness
@@ -106,22 +107,35 @@ def default_invoke(
 def _declared_level(specs: list | None) -> float | None:
     """The single level to group a curve on, or None when there is not one.
 
-    None for an unperturbed episode AND for one carrying two perturbations:
-    there is then no one level to place it at, and silently picking the first
-    would put a point on a curve it does not belong to. `perturbation_count`
-    tells the two apart -- 0 is the baseline and belongs, 2 or more is off any
-    single axis.
+    Read from the effect's DECLARATION of which argument is its level, not
+    guessed from argument names. Guessing meant an effect calling its argument
+    anything but `factor`, `level` or `scale` silently lost the column a curve
+    groups by -- a continuous axis becoming categorical by accident.
+
+    Four cases, told apart by `perturbation_count` and the effect's own
+    declaration:
+
+        count 0                     -> the baseline. On the curve, at its top.
+        count 1, sweepable effect   -> its level.
+        count 1, categorical effect -> no level, CORRECTLY. A state source is
+                                       correct-or-wrong; an axis with two points
+                                       is a comparison, not a curve, and compare
+                                       already does matched comparisons.
+        count 2+                    -> no single level; off any single axis.
+
+    The third case is why this reads a declaration. Without one, a categorical
+    perturbation and a continuous one whose argument went unrecognised are the
+    same row, and only the first is correct.
     """
     if not specs or len(specs) != 1:
         return None
-    args = dict(specs[0].get("args") or {})
-    for key in ("factor", "level", "scale"):
-        if key in args:
-            try:
-                return float(args[key])
-            except (TypeError, ValueError):
-                return None
-    return None
+    key = level_arg_of(specs[0].get("type", ""))
+    if key is None:
+        return None          # categorical, by the effect's own declaration
+    try:
+        return float(dict(specs[0].get("args") or {})[key])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _specs_for(outcome: Any) -> list:

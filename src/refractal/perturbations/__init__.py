@@ -54,6 +54,8 @@ __all__ = [
     "effect",
     "PROTOCOLS",
     "declaration",
+    "is_sweepable",
+    "level_arg_of",
     "effects",
     "protocol_of",
     "has_inverse",
@@ -158,6 +160,22 @@ _EFFECTS: dict[str, Effect] = {}
 #: name -> how to undo it, as ARGUMENTS for the same effect. Absent means the
 #: effect cannot be ended, and ``until_step`` on it is refused.
 _INVERSES: dict[str, Callable[[dict], dict]] = {}
+#: name -> the argument that IS the level, or None when the effect is
+#: categorical and has no level at all.
+#:
+#: Declared rather than guessed. The first version searched the arguments for
+#: `factor`, `level` or `scale`, which meant an effect naming its argument
+#: anything else silently became categorical -- a continuous axis quietly losing
+#: the column a curve groups by.
+#:
+#: And the distinction is real rather than cosmetic. Torque scale is continuous,
+#: so a sweep is natural. A state source is categorical -- correct, wrong, maybe
+#: a third -- and cannot be swept: an axis with two points is a comparison, not a
+#: curve. Both are legitimate; only one has a level, and which is which has to be
+#: something the effect says rather than something a reader of its arguments
+#: infers.
+_LEVEL_ARGS: dict[str, str | None] = {}
+
 #: name -> (protocol, primitives it calls). Declared, never inferred.
 #:
 #: This is the only thing the planner has. It cannot inspect an unfamiliar effect
@@ -173,6 +191,7 @@ def effect(
     *,
     protocol: str,
     needs: tuple[str, ...],
+    level_arg: str | None = None,
     inverse: Callable[[dict], dict] | None = None,
 ) -> Callable[[Effect], Effect]:
     """Register an effect, and optionally how to undo it.
@@ -211,11 +230,22 @@ def effect(
     def register(fn: Effect) -> Effect:
         _EFFECTS[name] = fn
         _DECLARED[name] = (protocol, tuple(needs))
+        _LEVEL_ARGS[name] = level_arg
         if inverse is not None:
             _INVERSES[name] = inverse
         return fn
 
     return register
+
+
+def level_arg_of(name: str) -> str | None:
+    """Which argument is this effect's level, if it has one."""
+    return _LEVEL_ARGS.get(name)
+
+
+def is_sweepable(name: str) -> bool:
+    """Whether this effect has a continuous axis a curve can be drawn over."""
+    return _LEVEL_ARGS.get(name) is not None
 
 
 def declaration(name: str) -> tuple[str, tuple[str, ...]] | None:
@@ -245,6 +275,7 @@ def effects() -> dict[str, Effect]:
     "scale_actuator",
     protocol="world",
     needs=("scale_actuator", "get_actuator_limit"),
+    level_arg="factor",
     inverse=lambda args: {"factor": 1.0 / float(args["factor"])},
 )
 def _scale_actuator(

@@ -493,6 +493,67 @@ class TestEveryEffectMeetsItsObligations(unittest.TestCase):
                 self.assertEqual(one, original, f"{name} mutated its spec")
 
 
+class TestSweepableIsDeclaredNotGuessed(unittest.TestCase):
+    """Not every perturbation has a level, and that is not a failure to find one.
+
+    Torque scale is continuous, so a sweep is natural. A state source is
+    categorical -- correct, wrong, maybe a third -- and cannot be swept: an axis
+    with two points is a comparison, not a curve, and `compare` already does
+    matched comparisons.
+
+    Both are legitimate. What is not legitimate is the two being
+    indistinguishable, which is what guessing at argument names produced: an
+    effect naming its argument anything unexpected silently became categorical,
+    losing the column a curve groups by with nothing to say so.
+    """
+
+    def test_a_continuous_effect_declares_its_level_argument(self):
+        from refractal.perturbations import is_sweepable, level_arg_of
+
+        self.assertEqual(level_arg_of("scale_actuator"), "factor")
+        self.assertTrue(is_sweepable("scale_actuator"))
+
+    def test_a_categorical_effect_declares_none(self):
+        from refractal.perturbations import is_sweepable, level_arg_of
+
+        for name in ("displace_body", "apply_force"):
+            with self.subTest(effect=name):
+                self.assertIsNone(level_arg_of(name))
+                self.assertFalse(is_sweepable(name))
+
+    def test_the_level_comes_from_the_declaration_not_the_argument_name(self):
+        """An effect whose level argument is called something unexpected must
+        still be swept. Guessing could not do this."""
+        from refractal.execute.vla_eval_runner import _declared_level
+        from refractal.perturbations import _LEVEL_ARGS
+
+        _LEVEL_ARGS["odd_effect"] = "severity"
+        try:
+            self.assertEqual(
+                _declared_level([{"type": "odd_effect", "args": {"severity": 3}}]),
+                3.0,
+            )
+        finally:
+            _LEVEL_ARGS.pop("odd_effect")
+
+    def test_a_categorical_perturbation_has_a_count_but_no_level(self):
+        """The row that would otherwise be indistinguishable from a bug: one
+        perturbation, no level, and that is the right answer."""
+        from refractal.execute.vla_eval_runner import _declared_level
+
+        specs = [{"type": "apply_force", "args": {"wrench": [0, 0, 1, 0, 0, 0]}}]
+        self.assertEqual(len(specs), 1, "it IS perturbed")
+        self.assertIsNone(_declared_level(specs), "and correctly has no level")
+
+    def test_an_unknown_effect_yields_no_level(self):
+        """Rather than raising. An unknown effect is refused by name elsewhere;
+        this function's job is the level, and it should not be the thing that
+        decides an effect exists."""
+        from refractal.execute.vla_eval_runner import _declared_level
+
+        self.assertIsNone(_declared_level([{"type": "nope", "args": {"factor": 1}}]))
+
+
 class TestTheModuleNeedsNoSimulator(unittest.TestCase):
     def test_it_imports_nothing_heavy(self):
         """The property that makes everything above testable on a laptop."""
