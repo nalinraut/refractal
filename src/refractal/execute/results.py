@@ -298,6 +298,42 @@ def comparison_prefix(results_uri: str, plan_id: str) -> str:
     return f"{results_uri.rstrip('/')}/comparison_id={digest}"
 
 
+def check_receipts(rows: Iterable[dict[str, Any]]) -> None:
+    """A null ``fired_step`` must carry a reason. Refuse the write otherwise.
+
+    The two nulls mean opposite things and were indistinguishable in the
+    column:
+
+      null + reason -> the episode outran its trigger. Real, expected, and the
+                       row is excluded from its level's curve.
+      null + none   -> nothing mapped. The receipt arrived, is structurally
+                       valid, and says nothing.
+
+    The second is what shipped. ``fired_events`` emitted the Timeline's field
+    names -- ``type``, ``specified_at``, ``fired_at`` -- against a struct
+    declaring ``effect``, ``specified_step``, ``fired_step``, so every declared
+    field landed null. Every guard checked that a receipt ARRIVED; none checked
+    that it arrived populated, and a live sweep was needed to notice.
+
+    Checked at the write, which is the earliest point that can see it and the
+    loudest place to say so: the alternative is discovering it at analysis, or
+    not at all.
+    """
+    for row in rows:
+        for event in row.get("perturbations_fired") or ():
+            if event.get("fired_step") is not None:
+                continue
+            if not event.get("reason"):
+                raise RefractalError(
+                    "a perturbation receipt has fired_step=None and no reason, "
+                    f"for {event.get('effect')!r} on {event.get('target')!r}. "
+                    "An episode that outran its trigger records a reason; a "
+                    "receipt with neither is a mapping failure -- most likely "
+                    "field names that do not match the column's. Refusing to "
+                    "write a receipt that is present, valid and empty."
+                )
+
+
 @dataclass
 class ResultWriter:
     """Appends episode rows under a comparison prefix, one part file per flush."""
@@ -318,6 +354,7 @@ class ResultWriter:
         """Write one part file atomically. Returns its path, or None if no rows."""
         if not rows:
             return None
+        check_receipts(rows)
         directory = self.scene_dir(checkpoint_id, scene_id)
         self.fs.makedirs(directory, exist_ok=True)
         final = f"{directory}/part-{part}.parquet"

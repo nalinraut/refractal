@@ -53,6 +53,74 @@ class ExecuteCase(unittest.TestCase):
         return run_local(self.plan, self.results, **kwargs)
 
 
+class TestAReceiptMustSayWhatItMeans(unittest.TestCase):
+    """A null `fired_step` with no reason is a mapping failure, and was
+    indistinguishable from an episode that outran its trigger.
+
+    Every guard checked that a receipt ARRIVED. None checked it arrived
+    populated -- so a receipt that was present, structurally valid and entirely
+    null passed every one of them, and a live sweep was needed to notice.
+    """
+
+    def _write(self, events):
+        from refractal.execute.results import check_receipts
+
+        check_receipts([{"perturbations_fired": events}])
+
+    def test_null_with_a_reason_is_fine(self):
+        """An episode that ended at 150 with a trigger at 200. Real, expected,
+        and excluded from the curve by `compare` rather than by refusing it."""
+        self._write([{"effect": "scale_actuator", "target": "g",
+                      "specified_step": 200, "fired_step": None,
+                      "reason": "the episode ended at step 150"}])
+
+    def test_null_without_a_reason_is_refused(self):
+        """The bug that shipped: field names that did not match the column's,
+        so every declared field landed null."""
+        from refractal.schema.errors import RefractalError
+
+        with self.assertRaises(RefractalError) as ctx:
+            self._write([{"effect": None, "target": None,
+                          "specified_step": None, "fired_step": None,
+                          "reason": None}])
+        self.assertIn("mapping failure", str(ctx.exception))
+
+    def test_a_fired_event_needs_no_reason(self):
+        self._write([{"effect": "scale_actuator", "target": "g",
+                      "specified_step": 0, "fired_step": 0, "reason": None}])
+
+    def test_an_unperturbed_row_is_untouched(self):
+        self._write(None)
+        self._write([])
+
+    def test_the_WRITER_refuses_it_not_just_the_helper(self):
+        """The link above this one, which the mutation found untested: every
+        assertion here called `check_receipts` directly, so deleting the
+        writer's call to it broke nothing. The writer is what a run reaches."""
+        import tempfile
+
+        from refractal.execute.results import ResultWriter
+        from refractal.schema.errors import RefractalError
+
+        row = {name: None for name in
+               __import__("refractal.execute.results", fromlist=["x"]).EPISODES_SCHEMA.names}
+        row.update({
+            "episode_id": "e", "scenario_hash": "s", "base_scenario_hash": "b",
+            "scene_id": "sc", "scene_hash": "sh", "task_id": "t",
+            "task_hash": "th", "checkpoint_id": "pi0", "seed": 0,
+            "session_id": "x", "worker_id": "w", "execution_mode": "serial",
+            "success": True, "is_infra_failure": False, "steps": 1,
+            "elapsed_sec": 1.0,
+            "perturbations_fired": [{"effect": None, "target": None,
+                                     "specified_step": None, "fired_step": None,
+                                     "reason": None}],
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            writer = ResultWriter(f"{tmp}/out", "sha256:deadbeef")
+            with self.assertRaises(RefractalError):
+                writer.write_episodes("pi0", "sc", [row], part="w-0")
+
+
 class TestARealRunWritesTheCount(ExecuteCase):
     """A null count must only ever mean `the row predates the column`.
 
