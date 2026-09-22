@@ -128,6 +128,59 @@ class TestScenarioIdentity(unittest.TestCase):
         self.assertEqual(base_scenario_hash(params), scenario_hash(params))
 
 
+class TestPerturbationIdentityIsFrozen(unittest.TestCase):
+    """Golden hashes, written BEFORE the protocol field exists.
+
+    An effect is about to declare which protocol it uses -- world, observation
+    or action -- so the planner can refuse one an adapter cannot run. That is a
+    property of the EFFECT, not of the experiment: two runs of the same
+    perturbation are the same experiment whether or not the code records how it
+    reaches the simulator.
+
+    So the field must not reach identity. This project has had to be careful
+    about exactly that three times now, twice getting it wrong in opposite
+    directions, and "remember not to" has never been the thing that worked.
+
+    Written before the change rather than after, which is the whole point: a
+    test written afterwards records whatever happened. These literals are what
+    a perturbed scenario hashes to today. If adding the field moves them, it
+    leaked into identity and this fails -- naming the leak rather than leaving
+    it to be discovered when old results stop joining.
+
+    If a change to identity is ever DELIBERATE, these values change in the same
+    commit that argues for it.
+    """
+
+    PARAMS = {"init_state_index": 3}
+    SPEC = {"at_step": 0, "type": "scale_actuator",
+            "target": "gripper0_gripper_finger_joint1", "args": {"factor": 0.1}}
+
+    UNPERTURBED = "sha256:8b238626b69c6d17d38835b2b0a4d1cd0057ee631a9b7a108281edcf780e4829"
+    PERTURBED = "sha256:b12843205883c64e2def0135b0c81fff9c8d5c99f58a057b8ece23b3045c4df9"
+    SUSTAINED = "sha256:22df268163c2c35ab2265b7eca1d714cc917bff27112b1d84a33d80fc233910a"
+
+    def test_an_unperturbed_scenario_hashes_to_what_it_always_has(self):
+        self.assertEqual(scenario_hash(self.PARAMS), self.UNPERTURBED)
+
+    def test_a_perturbed_scenario_is_frozen(self):
+        self.assertEqual(scenario_hash(self.PARAMS, [self.SPEC]), self.PERTURBED)
+
+    def test_a_sustained_perturbation_is_frozen(self):
+        """until_step is IN identity, deliberately: a perturbation lasting to
+        step 100 is a different experiment from one lasting all episode."""
+        sustained = dict(self.SPEC, until_step=100)
+        self.assertEqual(scenario_hash(self.PARAMS, [sustained]), self.SUSTAINED)
+        self.assertNotEqual(scenario_hash(self.PARAMS, [sustained]), self.PERTURBED)
+
+    def test_the_base_is_unchanged_by_any_of_it(self):
+        """The join axis. Every perturbed variant shares it, which is what makes
+        a sweep joinable -- and what lets results recorded before perturbations
+        existed serve as its baseline."""
+        for spec in (self.SPEC, dict(self.SPEC, until_step=100)):
+            self.assertEqual(base_scenario_hash(self.PARAMS), self.UNPERTURBED)
+        self.assertEqual(base_scenario_hash(self.PARAMS), scenario_hash(self.PARAMS))
+
+
 class TestEpisodeIdentity(unittest.TestCase):
     def test_all_five_components_matter(self):
         base = dict(
