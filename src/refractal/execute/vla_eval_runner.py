@@ -40,11 +40,14 @@ overwrites, verified rather than assumed.
 from __future__ import annotations
 
 import datetime as dt
+import functools
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from ..schema.plan import Plan, PlannedEpisode, PlannedScene
+from .physics import ABSENT as PHYSICS_ABSENT
+from .physics import actuator_facts, physics_digest, physics_manifest
 from .harness import describe_installed_harness
 from .results import ResultWriter
 from .vla_eval import (
@@ -76,7 +79,9 @@ class VlaEvalSummary:
     parts: list[str] = field(default_factory=list)
 
 
-def default_invoke(config: Mapping[str, Any], recorder_cls: type) -> Mapping[str, Any]:
+def default_invoke(
+    config: Mapping[str, Any], recorder_cls: type, physics: Any = None
+) -> Mapping[str, Any]:
     """Construct ParquetOrchestrator, run it, return the one benchmark result.
 
     ``anyio.run`` rather than ``asyncio.run`` because that is what the harness's
@@ -85,7 +90,7 @@ def default_invoke(config: Mapping[str, Any], recorder_cls: type) -> Mapping[str
     """
     import anyio  # type: ignore
 
-    orchestrator_cls = make_parquet_orchestrator(recorder_cls)
+    orchestrator_cls = make_parquet_orchestrator(recorder_cls, physics)
     orchestrator = orchestrator_cls(dict(config))
     results = anyio.run(orchestrator.run)
     if not results:
@@ -97,6 +102,58 @@ def default_invoke(config: Mapping[str, Any], recorder_cls: type) -> Mapping[str
     return results[0]
 
 
+class PhysicsSurface:
+    """What the engine turned out to be, filled in the first time it is seen.
+
+    Mutable and shared across a worker's invocations, because the benchmark is
+    constructed inside the harness and the first episode is the earliest moment
+    anything can read its model. Every row written after that carries the real
+    digest; rows written before it -- there are none in practice, since the
+    capture happens while the first recorder is built -- would carry ABSENT.
+
+    Read once and cached. The model does not change within a worker, and
+    reconstructing the reading per episode would cost a model walk on every one.
+    """
+
+    __slots__ = ("version", "surface", "manifest")
+
+    def __init__(self) -> None:
+        self.version = PHYSICS_ABSENT
+        self.surface = PHYSICS_ABSENT
+        self.manifest: dict = {}
+
+    @property
+    def seen(self) -> bool:
+        return self.surface != PHYSICS_ABSENT
+
+    def observe(self, benchmark: Any) -> None:
+        """Read the engine's actuators off a live benchmark, once.
+
+        Never raises. A benchmark that hides its model, an engine that is not
+        MuJoCo, a version string that cannot be found -- all leave the surface
+        ABSENT, which `compare` reads as "nothing looked" rather than as a
+        fact. Failing a run because the provenance could not be collected would
+        trade a real result for a missing annotation.
+        """
+        if self.seen:
+            return
+        try:
+            model = benchmark._env.sim.model      # noqa: SLF001 - the bridge's job
+            facts = actuator_facts(model)
+            if not facts:
+                return
+            self.surface = physics_digest(facts)
+            self.manifest = physics_manifest(facts)
+            try:
+                import robosuite  # type: ignore
+
+                self.version = str(getattr(robosuite, "__version__", "unknown"))
+            except Exception:  # noqa: BLE001
+                self.version = "unknown"
+        except Exception:  # noqa: BLE001
+            return
+
+
 def _row(
     row: EpisodeRow,
     scene: PlannedScene,
@@ -106,6 +163,8 @@ def _row(
     execution_mode: str,
     harness_version: str,
     harness_surface: str,
+    physics_version: str,
+    physics_surface: str,
     server_url: str,
     started_at: dt.datetime,
     ended_at: dt.datetime,
@@ -140,6 +199,8 @@ def _row(
         "concurrent_with": concurrent_with,
         "harness_version": harness_version,
         "harness_surface": harness_surface,
+        "physics_version": physics_version,
+        "physics_surface": physics_surface,
         "success": row.success,
         "phase_outcomes": row.phase_outcomes,
         "terminal_phase": row.terminal_phase,
@@ -190,6 +251,7 @@ def _run_group(
     execution_mode: str,
     harness_version: str,
     harness_surface: str,
+    physics: Any,
     concurrent_with: str | None,
 ) -> tuple[int, str | None]:
     """One harness invocation, start to written rows. Returns (rows, part path).
@@ -266,6 +328,8 @@ def _run_group(
             execution_mode=execution_mode,
             harness_version=harness_version,
             harness_surface=harness_surface,
+            physics_version=physics.version,
+            physics_surface=physics.surface,
             server_url=servers[checkpoint_id],
             started_at=started_at,
             ended_at=ended_at,
@@ -366,9 +430,16 @@ def run_vla_eval(
 
     harness_version, harness_surface, manifest = describe_installed_harness()
     writer.record_harness_manifest(harness_surface, manifest)
+    # Filled in by the bridge the first time it sees a live benchmark, because
+    # what matters is the model that actually ran rather than what the catalog
+    # claimed. Until then it reads absent, which is honest: nothing has looked.
+    physics = PhysicsSurface()
 
     already = writer.completed_episode_ids() if resume else set()
-    invoke = invoke or default_invoke
+    # Bound here rather than passed through `Invoke`, which is the seam a test
+    # substitutes: a fake invoke should not have to know about provenance
+    # collection to be a valid stand-in for the real one.
+    invoke = invoke or functools.partial(default_invoke, physics=physics)
     summary = VlaEvalSummary(session_id=session_id)
 
     for scene in plan.scenes:
@@ -398,6 +469,7 @@ def run_vla_eval(
                         execution_mode=plan.execution_mode,
                         harness_version=harness_version,
                         harness_surface=harness_surface,
+                        physics=physics,
                         concurrent_with=",".join(sorted(alongside)) or None,
                     )
 
@@ -455,6 +527,10 @@ def run_vla_eval(
                                 summary.parts.append(path)
                             summary.invocations += 1
 
+    # After the run, because the engine is only readable once a benchmark has
+    # been constructed -- which happens inside the harness, during the first
+    # episode. Nothing to record if no engine was ever seen.
+    writer.record_physics_manifest(physics.surface, physics.manifest)
     return summary
 
 

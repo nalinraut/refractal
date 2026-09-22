@@ -132,6 +132,24 @@ EPISODES_SCHEMA = pa.schema(
         # that always fires gets waived habitually.
         pa.field("harness_version", pa.string()),
         pa.field("harness_surface", pa.string()),
+        # The same pair, one layer down. robosuite sits between MuJoCo and the
+        # benchmark and owns the robot model -- actuator gains, force ranges,
+        # friction -- none of which are in a BDDL file, a suite name or an
+        # engine version. A release that edits a gripper's forcerange changes
+        # the physics of every episode and moves no identity here.
+        #
+        # `physics_version` is provenance and never gates. `physics_surface` is
+        # a digest of the VALUES, so a version bump that changed nothing does
+        # not block a comparison and a forcerange edited in a patch release
+        # does. It is a precondition, not identity, for the same reason as the
+        # harness: putting it in plan_id would orphan every result on every
+        # dependency bump.
+        #
+        # This matters now rather than in principle. A torque-margin sweep is a
+        # curve over exactly this number, so a silent change does not perturb
+        # the results -- it rewrites the axis.
+        pa.field("physics_version", pa.string()),
+        pa.field("physics_surface", pa.string()),
         pa.field("success", pa.bool_(), nullable=False),
         # map<string,bool>, not a fixed struct. Two tasks on one scene write to
         # the same file and may declare different phases; a struct has one
@@ -407,6 +425,25 @@ class ResultWriter:
                                       use_threads=READ_THREADS)
             done.update(table.column("episode_id").to_pylist())
         return done
+
+    def record_physics_manifest(self, surface: str, manifest: dict[str, str]) -> None:
+        """The per-actuator lines behind a physics surface digest.
+
+        Same shape and same reason as the harness manifest: the digest says
+        something moved, and whoever reads the comparison months later no longer
+        has both engines installed to find out what.
+        """
+        if not manifest or surface == "absent":
+            return
+        directory = f"{self.prefix}/physics"
+        self.fs.makedirs(directory, exist_ok=True)
+        target = f"{directory}/{surface}.json"
+        if self.fs.exists(target):
+            return
+        staging = f"{directory}/.tmp-{uuid.uuid4().hex}.json"
+        with self.fs.open(staging, "wb") as handle:
+            handle.write(json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"))
+        self.fs.mv(staging, target)
 
     def record_harness_manifest(self, surface: str, manifest: dict[str, str]) -> None:
         """Store the per-file surface digests for this run, once.

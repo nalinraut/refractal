@@ -189,6 +189,17 @@ def evaluate(
             "checkpoints being compared: the geometry changed between runs, so these "
             "results are not comparable. Re-run, or compare within one geometry."
         )
+    if len(eligibility.physics_surfaces) > 1:
+        verdict.blocking.append(
+            f"episodes were produced by {len(eligibility.physics_surfaces)} different "
+            "physics surfaces "
+            f"({', '.join(sorted(eligibility.physics_surfaces))}): the engine's own "
+            "actuator limits differ between these runs, so the forces available to "
+            "the policy were not the same. Nothing in plan_id covers this -- a "
+            "robosuite release can edit a forcerange without touching a BDDL file, "
+            "a suite name or an engine version. The per-actuator manifests are under "
+            "physics/ in each results directory; diff them to see which changed."
+        )
     for task_id, hashes in sorted(eligibility.task_hash_conflicts.items()):
         verdict.blocking.append(
             f"task {task_id!r} has {len(hashes)} different task_hash values across the "

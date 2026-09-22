@@ -203,6 +203,28 @@ class TestOverlapAndProvenance(unittest.TestCase):
         self.assertTrue(any("task_hash" in b for b in verdict.blocking))
         self.assertNotEqual(verdict.exit_code, 0)
 
+    def test_a_changed_physics_surface_blocks(self):
+        """robosuite editing a forcerange changes what force the policy had, and
+        nothing in plan_id covers it. A torque-margin sweep is a curve over
+        exactly that number, so a silent change rewrites the axis rather than
+        perturbing the results."""
+        rows = synthetic({A: {"x": [True] * 3}, B: {"x": [True] * 3}})
+        for row in rows:
+            row["physics_surface"] = "aaaa1111" if row["checkpoint_id"] == A else "bbbb2222"
+        verdict = evaluate(build_units(rows, checkpoints=[A, B], min_seeds=2),
+                           [A, B], resamples=200, seed=1)
+        self.assertTrue(any("physics surface" in b for b in verdict.blocking))
+        self.assertNotEqual(verdict.exit_code, 0)
+
+    def test_absent_is_not_a_disagreement(self):
+        """`absent` means nothing looked. Counting it as a surface would block
+        every comparison mixing a local run with a harness one."""
+        rows = synthetic({A: {"x": [True] * 3}, B: {"x": [True] * 3}})
+        for i, row in enumerate(rows):
+            row["physics_surface"] = "absent" if i % 2 else "aaaa1111"
+        eligibility = build_units(rows, checkpoints=[A, B], min_seeds=2)
+        self.assertEqual(eligibility.physics_surfaces, {"aaaa1111"})
+
     def test_sessions_are_tracked(self):
         rows = synthetic({A: {"x": [True] * 3}, B: {"x": [True] * 3}})
         rows[-1]["session_id"] = "session-b"

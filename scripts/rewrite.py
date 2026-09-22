@@ -95,7 +95,19 @@ def subs(path: str | Path, pairs, *, count: int | None = 1) -> int:
 
 
 def insert_before(path: str | Path, anchor: str, addition: str) -> int:
-    """Put ``addition`` immediately before ``anchor``. Raise if absent."""
+    """Put ``addition`` immediately before ``anchor``. Raise if absent.
+
+    ``addition`` must NOT repeat the anchor -- this function adds it. Writing
+    the anchor at the end of the addition duplicates it, which is a syntax
+    error in the next command rather than a silent wrong answer, but it is a
+    mistake made twice here in one afternoon and it is cheap to refuse.
+    """
+    if addition.rstrip().endswith(anchor.rstrip()):
+        raise RewriteError(
+            "the addition already ends with the anchor, so inserting would "
+            "duplicate it. Drop the trailing copy: insert_before adds it.\n"
+            f"    anchor: {anchor[:120]!r}"
+        )
     return sub(path, anchor, addition + anchor)
 
 

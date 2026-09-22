@@ -711,7 +711,7 @@ class NullRecordingStore:
     def close(self) -> None: ...
 
 
-def make_parquet_orchestrator(recorder_cls) -> type:
+def make_parquet_orchestrator(recorder_cls, physics=None) -> type:
     """Build the Orchestrator subclass. The store override is not a method.
 
     ``_build_recorder`` is the obvious hook. The other gate is ``self._store``,
@@ -762,6 +762,11 @@ def make_parquet_orchestrator(recorder_cls) -> type:
         def _build_recorder(
             self, rec_cfg, task, bench_eval_id, benchmark_safe_name, task_idx, episode_id, benchmark
         ):
+            # The earliest moment anything here can see a constructed benchmark,
+            # and therefore its engine's actuators. Read once per worker; the
+            # model does not change underneath a running worker.
+            if physics is not None:
+                physics.observe(benchmark)
             if rec_cfg is None:
                 from vla_eval.recording import NullEpisodeRecorder  # type: ignore
 

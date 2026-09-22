@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from ..schema.plan import Plan, PlannedEpisode, PlannedScene, PlannedWorker
 from .fake import FakeBenchmark
 from .harness import LOCAL, describe_installed_harness
+from .physics import ABSENT as PHYSICS_ABSENT
 from .results import ResultWriter
 
 #: Written to every row. Under the `local` backend nothing talks to the harness,
@@ -61,6 +62,11 @@ def _row(
         "concurrent_with": None,  # one process, nothing to contend with
         "harness_version": harness_version,
         "harness_surface": harness_surface,
+        # The local backend drives no engine, so there is no physics to
+        # describe. ABSENT rather than an empty digest, which would collide
+        # with a real reading and claim a fact nobody established.
+        "physics_version": PHYSICS_ABSENT,
+        "physics_surface": PHYSICS_ABSENT,
         "success": outcome["success"],
         "phase_outcomes": outcome["phase_outcomes"],
         "terminal_phase": outcome["terminal_phase"],

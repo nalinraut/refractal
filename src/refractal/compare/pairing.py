@@ -113,6 +113,9 @@ class Eligibility:
     sessions: set[str] = field(default_factory=set)
     harness_versions: set[str] = field(default_factory=set)
     harness_surfaces: set[str] = field(default_factory=set)
+    #: One layer down: the engine's own actuator values. Blocks for the same
+    #: reason, and is emphatically not identity -- see execute/physics.py.
+    physics_surfaces: set[str] = field(default_factory=set)
     #: Rows sharing one (scene, task, scenario, checkpoint, seed). Not collapsed.
     #:
     #: The container has to match the question. A dict keyed by seed answers
@@ -186,6 +189,7 @@ def build_units(
     sessions: set[str] = set()
     harness_versions: set[str] = set()
     harness_surfaces: set[str] = set()
+    physics_surfaces: set[str] = set()
     scene_hashes: dict[str, set[str]] = defaultdict(set)
     # Keyed by task_id, not by task_hash: two hashes under one id is the
     # conflict, and keying by the hash would make every conflict look unique.
@@ -206,6 +210,10 @@ def build_units(
             harness_versions.add(row["harness_version"])
         if row.get("harness_surface"):
             harness_surfaces.add(row["harness_surface"])
+        # "absent" means nothing looked, which is not a disagreement. Counting it
+        # would block every comparison that mixes a local run with a harness one.
+        if row.get("physics_surface") and row["physics_surface"] != "absent":
+            physics_surfaces.add(row["physics_surface"])
         scene_hashes[row["scene_id"]].add(row["scene_hash"])
         task_hashes[row["task_id"]].add(row["task_hash"])
         if row["is_infra_failure"]:
@@ -229,6 +237,7 @@ def build_units(
         sessions=sessions,
         harness_versions=harness_versions,
         harness_surfaces=harness_surfaces,
+        physics_surfaces=physics_surfaces,
         duplicate_rows=duplicates,
         scene_hash_conflicts={
             scene: hashes for scene, hashes in scene_hashes.items() if len(hashes) > 1

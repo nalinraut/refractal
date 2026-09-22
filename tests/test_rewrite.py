@@ -109,6 +109,29 @@ class TestInsertBefore(unittest.TestCase):
                 insert_before(path, "absent", "x")
 
 
+class TestInsertBeforeRefusesADuplicatedAnchor(unittest.TestCase):
+    """Made twice in one afternoon, both times producing a duplicated line.
+
+    Not a silent failure -- it is a SyntaxError on the next command -- so the
+    guard is a convenience rather than a correctness fix. It earns its place by
+    naming the mistake instead of leaving a stray line to be found by the
+    parser.
+    """
+
+    def test_an_addition_ending_with_the_anchor_is_refused(self):
+        with Temp() as path:
+            with self.assertRaises(RewriteError) as ctx:
+                insert_before(path, "beta", "gamma\nbeta")
+            self.assertIn("duplicate", str(ctx.exception))
+
+    def test_an_addition_merely_containing_it_is_fine(self):
+        """Only a trailing copy is the mistake; mentioning the anchor inside the
+        addition is ordinary."""
+        with Temp() as path:
+            insert_before(path, "beta", "# see beta below\n")
+            self.assertIn("# see beta below\nbeta", path.read_text(encoding="utf-8"))
+
+
 class TestThereIsNoUncheckedPath(unittest.TestCase):
     def test_every_public_function_goes_through_the_counter(self):
         """The property that makes this a mechanism rather than a habit.
