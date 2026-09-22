@@ -8,7 +8,7 @@ scenario_sets:
       vial_x:   {range: [0.08, 0.16], steps: 5}
       vial_y:   {range: [-0.08, 0.08], steps: 8}
       friction: {choices: [0.4, 0.6, 0.8]}
-    faults: []          # reserved; validated and inert in v1
+    perturbations: []   # reserved; validated, not executed yet
 
   - id: cube-grid
     scene: cube-bowl-v1

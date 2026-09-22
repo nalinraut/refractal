@@ -17,4 +17,4 @@ scenario_sets:
     params:
       cube_x: {range: [-0.15, 0.15], steps: 12}
       cube_y: {range: [0.30, 0.60], steps: 12}
-    faults: []
+    perturbations: []

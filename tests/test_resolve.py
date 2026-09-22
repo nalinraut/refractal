@@ -436,6 +436,44 @@ class TestPlanFile(unittest.TestCase):
                 read_plan(path)
             self.assertIn("upgrade", str(ctx.exception))
 
+    def test_an_older_plan_schema_is_read_not_refused(self):
+        """At or below, not equal.
+
+        A reader knows the shapes that came before it -- every field added since
+        is optional -- and refusing an older plan would strand results whose plan
+        sits on disk beside them, which is the one place a plan is least
+        replaceable. The version moved to 2 when `base_scenario_hash` was added;
+        a 1 has no such key and could carry no perturbation, so it is readable
+        without ambiguity.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "plan.json"
+            plan = resolve(CATALOG, hardware_profile=HARDWARE)
+            plan.write(path)
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            doc["plan_schema"] = 1
+            for scene in doc["scenes"]:
+                for scenario in scene.get("scenarios", []):
+                    scenario.pop("base_scenario_hash", None)
+                for worker in scene["workers"]:
+                    for episode in worker["episodes"]:
+                        episode.pop("base_scenario_hash", None)
+            path.write_text(json.dumps(doc), encoding="utf-8")
+            older = read_plan(path)
+            self.assertEqual(older.plan_id, plan.plan_id)
+            self.assertEqual(older.plan_schema, 1)
+
+    def test_a_plan_schema_that_is_not_a_version_is_refused(self):
+        for bogus in (0, -1, "2", None):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "plan.json"
+                resolve(CATALOG, hardware_profile=HARDWARE).write(path)
+                doc = json.loads(path.read_text(encoding="utf-8"))
+                doc["plan_schema"] = bogus
+                path.write_text(json.dumps(doc), encoding="utf-8")
+                with self.assertRaises(PlanSchemaError, msg=f"accepted {bogus!r}"):
+                    read_plan(path)
+
     def test_created_at_is_injected_not_read_from_the_clock(self):
         # A planner that reads the wall clock cannot be tested for determinism.
         self.assertIsNone(resolve(CATALOG, hardware_profile=HARDWARE).created_at)
@@ -815,6 +853,92 @@ class TestStartupIsPaidPerInvocation(unittest.TestCase):
                 any("scene construction" in w for w in plan.warnings),
                 "the decision must be reported, not silent",
             )
+
+
+class TestTheExpansionSeparatesTheTwoHashes(unittest.TestCase):
+    """The expansion must compute the base WITHOUT the perturbation.
+
+    Not testable through a catalog: the schema refuses a non-empty
+    `perturbations` list, because nothing executes one yet and a spec recorded
+    as fired that never fired is the silent failure this whole design is built
+    to avoid. So the set is constructed past validation, which is the narrow
+    case that technique is for -- the field is reserved and validated, and what
+    is under test is the hashing, not the refusal.
+
+    Without this, the two lines in `expand` could be identical expressions and
+    every test would still pass, because they agree on every scenario that can
+    exist today. They would then diverge silently the day perturbations execute,
+    which is exactly when the curve stops joining.
+    """
+
+    @staticmethod
+    def _sets():
+        """A valid set, and the same set with a perturbation attached.
+
+        Built by validation and then copied past it, rather than constructed
+        raw: everything except the reserved list goes through the real
+        validator, so the test cannot drift from a real catalog's shape.
+        """
+        from refractal.schema.models import PerturbationSpec, ScenarioSet
+
+        plain = ScenarioSet.model_validate(
+            {
+                "id": "s",
+                "scene": "sc",
+                "generator": "refractal.generators:linspace_grid",
+                "generator_seed": 0,
+                "params": {"vial_x": {"range": [0.1, 0.2], "steps": 2}},
+            }
+        )
+        perturbed = plain.model_copy(
+            update={
+                "perturbations": [
+                    PerturbationSpec(
+                        at_step=200, type="scale_actuator",
+                        target="gripper", args={"factor": 0.3},
+                    )
+                ]
+            }
+        )
+        return plain, perturbed
+
+    def test_a_perturbed_set_splits_the_two_hashes(self):
+        from refractal.resolve.expand import generate_scenarios
+
+        plain, perturbed = self._sets()
+        a = generate_scenarios(plain, None)
+        b = generate_scenarios(perturbed, None)
+        self.assertTrue(a and len(a) == len(b))
+
+        for one, two in zip(a, b):
+            self.assertEqual(one.params, two.params)
+            self.assertNotEqual(
+                one.scenario_hash, two.scenario_hash,
+                "a perturbation must make a different experiment")
+            self.assertEqual(
+                one.base_scenario_hash, two.base_scenario_hash,
+                "the join axis must hold still while the perturbation varies")
+        # And the unperturbed arm is where the curve joins existing results.
+        for one in a:
+            self.assertEqual(one.scenario_hash, one.base_scenario_hash)
+
+    def test_the_level_is_what_moves_the_hash(self):
+        """Two perturbations differing only in magnitude are different
+        scenarios sharing one base. That pair IS the sweep."""
+        from refractal.resolve.expand import generate_scenarios
+        from refractal.schema.models import PerturbationSpec
+
+        plain, _ = self._sets()
+        hashes, bases = set(), set()
+        for factor in (1.0, 0.5, 0.3):
+            variant = plain.model_copy(update={"perturbations": [
+                PerturbationSpec(at_step=200, type="scale_actuator",
+                                 target="gripper", args={"factor": factor})]})
+            for scenario in generate_scenarios(variant, None):
+                hashes.add(scenario.scenario_hash)
+                bases.add(scenario.base_scenario_hash)
+        self.assertEqual(len(hashes), 6, "3 levels x 2 scenarios = 6 experiments")
+        self.assertEqual(len(bases), 2, "on 2 base scenarios, held fixed")
 
 
 class TestResourceShapesArePerEnvironment(unittest.TestCase):

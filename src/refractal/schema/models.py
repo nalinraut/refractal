@@ -483,16 +483,27 @@ class ParamSpec(Strict):
         return 1
 
 
-class FaultSpec(Strict):
-    """**Reserved.** Validated, never executed in v1.
+class PerturbationSpec(Strict):
+    """A timed physical change to the simulator during an episode.
 
-    The hook exists so that the scenario identity format does not change when
-    Transect arrives. Note that this is not achieved by the field's presence
-    alone -- see ``identity.scenario_identity``, which folds an (empty) faults
-    list into every scenario's canonical form from the first commit. Without
-    that, adding faults later would change the shape of the hashed document and
-    invalidate every previously recorded scenario_hash, which is precisely what
-    reserving the field was meant to prevent.
+    **Reserved.** Validated, never executed yet: the schema and the identity are
+    settled first, because they ossify the moment results exist, and the
+    execution machinery does not.
+
+    Not a fault. Reducing gripper torque by 20% is a weaker gripper, not a thing
+    that went wrong, and naming it a fault presumes the outcome being measured.
+    ``is_infra_failure`` and ``failure_reason`` keep their meaning: a dropped
+    object under perturbation is an outcome, a crashed worker is a failure.
+
+    The hook exists so the scenario identity format does not change now that
+    perturbations arrive. That is not achieved by the field's presence alone --
+    see ``identity.scenario_identity``, which has folded an empty list into
+    every scenario's canonical form since the first commit. Without it, adding
+    perturbations would change the shape of the hashed document and invalidate
+    every scenario_hash ever recorded.
+
+    ``at_step`` only, for now. Sustained perturbations (``until_step``) are a
+    later column, not a restructure.
     """
 
     at_step: int = Field(ge=0)
@@ -511,7 +522,27 @@ class ScenarioSet(Strict):
     params: dict[str, ParamSpec] = Field(min_length=1)
     filter: ImportString | None = None
     tasks: list[Id] | None = None
-    faults: list[FaultSpec] = Field(default_factory=list)
+    perturbations: list[PerturbationSpec] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _renamed(cls, data: Any) -> Any:
+        """Name the rename, because ``extra="forbid"`` will not.
+
+        Every catalog written before this carries ``faults: []``, and the bare
+        "Extra inputs are not permitted" sends the reader looking for a typo in
+        a key they copied from the docs. The key was reserved for years; it is
+        worth one branch to say so.
+        """
+        if isinstance(data, dict) and "faults" in data:
+            raise ValueError(
+                "'faults' was renamed to 'perturbations'. Reducing gripper torque is a "
+                "weaker gripper, not a thing that went wrong, and the old name presumed "
+                "the outcome being measured. Rename the key; if it was empty, as it had "
+                "to be, nothing else changes -- no scenario_hash, episode_id or plan_id "
+                "moves, because the hashed document keeps its original key on purpose."
+            )
+        return data
 
     @model_validator(mode="after")
     def _check(self) -> "ScenarioSet":
@@ -519,11 +550,14 @@ class ScenarioSet(Strict):
         validate_import_string(self.generator)
         if self.filter is not None:
             validate_import_string(self.filter)
-        if self.faults:
+        if self.perturbations:
             raise NotImplementedInV1(
-                f"scenario_set {self.id!r} declares faults. Fault injection is Transect, "
-                "not in this version. The key is reserved and validated so the scenario "
-                "hash format will not change when it lands; leave it empty."
+                f"scenario_set {self.id!r} declares perturbations. The schema and the "
+                "identity are in place -- scenario_hash covers them and "
+                "base_scenario_hash is the axis a sweep joins on -- but nothing "
+                "executes them yet, so a spec written now would be recorded as though "
+                "it had fired and never would have. Refused rather than accepted "
+                "silently. Leave it empty until the timeline lands."
             )
         return self
 
@@ -679,7 +713,7 @@ __all__ = [
     "ApiObject",
     "Checkpoint",
     "Device",
-    "FaultSpec",
+    "PerturbationSpec",
     "HardwareFile",
     "HardwareProfile",
     "ParamSpec",

@@ -96,7 +96,7 @@ scenario_sets:
       cube_x:  {range: [0.05, 0.20], steps: 6}
       cube_y:  {range: [-0.10, 0.10], steps: 5}
       bowl_yaw: {value: 0.0}
-    faults: []      # reserved; validated and inert in this version
+    perturbations: []   # reserved; validated, not executed yet
 """
 
 RUN = """\

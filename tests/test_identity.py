@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 
+from refractal.schema.identity import base_scenario_hash
 from refractal.schema import (
     Task,
     comparison_unit,
@@ -66,13 +67,65 @@ class TestScenarioIdentity(unittest.TestCase):
             scenario_hash({"vial_y": 0.0, "vial_x": 0.12}),
         )
 
-    def test_reserved_faults_are_already_in_the_document(self):
+    def test_the_reserved_list_is_already_in_the_document(self):
         # The reservation only buys anything if the empty list is hashed from
-        # the first commit. If faults were merely absent today and added later,
-        # every recorded scenario_hash would change the day Transect landed.
-        explicit = scenario_hash({"vial_x": 0.12}, faults=[])
+        # the first commit. If perturbations were merely absent today and added
+        # later, every recorded scenario_hash would change the day they landed.
+        explicit = scenario_hash({"vial_x": 0.12}, perturbations=[])
         implicit = scenario_hash({"vial_x": 0.12})
         self.assertEqual(explicit, implicit)
+
+    def test_the_hashed_key_name_is_frozen(self):
+        """The digest key says `faults` while everything else says
+        `perturbations`, and that asymmetry is load-bearing rather than untidy.
+
+        The key is inside the document, so renaming it moves every
+        scenario_hash, every episode_id and every plan_id ever recorded --
+        exactly what reserving the field from the first commit was meant to
+        prevent. A tidy-up would be silent: no test would fail on the rename
+        itself, and the damage would appear as old results refusing to join.
+
+        So the literal is asserted here, with its consequence stated, because
+        the next person to read `_HASHED_KEY` will want to fix it.
+        """
+        from refractal.schema.identity import _HASHED_KEY, scenario_identity
+
+        self.assertEqual(_HASHED_KEY, "faults")
+        self.assertIn("faults", scenario_identity({"vial_x": 0.12}))
+
+    def test_a_perturbation_moves_the_scenario_hash_but_not_the_base(self):
+        """The two-hash design, stated as the property it exists for.
+
+        A perturbed episode is genuinely a different experiment, so it must not
+        join its unperturbed counterpart as though it were the same -- and the
+        sweep still has to hold something fixed while the level varies. Those
+        are the two halves, and one field cannot do both.
+        """
+        params = {"vial_x": 0.12}
+        gentle = ({"at_step": 200, "type": "scale_actuator",
+                   "target": "gripper", "args": {"factor": 0.5}},)
+        harsh = ({"at_step": 200, "type": "scale_actuator",
+                  "target": "gripper", "args": {"factor": 0.3}},)
+
+        self.assertNotEqual(scenario_hash(params, gentle), scenario_hash(params, harsh))
+        self.assertNotEqual(scenario_hash(params, gentle), scenario_hash(params))
+        # ... while the join axis holds still across all three.
+        self.assertEqual(base_scenario_hash(params), base_scenario_hash(params))
+        self.assertEqual(len({base_scenario_hash(params)}), 1)
+
+    def test_an_unperturbed_scenario_has_two_equal_hashes(self):
+        """The relationship, chosen and stated: they are the same string.
+
+        Not merely derivable from each other. Equal. Which means every
+        scenario_hash recorded before this field existed is already a valid
+        base_scenario_hash, so a sweep run tomorrow joins against results run
+        today on the unperturbed arm of its own curve.
+
+        Hashing `params` alone would have made them differ always, bought
+        nothing, and orphaned every existing result.
+        """
+        params = {"vial_x": 0.12, "vial_y": -0.02}
+        self.assertEqual(base_scenario_hash(params), scenario_hash(params))
 
 
 class TestEpisodeIdentity(unittest.TestCase):

@@ -123,6 +123,10 @@ def _row(
     return {
         "episode_id": episode.episode_id,
         "scenario_hash": episode.scenario_hash,
+        # Falls back to scenario_hash, which is what it equals when nothing
+        # is perturbed -- and what a plan written at plan_schema 1 implies,
+        # since it has no such field and could carry no perturbation.
+        "base_scenario_hash": episode.base_scenario_hash or episode.scenario_hash,
         "scene_id": scene.scene_id,
         "scene_hash": scene.scene_hash,
         "task_id": episode.task_id,

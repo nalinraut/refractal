@@ -115,7 +115,7 @@ scenario_sets:
     params:
       cup_x: {range: [-0.15, 0.15], steps: 12}
       cup_y: {range: [0.30, 0.60], steps: 12}
-    faults: []
+    perturbations: []
 ```
 
 The parameter names are **yours**. Refractal never looks inside the dict. It
@@ -127,6 +127,39 @@ once and grep for both.
 Four parameter forms are available: `{value: x}`, `{choices: [...]}`,
 `{range: [lo, hi], steps: n}`, and `{range: [lo, hi]}` for samplers. Integer
 ranges that divide evenly stay integers.
+
+### `perturbations`
+
+Timed physical changes to the simulator during an episode: cut gripper torque at
+step 200, displace an object mid-transport. **Reserved.** The key is validated
+and a non-empty list is refused, because nothing executes one yet and a spec
+recorded as though it had fired, having never fired, is worse than no feature.
+
+The schema and the identity are settled ahead of the machinery because identity
+ossifies the moment results exist. A scenario gets two hashes:
+
+| | covers |
+|---|---|
+| `scenario_hash` | the parameters **and** the perturbation |
+| `base_scenario_hash` | the parameters alone |
+
+A perturbed episode is genuinely a different experiment, so it must not join its
+unperturbed counterpart as though it were the same — and a sweep still needs
+something to hold fixed while the level varies. `compare` joins on the base and
+groups by level, which is the join it already does across checkpoints, one axis
+over. `episode_id` derives from `scenario_hash`, so two episodes differing only
+in torque scale are different episodes.
+
+For an unperturbed scenario the two are **the same string**. So every result
+recorded before the field existed already carries a valid base, and a sweep run
+later joins it on the unperturbed arm of its own curve.
+
+The key was `faults` and is not. Reducing gripper torque by 20% is a weaker
+gripper, not a thing that went wrong, and the old name presumed the outcome being
+measured. `is_infra_failure` and `failure_reason` keep their meaning: a dropped
+object under perturbation is an outcome, a crashed worker is a failure. Renaming
+the key in your catalog moves no identity — the hashed document keeps its
+original key deliberately, so that the rename costs nothing.
 
 ### If your parameters are indices
 

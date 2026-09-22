@@ -23,6 +23,7 @@ from ..schema.errors import CatalogError, GeneratorError
 from ..schema.canonical import hash_obj
 from ..schema.identity import (
     episode_id,
+    base_scenario_hash,
     scenario_hash,
     task_hash,
     task_identity,
@@ -96,7 +97,11 @@ def generate_scenarios(scenario_set: ScenarioSet, lock: BuildLock | None) -> lis
 
     scenarios = [
         PlannedScenario(
-            scenario_hash=scenario_hash(row),
+            # Equal today, and deliberately computed by two calls rather than
+            # one assignment: when a scenario set carries perturbations, the
+            # first takes them and the second never does.
+            scenario_hash=scenario_hash(row, scenario_set.perturbations),
+            base_scenario_hash=base_scenario_hash(row),
             scenario_set_id=scenario_set.id,
             params=row,
         )
@@ -223,6 +228,7 @@ def expand_episodes(
                             max_steps=task.max_steps,
                             instruction=task.instruction,
                             scenario_hash=scenario.scenario_hash,
+                            base_scenario_hash=scenario.base_scenario_hash,
                             seed=seed,
                             checkpoint_id=checkpoint.id,
                         )

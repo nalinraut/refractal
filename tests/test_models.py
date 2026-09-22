@@ -93,7 +93,7 @@ class TestParamSpec(unittest.TestCase):
 
 
 class TestReservedFields(unittest.TestCase):
-    def test_non_empty_faults_raises(self):
+    def test_non_empty_perturbations_raises(self):
         with self.assertRaises(NotImplementedInV1):
             ScenarioSet.model_validate(
                 {
@@ -102,11 +102,32 @@ class TestReservedFields(unittest.TestCase):
                     "generator": "refractal.generators:linspace_grid",
                     "generator_seed": 1,
                     "params": {"x": {"value": 1}},
-                    "faults": [{"at_step": 200, "type": "scale_actuator", "target": "gripper"}],
+                    "perturbations": [
+                        {"at_step": 200, "type": "scale_actuator", "target": "gripper"}
+                    ],
                 }
             )
 
-    def test_empty_faults_accepted(self):
+    def test_the_old_key_names_its_replacement(self):
+        """`extra="forbid"` would say "Extra inputs are not permitted", and send
+        the reader hunting for a typo in a key they copied from the docs. Every
+        catalog written before this carries `faults: []`."""
+        with self.assertRaises(Exception) as ctx:
+            ScenarioSet.model_validate(
+                {
+                    "id": "s",
+                    "scene": "sc",
+                    "generator": "refractal.generators:linspace_grid",
+                    "generator_seed": 1,
+                    "params": {"x": {"value": 1}},
+                    "faults": [],
+                }
+            )
+        message = str(ctx.exception)
+        self.assertIn("perturbations", message)
+        self.assertIn("faults", message)
+
+    def test_empty_perturbations_accepted(self):
         ss = ScenarioSet.model_validate(
             {
                 "id": "s",
@@ -114,10 +135,10 @@ class TestReservedFields(unittest.TestCase):
                 "generator": "refractal.generators:linspace_grid",
                 "generator_seed": 1,
                 "params": {"x": {"value": 1}},
-                "faults": [],
+                "perturbations": [],
             }
         )
-        self.assertEqual(ss.faults, [])
+        self.assertEqual(ss.perturbations, [])
 
 
 class TestRun(unittest.TestCase):

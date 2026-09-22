@@ -16,7 +16,8 @@ up. So this module hashes tasks by content and uses ``task_hash`` in
 
 **Identity summary**
 
-    scenario_hash = H({faults: [], params: <normalized>})
+    scenario_hash      = H({faults: [], params: <normalized>})
+    base_scenario_hash = scenario_hash with the perturbation list empty
     task_hash     = H({instruction, predicate, predicate_args, max_steps, phases})
     scene_hash    = H({engine, engine_version, model+assets file digests})
     episode_id    = H({scene_hash, task_hash, scenario_hash, seed, checkpoint_id})
@@ -40,27 +41,71 @@ from .errors import CatalogError
 from .models import Checkpoint, Run, Scene, ScenarioSet, Task
 
 
+#: The key perturbations are folded under, in every document that is hashed.
+#:
+#: It reads ``faults`` while the concept is called ``perturbations`` everywhere
+#: else in the codebase. That is deliberate and must not be tidied away.
+#:
+#: The key is an input to ``scenario_hash`` and to ``experiment_identity``, so
+#: the string itself is inside the digest. Renaming it moves every
+#: ``scenario_hash``, and therefore every ``episode_id`` and every ``plan_id``,
+#: that has ever been recorded -- which is precisely the outcome reserving the
+#: field from the first commit was meant to prevent. Measured rather than
+#: assumed: identical params hash to ``12c116c6567a`` under ``faults`` and
+#: ``01fa3644f1f3`` under ``perturbations``.
+#:
+#: So the old name is frozen at the digest boundary, and nowhere else. A reader
+#: of a catalog, a schema class or an error message sees ``perturbations``.
+_HASHED_KEY = "faults"
+
+
 def scenario_identity(
-    params: Mapping[str, Any], faults: Sequence[Mapping[str, Any]] = ()
+    params: Mapping[str, Any], perturbations: Sequence[Mapping[str, Any]] = ()
 ) -> dict[str, Any]:
     """The canonical document a scenario hashes to.
 
-    ``faults`` is folded in as an empty list from the first commit even though
-    nothing in v1 can populate it. This is the actual mechanism behind the
-    reserved-field decision: if faults were simply absent today and added to the
+    Perturbations are folded in as an empty list from the first commit even
+    though nothing could populate it then. This is the actual mechanism behind
+    the reserved-field decision: if they were simply absent and added to the
     document later, every scenario_hash in every recorded result would change
-    the day Transect landed, and the reservation would have bought nothing.
+    the day perturbations landed, and the reservation would have bought nothing.
+
+    See ``_HASHED_KEY`` for why the key still says ``faults``.
     """
     return {
-        "faults": [normalize_params(dict(f)) for f in faults],
+        _HASHED_KEY: [normalize_params(dict(p)) for p in perturbations],
         "params": normalize_params(dict(params)),
     }
 
 
 def scenario_hash(
-    params: Mapping[str, Any], faults: Sequence[Mapping[str, Any]] = ()
+    params: Mapping[str, Any], perturbations: Sequence[Mapping[str, Any]] = ()
 ) -> str:
-    return hash_obj(scenario_identity(params, faults))
+    return hash_obj(scenario_identity(params, perturbations))
+
+
+def base_scenario_hash(params: Mapping[str, Any]) -> str:
+    """The hash this scenario would have if nothing were perturbed.
+
+    The join axis for a perturbation sweep. ``compare`` holds this fixed and
+    varies the perturbation, which is the join it already does across
+    checkpoints, one axis over.
+
+    Defined as ``scenario_hash`` with the perturbation list empty, rather than as
+    a hash of ``params`` alone, and the difference is the whole point:
+
+    * An unperturbed scenario's two hashes are **equal**. Not merely related --
+      the same string. So the relationship needs no rule to remember, and a
+      result recorded before this field existed already carries a valid base in
+      its ``scenario_hash``.
+    * Every ``scenario_hash`` ever written is therefore a valid
+      ``base_scenario_hash``, and a sweep run tomorrow joins against results run
+      today on the unperturbed arm of the curve.
+
+    Hashing ``params`` alone would have made the two differ always, bought
+    nothing, and orphaned every existing result from the sweeps that extend it.
+    """
+    return scenario_hash(params)
 
 
 def task_identity(task: Task, content: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -314,7 +359,9 @@ def experiment_identity(
                     },
                     "filter": ss.filter,
                     "tasks": ss.tasks,
-                    "faults": [f.model_dump() for f in ss.faults],
+                    # Same frozen key as scenario_identity, same reason: the
+                    # string is inside plan_id. See _HASHED_KEY.
+                    _HASHED_KEY: [p.model_dump() for p in ss.perturbations],
                 }
                 for ss in scenario_sets
             ),

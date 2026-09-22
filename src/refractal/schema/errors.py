@@ -38,5 +38,5 @@ class NotImplementedInV1(RefractalError):
     """A field exists in the schema, is validated, and is deliberately inert.
 
     Reserved fields are validated rather than ignored so that the identity
-    format does not change when the feature arrives. See ``ScenarioSet.faults``.
+    format does not change when the feature arrives. See ``ScenarioSet.perturbations``.
     """

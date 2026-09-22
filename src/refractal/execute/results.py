@@ -64,6 +64,32 @@ EPISODES_SCHEMA = pa.schema(
         # label someone chose: renaming it must not break a join, and changing
         # its meaning must.
         pa.field("scenario_hash", pa.string(), nullable=False),
+        # The same scenario with nothing perturbed, and the axis a perturbation
+        # sweep joins on: hold this fixed, vary the level, get a curve. Equal to
+        # `scenario_hash` for an unperturbed episode, which makes every row
+        # written before this column existed a valid member of that join.
+        #
+        # Identity, not provenance -- but identity for a different question than
+        # `scenario_hash` answers. `episode_id` derives from `scenario_hash`, so
+        # two episodes differing only in torque scale are different episodes;
+        # this is what lets `compare` still see them as the same base.
+        pa.field("base_scenario_hash", pa.string(), nullable=False),
+        # What was asked for, and what actually happened. A map because the set
+        # of perturbation types varies -- same reasoning as `phase_outcomes`.
+        #
+        # `perturbations` is the spec, restated from the scenario so a result
+        # file explains itself without the plan. `perturbations_fired` is the
+        # receipt: which ones ran, at which step. They are separate columns
+        # because a request and its fulfilment must be comparable, and the
+        # failure this catches is a sweep whose specs never fired -- every
+        # episode looking exactly like a clean unperturbed run.
+        #
+        # A trigger at step 200 in an episode that ended at 150 legitimately did
+        # not fire, so absence alone is not the error. `perturbations_fired`
+        # records the step, and `compare` refuses a sweep where nothing fired at
+        # all, the same way a filter that rejects every scenario is refused.
+        pa.field("perturbations", pa.map_(pa.string(), pa.string())),
+        pa.field("perturbations_fired", pa.map_(pa.string(), pa.int32())),
         pa.field("scene_id", pa.string(), nullable=False),
         pa.field("scene_hash", pa.string(), nullable=False),
         pa.field("task_id", pa.string(), nullable=False),

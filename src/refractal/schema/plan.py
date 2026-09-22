@@ -42,7 +42,12 @@ from .models import Checkpoint, ExternalScene, ResourceShape, Strict
 
 #: Bump by hand, and only when the format changes in a way older readers cannot
 #: survive. See the module docstring for why this is not derived.
-PLAN_SCHEMA = 1
+#:
+#: 2 adds ``base_scenario_hash`` to every planned scenario and episode: the axis
+#: a perturbation sweep joins on. Two plans previously declared 1 with different
+#: field sets, which meant the number carried no information about shape, so
+#: adding fields now moves it.
+PLAN_SCHEMA = 2
 
 
 class PlanSchemaError(RefractalError):
@@ -51,6 +56,12 @@ class PlanSchemaError(RefractalError):
 
 class PlannedScenario(Strict):
     scenario_hash: str
+    #: What this scenario would hash to unperturbed. Equal to ``scenario_hash``
+    #: when nothing is perturbed, which is every scenario today.
+    #:
+    #: Defaulted rather than required, so a plan written at plan_schema 1 still
+    #: validates -- ``read_plan`` accepts older plans and they have no such key.
+    base_scenario_hash: str = ""
     scenario_set_id: str
     params: dict[str, Any]
 
@@ -62,6 +73,11 @@ class PlannedEpisode(Strict):
     task_id: str
     task_hash: str
     scenario_hash: str
+    #: The unperturbed scenario this episode varies. ``compare`` holds it fixed
+    #: and groups by perturbation level; ``episode_id`` derives from
+    #: ``scenario_hash``, never from this, so two episodes differing only in
+    #: perturbation are different episodes.
+    base_scenario_hash: str = ""
     seed: int
     checkpoint_id: str
     #: The task's step limit, copied in so the plan is executable on its own.
@@ -126,7 +142,11 @@ class PlannedScene(Strict):
 
 
 class Plan(Strict):
-    plan_schema: Literal[1] = PLAN_SCHEMA
+    #: Every shape this build can read, listed rather than bounded, so adding one
+    #: is a deliberate edit here as well as to ``PLAN_SCHEMA``. ``read_plan``
+    #: enforces the same range with a message; this is the backstop for a Plan
+    #: built by any other route.
+    plan_schema: Literal[1, 2] = PLAN_SCHEMA
     plan_id: str
     catalog_hash: str
     refractal_version: str
@@ -285,10 +305,14 @@ def read_plan(path: str | Path) -> Plan:
     if not isinstance(raw, dict):
         raise CatalogError("plan.json must contain an object", file=str(path))
     declared = raw.get("plan_schema")
-    if declared != PLAN_SCHEMA:
+    # At or below, not equal. A reader knows the shapes that came before it --
+    # every field added since is optional here, which is what makes that true --
+    # and refusing an older plan would strand results whose plan is on disk
+    # beside them. Above is still refused: those fields have no meaning yet.
+    if not isinstance(declared, int) or declared > PLAN_SCHEMA or declared < 1:
         raise PlanSchemaError(
             f"plan declares plan_schema={declared!r}; this build of Refractal reads "
-            f"plan_schema={PLAN_SCHEMA}. "
+            f"plan_schema={PLAN_SCHEMA} and below. "
             + (
                 "The plan was written by a newer Refractal -- upgrade."
                 if isinstance(declared, int) and declared > PLAN_SCHEMA
