@@ -47,7 +47,12 @@ from .models import Checkpoint, ExternalScene, ResourceShape, Strict
 #: a perturbation sweep joins on. Two plans previously declared 1 with different
 #: field sets, which meant the number carried no information about shape, so
 #: adding fields now moves it.
-PLAN_SCHEMA = 2
+#:
+#: 3 adds ``perturbations`` to both. The plan has to carry the specs because
+#: ``run`` reads the plan and not the catalog -- a worker in a container has the
+#: plan mounted and nothing else, and a spec it cannot see is a spec that cannot
+#: fire.
+PLAN_SCHEMA = 3
 
 
 class PlanSchemaError(RefractalError):
@@ -62,6 +67,11 @@ class PlannedScenario(Strict):
     #: Defaulted rather than required, so a plan written at plan_schema 1 still
     #: validates -- ``read_plan`` accepts older plans and they have no such key.
     base_scenario_hash: str = ""
+    #: The perturbation specs this scenario carries, copied from its scenario
+    #: set. Already inside ``scenario_hash``; restated here because the backend
+    #: has to execute them and reaching back into the catalog would make `run`
+    #: need one, which containers do not mount.
+    perturbations: list[dict[str, Any]] = Field(default_factory=list)
     scenario_set_id: str
     params: dict[str, Any]
 
@@ -78,6 +88,8 @@ class PlannedEpisode(Strict):
     #: ``scenario_hash``, never from this, so two episodes differing only in
     #: perturbation are different episodes.
     base_scenario_hash: str = ""
+    #: What to do to this episode, and when. Empty for every episode today.
+    perturbations: list[dict[str, Any]] = Field(default_factory=list)
     seed: int
     checkpoint_id: str
     #: The task's step limit, copied in so the plan is executable on its own.
@@ -146,7 +158,7 @@ class Plan(Strict):
     #: is a deliberate edit here as well as to ``PLAN_SCHEMA``. ``read_plan``
     #: enforces the same range with a message; this is the backstop for a Plan
     #: built by any other route.
-    plan_schema: Literal[1, 2] = PLAN_SCHEMA
+    plan_schema: Literal[1, 2, 3] = PLAN_SCHEMA
     plan_id: str
     catalog_hash: str
     refractal_version: str

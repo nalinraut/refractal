@@ -941,6 +941,93 @@ class TestTheExpansionSeparatesTheTwoHashes(unittest.TestCase):
         self.assertEqual(len(bases), 2, "on 2 base scenarios, held fixed")
 
 
+class TestTheSpecsTravelInThePlan(unittest.TestCase):
+    """`run` reads the plan, never the catalog.
+
+    A worker in a container has the plan mounted and nothing else, so a spec
+    that stays in the catalog is a spec that cannot fire. It is already inside
+    `scenario_hash`; this is the executable restatement, the same shape as
+    `max_steps` being copied onto every episode.
+    """
+
+    def _perturbed(self):
+        from refractal.schema.models import PerturbationSpec
+
+        spec = PerturbationSpec(at_step=0, type="scale_actuator",
+                                target="gripper0_finger1", args={"factor": 0.3})
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            catalog = load_catalog(root)
+            sets = [s.model_copy(update={"perturbations": [spec]})
+                    for s in catalog.scenario_sets]
+            object.__setattr__(catalog, "scenario_sets", sets)
+            from refractal.resolve.expand import generate_scenarios
+
+            return generate_scenarios(sets[0], None), spec
+
+    def test_every_scenario_carries_its_specs(self):
+        scenarios, spec = self._perturbed()
+        self.assertTrue(scenarios)
+        for scenario in scenarios:
+            self.assertEqual(len(scenario.perturbations), 1)
+            self.assertEqual(scenario.perturbations[0]["target"], spec.target)
+            self.assertEqual(scenario.perturbations[0]["args"]["factor"], 0.3)
+
+    def test_the_specs_reach_the_episode_not_just_the_scenario(self):
+        """The link a scenario-level test cannot see.
+
+        Found by mutation: deleting the episode-level copy broke nothing,
+        because every assertion was one step upstream. `run` iterates episodes,
+        so a spec that stops at the scenario is a spec that never fires.
+        """
+        from refractal.resolve.expand import expand_episodes, task_hashes_for
+
+        scenarios, spec = self._perturbed()
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            catalog = load_catalog(root)
+            episodes = expand_episodes(
+                catalog, "sha256:scene", scenarios, task_hashes_for(catalog, None))
+        self.assertTrue(episodes)
+        for episode in episodes:
+            self.assertEqual(len(episode.perturbations), 1,
+                             "the episode must carry what its scenario declared")
+            self.assertEqual(episode.perturbations[0]["target"], spec.target)
+
+    def test_an_unperturbed_scenario_carries_an_empty_list(self):
+        """Not null. Every plan written today, and the unperturbed arm of any
+        sweep -- the backend should read `no perturbations` rather than
+        `unknown`."""
+        plan = resolve(CATALOG, hardware_profile=HARDWARE)
+        for scene in plan.scenes:
+            for scenario in scene.scenarios:
+                self.assertEqual(scenario.perturbations, [])
+            for worker in scene.workers:
+                for episode in worker.episodes:
+                    self.assertEqual(episode.perturbations, [])
+
+    def test_a_schema_2_plan_still_reads(self):
+        """The field is optional, so a plan written before it validates -- and
+        such a plan could carry no perturbation anyway, since the schema
+        refused them."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "plan.json"
+            plan = resolve(CATALOG, hardware_profile=HARDWARE)
+            plan.write(path)
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            doc["plan_schema"] = 2
+            for scene in doc["scenes"]:
+                for scenario in scene.get("scenarios", []):
+                    scenario.pop("perturbations", None)
+                for worker in scene["workers"]:
+                    for episode in worker["episodes"]:
+                        episode.pop("perturbations", None)
+            path.write_text(json.dumps(doc), encoding="utf-8")
+            older = read_plan(path)
+            self.assertEqual(older.plan_schema, 2)
+            self.assertEqual(older.plan_id, plan.plan_id)
+
+
 class TestPerturbationsAreRefusedAtPlanTime(unittest.TestCase):
     """Capability is per target, not per primitive.
 

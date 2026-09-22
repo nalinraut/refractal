@@ -102,6 +102,7 @@ def generate_scenarios(scenario_set: ScenarioSet, lock: BuildLock | None) -> lis
             # first takes them and the second never does.
             scenario_hash=scenario_hash(row, scenario_set.perturbations),
             base_scenario_hash=base_scenario_hash(row),
+            perturbations=[p.model_dump() for p in scenario_set.perturbations],
             scenario_set_id=scenario_set.id,
             params=row,
         )
@@ -229,6 +230,7 @@ def expand_episodes(
                             instruction=task.instruction,
                             scenario_hash=scenario.scenario_hash,
                             base_scenario_hash=scenario.base_scenario_hash,
+                            perturbations=list(scenario.perturbations),
                             seed=seed,
                             checkpoint_id=checkpoint.id,
                         )
