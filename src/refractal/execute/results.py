@@ -108,8 +108,28 @@ EPISODES_SCHEMA = pa.schema(
                         pa.field("fired_step", pa.int32()),
                         #: Why not, when `fired_step` is null.
                         pa.field("reason", pa.string()),
+                        #: A MUTATION's evidence: the values either side of it.
                         pa.field("before", pa.list_(pa.float64())),
                         pa.field("after", pa.list_(pa.float64())),
+                        #: A WRAPPER's evidence, which is a different KIND
+                        #: rather than a different shape. There is no numeric
+                        #: "before" for an observation -- it is an image or a
+                        #: state vector -- so the pair is digests, and they get
+                        #: their own fields instead of being coerced into the
+                        #: float list. Coercion is not an option rather than a
+                        #: style choice: a hex digest through `float()` raises,
+                        #: which is how this was found.
+                        pa.field("before_digest", pa.string()),
+                        pa.field("after_digest", pa.string()),
+                        #: How many steps the wrapper applied on, and on how
+                        #: many of those the value actually CHANGED.
+                        #:
+                        #: Two counts rather than one, because a wrapper can be
+                        #: legitimately identity on some steps. See
+                        #: `check_receipts` for why the difference is the whole
+                        #: signal.
+                        pa.field("applications", pa.int32()),
+                        pa.field("applications_changed", pa.int32()),
                     ]
                 )
             ),
@@ -315,12 +335,38 @@ def check_receipts(rows: Iterable[dict[str, Any]]) -> None:
     field landed null. Every guard checked that a receipt ARRIVED; none checked
     that it arrived populated, and a live sweep was needed to notice.
 
+    A wrapper has a third way to arrive empty, and it needs its own check.
+    Its receipt is a digest pair and two counts, and a transform that ran on
+    every step while never changing anything has a full `applications` count
+    and a `applications_changed` of zero. Every field is populated; nothing
+    happened.
+
+    Note what is NOT checked: the first digest pair being equal. A wrapper may
+    be identity on some inputs and not others -- a rotation convention swap is
+    exactly that -- so equal digests at step one is ordinary rather than
+    suspicious. Only zero changes across the whole window is the failure.
+
     Checked at the write, which is the earliest point that can see it and the
     loudest place to say so: the alternative is discovering it at analysis, or
     not at all.
     """
     for row in rows:
         for event in row.get("perturbations_fired") or ():
+            # Before the fired_step guard below, not after it. A wrapper always
+            # HAS a fired step, so a check placed after that `continue` can
+            # never run -- which is what the first version of this did, and
+            # every test still passed because nothing reached it.
+            applications = event.get("applications")
+            if applications and not event.get("applications_changed"):
+                raise RefractalError(
+                    f"perturbation {event.get('effect')!r} applied on "
+                    f"{applications} steps and changed the observation on none "
+                    "of them. The receipt is fully populated and records a "
+                    "transform that passed its input through unchanged, which "
+                    "reads downstream as a level that was measured. Either the "
+                    "effect is a no-op on this scene, or it is hooked somewhere "
+                    "its output is discarded."
+                )
             if event.get("fired_step") is not None:
                 continue
             if not event.get("reason"):

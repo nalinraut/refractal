@@ -164,10 +164,28 @@ class Fired:
     #: useless to read. The evidence is the pair taken at the FIRST application
     #: plus this count.
     #:
-    #: **Equal before and after with a non-zero count is the failure case** -- a
-    #: transform that passed its input through. That is the "applied to nothing"
-    #: reading, and it is why a count alone would not do.
+    #: The first pair is an EXEMPLAR, not a verdict. An earlier version of this
+    #: comment said equal digests with a non-zero count meant the transform
+    #: passed its input through. That is false for any wrapper which is
+    #: legitimately identity on some inputs, and the first real one is exactly
+    #: that -- see `applications_changed`.
     applications: int = 1
+    #: On how many of those applications the value actually changed.
+    #:
+    #: **This, not the first pair, is what says the wrapper did something.**
+    #: A convention swap on a rotation is identity whenever the quaternion is
+    #: already in the hemisphere it normalizes to, and differs by a full turn
+    #: when it is not -- so the same correctly-applied effect produces equal
+    #: digests on some steps and wildly different ones on others.
+    #:
+    #: Judging by the first pair alone would call that a no-op whenever step
+    #: one happened to land on the identity side. Measured on LIBERO's reset
+    #: pose, that is a coin flip: the wrist sits within 2e-4 of the boundary,
+    #: so which side it falls on is decided by floating-point noise.
+    #:
+    #: `applications_changed == 0` across the WHOLE window is the real
+    #: "applied to nothing". A smaller number than `applications` is ordinary.
+    applications_changed: int = 1
     @property
     def changed(self) -> bool:
         return self.before != self.after
@@ -857,10 +875,13 @@ class Timeline:
 
         The receipt is **one event per window**, not per step. An image
         corruption across 200 steps is not 200 events: the evidence is the
-        digest pair taken at the first application, plus a count of how many
-        followed. Equal digests with a non-zero count is a transform that passed
-        its input through -- "applied to nothing" -- which a count alone could
-        not show.
+        digest pair taken at the first application, plus how many applications
+        followed and on how many of them the value actually changed.
+
+        The changed count is what carries the evidence. The first pair alone
+        cannot: a wrapper may be identity on some inputs and not others, and
+        judging by step one would then report a working effect as a no-op
+        whenever step one fell on the identity side.
 
         Digests are taken here rather than reported by the effect. The effect
         hands back the transformed value and nothing else; a subject does not
@@ -878,14 +899,21 @@ class Timeline:
             )
             state = self._windows.setdefault(
                 _window_key(spec),
-                {"spec": spec, "count": 0, "before": None, "after": None,
-                 "first_at": index},
+                {"spec": spec, "count": 0, "changed": 0, "before": None,
+                 "after": None, "first_at": index},
             )
+            # Digested every application rather than only the first, because
+            # "did this wrapper ever do anything" cannot be read off one step
+            # when the effect is legitimately identity on some inputs.
+            before_digest = digest_observation(value)
+            after_digest = digest_observation(transformed)
             if state["count"] == 0:
-                state["before"] = digest_observation(value)
-                state["after"] = digest_observation(transformed)
+                state["before"] = before_digest
+                state["after"] = after_digest
                 state["first_at"] = index
             state["count"] += 1
+            if before_digest != after_digest:
+                state["changed"] += 1
             value = transformed
         return value
 
@@ -937,6 +965,7 @@ class Timeline:
                 before=state["before"],
                 after=state["after"],
                 applications=state["count"],
+                applications_changed=state["changed"],
             )
             for state in self._windows.values()
         ]

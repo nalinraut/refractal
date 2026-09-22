@@ -89,6 +89,42 @@ class TestAReceiptMustSayWhatItMeans(unittest.TestCase):
         self._write([{"effect": "scale_actuator", "target": "g",
                       "specified_step": 0, "fired_step": 0, "reason": None}])
 
+    def test_a_wrapper_that_changed_nothing_is_refused(self):
+        """The wrapper's own way of arriving empty.
+
+        Every field populated, a full application count, and the observation
+        identical on every one of them -- a transform hooked where its output
+        is discarded looks exactly like this, and downstream it reads as a
+        level that was measured.
+
+        This also guards the guard's PLACEMENT. A wrapper always has a
+        fired_step, so the first version of this check sat after the
+        `continue` that skips fired events and could never run. Every test
+        passed. This one fails if it moves back.
+        """
+        from refractal.schema.errors import RefractalError
+
+        with self.assertRaises(RefractalError) as ctx:
+            self._write([{"effect": "substitute_observation", "target": None,
+                          "specified_step": 0, "fired_step": 0, "reason": None,
+                          "before_digest": "aa", "after_digest": "aa",
+                          "applications": 200, "applications_changed": 0}])
+        self.assertIn("changed the observation on none", str(ctx.exception))
+
+    def test_a_wrapper_identity_on_SOME_steps_is_fine(self):
+        """Not every wrapper changes every input, and the first pair being
+        equal is ordinary rather than suspicious.
+
+        A rotation convention swap is identity whenever the quaternion already
+        lies in the hemisphere it normalizes to. Measured on LIBERO, that is
+        most steps -- so a check that demanded a change at step one, or on
+        every step, would refuse a correctly applied effect.
+        """
+        self._write([{"effect": "substitute_observation", "target": None,
+                      "specified_step": 0, "fired_step": 0, "reason": None,
+                      "before_digest": "aa", "after_digest": "aa",
+                      "applications": 200, "applications_changed": 45}])
+
     def test_an_unperturbed_row_is_untouched(self):
         self._write(None)
         self._write([])
