@@ -44,6 +44,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
 
+from ..schema.canonical import canonical_json
 from ..schema.errors import RefractalError
 
 __all__ = [
@@ -535,6 +536,91 @@ def digest_observation(value: Any) -> str:
     return hasher.hexdigest()[:16]
 
 
+@effect(
+    "drop_observation",
+    protocol="observation",
+    needs=("transform_observation",),
+    temporality="wrapper",
+)
+def _drop_observation(
+    observation: Any, target: str | None, args: dict, rng: random.Random
+) -> Any:
+    """Blank a field of the observation the policy is about to receive.
+
+    Sensor dropout: a camera that has failed, a state vector that did not
+    arrive. ``target`` names the field; nested fields are reached with dots, so
+    ``images.wrist`` blanks one camera and leaves the other.
+
+    ``args``: ``fill`` decides what replaces it -- ``"zeros"`` for a dead sensor
+    still reporting, ``"missing"`` to remove the key entirely for one that has
+    dropped off the bus. They are different failures and a policy may handle
+    them differently.
+
+    A wrapper, because the observation is produced fresh every step: applied
+    once it would blank one frame and the next would arrive intact. It has no
+    inverse -- it ends by not being applied.
+    """
+    if not target:
+        raise PerturbationError(
+            "drop_observation needs a target naming the field to blank, such as "
+            "'states' or 'images.wrist'"
+        )
+    fill = str(args.get("fill", "zeros"))
+    if fill not in ("zeros", "missing"):
+        raise PerturbationError(
+            f"drop_observation fill must be 'zeros' or 'missing', not {fill!r}. "
+            "A dead sensor still reporting and one that has dropped off the bus "
+            "are different failures."
+        )
+
+    path = target.split(".")
+    if not isinstance(observation, Mapping):
+        raise PerturbationError(
+            f"drop_observation was handed {type(observation).__name__}, which "
+            "has no fields to blank"
+        )
+
+    def rebuild(node: Any, rest: list[str]) -> Any:
+        if not isinstance(node, Mapping) or rest[0] not in node:
+            raise PerturbationError(
+                f"the observation has no field {target!r}; it has "
+                f"{sorted(node) if isinstance(node, Mapping) else type(node).__name__}"
+            )
+        out = dict(node)
+        if len(rest) == 1:
+            if fill == "missing":
+                out.pop(rest[0])
+            else:
+                out[rest[0]] = _zeroed(out[rest[0]])
+            return out
+        out[rest[0]] = rebuild(out[rest[0]], rest[1:])
+        return out
+
+    # A new mapping rather than a mutated one: the caller still holds the
+    # original, and a wrapper that edited it in place would make the "before"
+    # digest a digest of the after.
+    return rebuild(observation, path)
+
+
+def _zeroed(value: Any) -> Any:
+    """Same shape, no signal."""
+    zeros_like = getattr(value, "__class__", None)
+    if hasattr(value, "shape") and hasattr(value, "dtype"):
+        try:
+            return value * 0
+        except Exception:  # noqa: BLE001 - fall through to the generic cases
+            pass
+    if isinstance(value, (bytes, bytearray)):
+        return type(value)(len(value))
+    if isinstance(value, str):
+        return ""
+    if isinstance(value, (int, float)):
+        return type(value)(0)
+    if isinstance(value, Sequence):
+        return [_zeroed(v) for v in value]
+    return None
+
+
 def rng_for_episode(episode_id: str) -> random.Random:
     """The perturbation stream's own RNG, seeded off the episode's identity.
 
@@ -555,6 +641,17 @@ def rng_for_episode(episode_id: str) -> random.Random:
     return random.Random(int.from_bytes(digest[:8], "big"))
 
 
+def _window_key(spec: Mapping[str, Any]) -> tuple:
+    """Identifies one wrapper window, so repeated application accumulates.
+
+    Keyed by what the catalog declared rather than by object identity: the
+    timeline hands out copies, so two calls for the same spec must land in the
+    same window or every step would open a new one and the count would stay 1.
+    """
+    return (spec["type"], spec.get("target"), int(spec["at_step"]),
+            spec.get("until_step"), canonical_json(dict(spec.get("args", {}))))
+
+
 @dataclass
 class Timeline:
     """Sorted triggers, one pointer, checked each step.
@@ -573,6 +670,9 @@ class Timeline:
     _pending: list[dict] = field(default_factory=list, init=False)
     _index: int = field(default=0, init=False)
     _fired: list[Fired] = field(default_factory=list, init=False)
+    #: One entry per wrapper spec that has been applied at least once: the
+    #: digests from its first application, and how many followed.
+    _windows: dict = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         # A sustained perturbation is TWO triggers: the effect at `at_step`, and
@@ -618,10 +718,18 @@ class Timeline:
                     f"no effect named {spec['type']!r}; this build knows "
                     f"{sorted(_EFFECTS)}"
                 )
-            # Resolve now, once, for this episode. Names are validated before the
-            # episode runs rather than at step 200 of 400, and no handle survives
-            # the next reset because this object does not either.
-            self.primitives.resolve(spec["target"])
+            # Resolve now, once, for this episode -- but only for WORLD specs.
+            # A world target is a name the adapter maps to a handle; an
+            # observation target is a key into the observation, which the
+            # adapter has never heard of and would refuse. Resolution is
+            # world-specific, like the primitives it goes through.
+            #
+            # Names are validated before the episode runs rather than at step
+            # 200 of 400, and no handle survives the next reset because this
+            # object does not either.
+            declared = declaration(spec["type"])
+            if declared is not None and declared[0] == "world" and spec.get("target"):
+                self.primitives.resolve(spec["target"])
 
     def active_at(self, index: int) -> list[dict]:
         """Every spec active at this step. **The schedule, for any protocol.**
@@ -658,6 +766,47 @@ class Timeline:
             elif start <= index < int(until):
                 active.append(dict(spec))
         return active
+
+    def apply(self, index: int, protocol: str, value: Any) -> Any:
+        """Run every wrapper of ``protocol`` active at ``index`` over ``value``.
+
+        Returns the transformed value. Wrappers are applied on every step they
+        are active, because there is nothing to persist -- the value arrives
+        fresh each time, so applying once would transform one step and leave the
+        rest untouched.
+
+        The receipt is **one event per window**, not per step. An image
+        corruption across 200 steps is not 200 events: the evidence is the
+        digest pair taken at the first application, plus a count of how many
+        followed. Equal digests with a non-zero count is a transform that passed
+        its input through -- "applied to nothing" -- which a count alone could
+        not show.
+
+        Digests are taken here rather than reported by the effect. The effect
+        hands back the transformed value and nothing else; a subject does not
+        write its own receipt.
+        """
+        for spec in self.active_at(index):
+            declared = declaration(spec["type"])
+            if declared is None or declared[0] != protocol:
+                continue
+            if temporality_of(spec["type"]) != "wrapper":
+                continue
+            transformed = _EFFECTS[spec["type"]](
+                value, spec.get("target"), dict(spec.get("args", {})), self.rng
+            )
+            state = self._windows.setdefault(
+                _window_key(spec),
+                {"spec": spec, "count": 0, "before": None, "after": None,
+                 "first_at": index},
+            )
+            if state["count"] == 0:
+                state["before"] = digest_observation(value)
+                state["after"] = digest_observation(transformed)
+                state["first_at"] = index
+            state["count"] += 1
+            value = transformed
+        return value
 
     def step(self, index: int) -> list[Fired]:
         """Fire whatever is due at or before ``index``. Returns what fired.
@@ -697,7 +846,20 @@ class Timeline:
 
     @property
     def fired(self) -> list[Fired]:
-        return list(self._fired)
+        """Mutation events as they happened, plus one summary per wrapper window."""
+        windows = [
+            Fired(
+                type=state["spec"]["type"],
+                target=state["spec"].get("target") or "",
+                specified_at=int(state["spec"]["at_step"]),
+                fired_at=int(state["first_at"]),
+                before=state["before"],
+                after=state["after"],
+                applications=state["count"],
+            )
+            for state in self._windows.values()
+        ]
+        return list(self._fired) + windows
 
     def unfired(self) -> list[dict]:
         """Specs that never came due.

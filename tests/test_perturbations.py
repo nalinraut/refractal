@@ -195,10 +195,12 @@ class TestTheReceiptRecordsEffectNotIntent(unittest.TestCase):
         self.assertEqual(list(fired.after), [0.0, 0.0, 5.0, 0.0, 0.0, 0.0])
         self.assertTrue(fired.changed)
 
-    def test_every_effect_reads_the_world_back(self):
-        """No effect is exempt. If one ever cannot be read back, this fails and
-        the exemption has to be argued rather than assumed."""
-        from refractal.perturbations import effects
+    def test_every_MUTATION_reads_the_world_back(self):
+        """No mutation is exempt. A wrapper's evidence is a digest pair rather
+        than values off the simulator, and is checked in the obligations walk --
+        one obligation, two shapes, because the declaration is a commitment
+        about implementation rather than a classification."""
+        from refractal.perturbations import effects, temporality_of
 
         world = sim()
         cases = {
@@ -208,7 +210,8 @@ class TestTheReceiptRecordsEffectNotIntent(unittest.TestCase):
             "apply_force": spec(type="apply_force", target="bowl", at_step=0,
                                 wrench=[0, 0, 5, 0, 0, 0]),
         }
-        self.assertEqual(set(cases), set(effects()), "an effect has no case here")
+        mutations = {n for n in effects() if temporality_of(n) == "mutation"}
+        self.assertEqual(set(cases), mutations, "a mutation has no case here")
         for name, one in cases.items():
             with self.subTest(effect=name):
                 world.reset()
@@ -421,13 +424,25 @@ class TestEveryEffectMeetsItsObligations(unittest.TestCase):
     Each maps to a bug this project has already had.
     """
 
+    #: One case per effect. Mutations carry a world spec; wrappers carry a spec
+    #: and the value they transform, because their evidence is a digest pair
+    #: rather than values read off the simulator.
     CASES = {
         "scale_actuator": (spec(at_step=0, factor=0.5), "gripper"),
         "displace_body": (spec(type="displace_body", target="bowl", at_step=0,
                                delta=[0.01, 0, 0]), "bowl"),
         "apply_force": (spec(type="apply_force", target="bowl", at_step=0,
                              wrench=[0, 0, 5, 0, 0, 0]), "bowl"),
+        "drop_observation": ({"at_step": 0, "type": "drop_observation",
+                              "target": "states", "args": {"fill": "zeros"}},
+                             {"states": [1.0, 2.0]}),
     }
+
+    @staticmethod
+    def _mutations():
+        from refractal.perturbations import temporality_of
+
+        return {n for n in effects() if temporality_of(n) == "mutation"}
 
     def test_every_effect_has_a_case_here(self):
         """So adding one to the registry and not to this file is a failure
@@ -456,21 +471,41 @@ class TestEveryEffectMeetsItsObligations(unittest.TestCase):
             register("bogus", protocol="world", needs=())(lambda *a: (0, 0))
         self.assertIn("cannot be refused before it runs", str(ctx.exception))
 
-    def test_2_every_effect_reads_the_world_back(self):
-        """Returns before and after, read from the simulator either side of the
-        write. This is the one that caught scaling an unlimited actuator: the
-        call succeeded and nothing changed."""
-        for name, (one, _) in self.CASES.items():
+    def test_2_every_effect_shows_that_it_happened(self):
+        """One obligation, one purpose. The EVIDENCE differs by temporality --
+        values either side of the write for a mutation, a digest pair and a
+        count for a wrapper -- which is why this branches rather than asserting
+        one shape on everything.
+
+        This is the one that caught scaling an unlimited actuator: the call
+        succeeded and nothing changed.
+        """
+        from refractal.perturbations import temporality_of
+
+        for name, (one, subject) in self.CASES.items():
             with self.subTest(effect=name):
-                world = sim()
-                (fired,) = Timeline([one], world, random.Random(0)).step(0)
-                self.assertIsNotNone(fired.before, f"{name} read no before")
-                self.assertIsNotNone(fired.after, f"{name} read no after")
+                line = Timeline([one], sim(), random.Random(0))
+                if temporality_of(name) == "mutation":
+                    (fired,) = line.step(0)
+                    self.assertIsNotNone(fired.before, f"{name} read no before")
+                    self.assertIsNotNone(fired.after, f"{name} read no after")
+                else:
+                    protocol, _ = __import__(
+                        "refractal.perturbations", fromlist=["declaration"]
+                    ).declaration(name)
+                    line.apply(0, protocol, subject)
+                    (fired,) = line.fired
+                    self.assertIsNotNone(fired.before, f"{name} digested no before")
+                    self.assertNotEqual(fired.before, fired.after,
+                                        f"{name} passed its input through")
+                    self.assertEqual(fired.applications, 1)
 
     def test_3_every_effect_is_pure_given_its_rng(self):
         """No global random, no clock. Same episode, same effect, same result --
         and getting this wrong destroys reproducibility with no error anywhere."""
         for name, (one, target) in self.CASES.items():
+            if name not in self._mutations():
+                continue     # a wrapper's output is checked below, not the world
             with self.subTest(effect=name):
                 runs = []
                 for _ in range(2):
@@ -481,6 +516,23 @@ class TestEveryEffectMeetsItsObligations(unittest.TestCase):
                                  dict(world.wrenches)))
                 self.assertEqual(runs[0], runs[1], f"{name} is not reproducible")
 
+    def test_3b_every_wrapper_is_idempotent(self):
+        """Declare wrapper and you owe idempotence across repeated application.
+        It is applied on every active step, so a second application must produce
+        what the first did -- otherwise a window of 200 steps is 200 different
+        transforms and the digest pair describes only the first."""
+        from refractal.perturbations import _EFFECTS, temporality_of
+
+        for name, (one, subject) in self.CASES.items():
+            if temporality_of(name) != "wrapper":
+                continue
+            with self.subTest(effect=name):
+                once = _EFFECTS[name](subject, one.get("target"),
+                                      dict(one.get("args", {})), random.Random(0))
+                twice = _EFFECTS[name](once, one.get("target"),
+                                       dict(one.get("args", {})), random.Random(0))
+                self.assertEqual(once, twice, f"{name} is not idempotent")
+
     def test_4_no_effect_mutates_its_spec(self):
         """The spec is hashed. An effect that edits it changes the episode's
         identity from inside the episode."""
@@ -489,7 +541,14 @@ class TestEveryEffectMeetsItsObligations(unittest.TestCase):
         for name, (one, _) in self.CASES.items():
             with self.subTest(effect=name):
                 original = copy.deepcopy(one)
-                Timeline([one], sim(), random.Random(0)).step(0)
+                line = Timeline([one], sim(), random.Random(0))
+                if name in self._mutations():
+                    line.step(0)
+                else:
+                    protocol, _ = __import__(
+                        "refractal.perturbations", fromlist=["declaration"]
+                    ).declaration(name)
+                    line.apply(0, protocol, self.CASES[name][1])
                 self.assertEqual(one, original, f"{name} mutated its spec")
 
 
@@ -550,6 +609,96 @@ class TestTheScheduleIsProtocolAgnostic(unittest.TestCase):
             line.step(i)
         self.assertEqual(world.limits["gripper"], 20.0)
         self.assertEqual(len(line.fired), 2, "entering and leaving, not four")
+
+
+class TestWrappersApplyOnEveryActiveStep(unittest.TestCase):
+    """The thing a mutation-shaped timeline could not express.
+
+    An observation is produced fresh each step, so a transform applied once
+    corrupts one frame and the next arrives intact. Sustained is the DEFAULT
+    here and the special case for a state mutation -- exactly inverted.
+    """
+
+    OBS = {"images": {"main": b"\x01\x01", "wrist": b"\x02\x02"},
+           "states": [1.0, 2.0, 3.0]}
+
+    def _line(self, **over):
+        one = {"at_step": 1, "type": "drop_observation",
+               "target": "images.wrist", "args": {"fill": "zeros"}}
+        one.update(over)
+        return Timeline([one], sim(), random.Random(0))
+
+    def test_it_transforms_every_step_of_its_window(self):
+        line = self._line(until_step=4)
+        seen = [line.apply(i, "observation", self.OBS)["images"]["wrist"]
+                for i in range(6)]
+        blanked = [s == b"\x00\x00" for s in seen]
+        self.assertEqual(blanked, [False, True, True, True, False, False])
+
+    def test_an_instantaneous_wrapper_transforms_exactly_one_step(self):
+        line = self._line()
+        blanked = [line.apply(i, "observation", self.OBS)["images"]["wrist"]
+                   == b"\x00\x00" for i in range(4)]
+        self.assertEqual(blanked, [False, True, False, False])
+
+    def test_the_receipt_is_one_event_per_window(self):
+        """200 steps of corruption is not 200 events."""
+        line = self._line(until_step=8)
+        for i in range(10):
+            line.apply(i, "observation", self.OBS)
+        (event,) = line.fired
+        self.assertEqual(event.applications, 7, "steps 1 through 7")
+        self.assertEqual(event.fired_at, 1)
+        self.assertEqual(event.specified_at, 1)
+
+    def test_the_evidence_is_a_digest_pair_from_the_first_application(self):
+        from refractal.perturbations import digest_observation
+
+        line = self._line(until_step=4)
+        for i in range(5):
+            line.apply(i, "observation", self.OBS)
+        (event,) = line.fired
+        self.assertEqual(event.before, digest_observation(self.OBS))
+        self.assertNotEqual(event.before, event.after)
+
+    def test_a_passthrough_transform_reads_as_equal_digests(self):
+        """The 'applied to nothing' case. A count alone would say it worked."""
+        from refractal.perturbations import _DECLARED, _EFFECTS, _TEMPORALITY
+
+        _EFFECTS["noop"] = lambda obs, t, a, r: obs
+        _DECLARED["noop"] = ("observation", ("transform_observation",))
+        _TEMPORALITY["noop"] = "wrapper"
+        try:
+            line = Timeline([{"at_step": 0, "until_step": 3, "type": "noop",
+                              "target": None, "args": {}}],
+                            sim(), random.Random(0))
+            for i in range(4):
+                line.apply(i, "observation", self.OBS)
+            (event,) = line.fired
+            self.assertEqual(event.applications, 3)
+            self.assertEqual(event.before, event.after,
+                             "equal digests with a non-zero count is the "
+                             "signature of a transform that did nothing")
+        finally:
+            for table in (_EFFECTS, _DECLARED, _TEMPORALITY):
+                table.pop("noop", None)
+
+    def test_it_does_not_mutate_what_it_was_handed(self):
+        """Otherwise the 'before' digest would be a digest of the after."""
+        import copy
+
+        original = copy.deepcopy(self.OBS)
+        line = self._line(until_step=3)
+        line.apply(1, "observation", self.OBS)
+        self.assertEqual(self.OBS, original)
+
+    def test_a_world_wrapper_would_use_the_same_path(self):
+        """Nothing here is observation-specific: `apply` filters by the
+        protocol it was asked for, and the protocol is the effect's
+        declaration rather than anything the timeline knows."""
+        line = self._line(until_step=4)
+        untouched = line.apply(2, "world", self.OBS)
+        self.assertIs(untouched, self.OBS, "wrong protocol, not applied")
 
 
 class TestTheCallContractDiffersByTemporality(unittest.TestCase):
