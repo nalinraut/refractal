@@ -86,6 +86,51 @@ the wrong observable looks like an unverifiable effect and usually is not one �
 a wrench, for instance, does not move a pose during the call, but it does appear
 immediately in the applied-force field, which reads back fine.
 
+## If you support the observation protocol
+
+An observation effect transforms what the policy sees. Declaring support for it
+is a promise about **where you put the hook**, and it is the one thing a user is
+most likely to get wrong.
+
+> **The hook goes at the last point you control before the observation leaves
+> for the policy — after every content transform you perform.**
+
+Only you know where that is. Most adapters do not hand the simulator's raw
+output straight to the policy: they pick cameras, resize images, convert
+conventions, and build a state vector from selected fields. Every one of those
+is a content transform, and the hook belongs after all of them.
+
+### The failure mode, which is worse than it sounds
+
+Put the hook **before** your own transforms and the receipt reports a change the
+policy never saw.
+
+The digest pair will show the observation changing, because it did — you changed
+it. Then your transform runs, and what reaches the policy is something else. The
+receipt is not lying about what it measured; it is measuring the wrong thing,
+and nothing downstream can tell.
+
+**It is worst exactly where it matters most.** A state vector is usually *built*
+from selected raw fields rather than passed through. Perturb a field your
+transform does not read and you get: raw observation changed, digest changed,
+receipt says the wrapper applied, count non-zero — and the policy received a
+byte-identical observation. Every guard passes. The only thing that would catch
+it is noticing the result did not move, which is the thing you were trying to
+measure.
+
+So: after your transforms, not before.
+
+### What the receipt can then honestly say
+
+*This is what was sent.* One hop remains beyond it — whether the model server
+decodes to what was encoded is across a process boundary and outside anything
+observable from here. That gap is named rather than papered over, and it is one
+hop rather than an unknown number.
+
+If serialisation in your stack *does* alter content — quantising, resizing,
+reordering — then the hook after your transforms is not sufficient, and the
+honest place is wherever the last alteration happens. Check rather than assume.
+
 ## A worked adapter
 
 Against a small MuJoCo scene. Illustrative — the names are your scene's.
