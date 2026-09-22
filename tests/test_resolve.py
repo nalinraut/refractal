@@ -1003,6 +1003,58 @@ class TestCapabilityBasedRefusal(unittest.TestCase):
         self.assertNotIn("does not implement", message,
                          "silence must not be reported as a refusal to supply")
 
+    def test_a_world_effect_without_a_target_is_refused(self):
+        """Tested at the PLANNER, not only as a rule in a table. The rules
+        table and the schema were both asserted while nothing checked that
+        anything enforced them -- found by mutation."""
+        from refractal.schema.models import PerturbationSpec
+
+        with self.assertRaises(CatalogError) as ctx:
+            self._plan_spec(PerturbationSpec(
+                at_step=0, type="scale_actuator", args={"factor": 0.3}))
+        self.assertIn("without a target", str(ctx.exception))
+
+    def test_an_action_effect_carrying_a_target_is_refused(self):
+        """There is one action; naming it says nothing. A field the reader has
+        to ignore is worse than no field."""
+        from refractal.perturbations import _DECLARED, _EFFECTS, _TEMPORALITY
+        from refractal.schema.models import PerturbationSpec
+
+        _EFFECTS["jitter_action"] = lambda *a: (0, 0)
+        _DECLARED["jitter_action"] = ("action", ("transform_action",))
+        _TEMPORALITY["jitter_action"] = "wrapper"
+        try:
+            with self.assertRaises(CatalogError) as ctx:
+                self._plan_spec(PerturbationSpec(
+                    at_step=0, type="jitter_action", target="gripper0_finger",
+                    args={"sigma": 0.1}))
+            self.assertIn("has none", str(ctx.exception))
+        finally:
+            for table in (_EFFECTS, _DECLARED, _TEMPORALITY):
+                table.pop("jitter_action", None)
+
+    def _plan_spec(self, spec, capabilities=None):
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            catalog = load_catalog(root)
+            scene_id = catalog.scenario_sets[0].scene
+            perturbed = catalog.scenario_sets[0].model_copy(
+                update={"perturbations": [spec]})
+            object.__setattr__(catalog, "scenario_sets", [perturbed])
+            from refractal.resolve.lock import BuildLock, SceneEntry
+
+            lock = BuildLock(scenes=[SceneEntry(
+                scene_id=scene_id, scene_hash="sha256:aa", model_hash="sha256:aa",
+                engine_version="3.2.0",
+                capabilities=capabilities or {
+                    "primitives": self.SUPPLIES + ["transform_action"],
+                    "actuators": {"gripper0_finger": {"force_limited": True,
+                                                      "forcerange": [-20.0, 20.0]}},
+                })])
+            from refractal.resolve.expand import refuse_unsupported_perturbations
+
+            refuse_unsupported_perturbations(catalog, lock)
+
     def test_the_two_messages_are_distinguishable(self):
         """A reader has to be able to tell which fix applies, which means the
         distinction has to survive into the text and not only the branch."""

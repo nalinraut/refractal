@@ -21,7 +21,12 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from ..schema.errors import CatalogError, GeneratorError
 from ..schema.canonical import hash_obj
-from ..perturbations import declaration, has_inverse, invertible
+from ..perturbations import (
+    PROTOCOL_TARGET,
+    declaration,
+    has_inverse,
+    invertible,
+)
 from ..schema.identity import (
     episode_id,
     base_scenario_hash,
@@ -265,6 +270,24 @@ def _refuse_undeclared_primitives(scenario_set, scene_id, spec, declared) -> Non
     if known is None:
         return  # an unknown effect name is refused elsewhere, by name
     protocol, needs = known
+
+    rule = PROTOCOL_TARGET.get(protocol, "optional")
+    if rule == "required" and not spec.target:
+        raise CatalogError(
+            f"scenario_set {scenario_set.id!r} uses {spec.type!r}, a {protocol} "
+            "effect, without a target. A world effect acts on something named -- "
+            "an actuator or a body -- and the adapter resolves that name to a "
+            "handle. Without it there is nothing to act on.",
+            file="scenarios.yaml",
+        )
+    if rule == "absent" and spec.target:
+        raise CatalogError(
+            f"scenario_set {scenario_set.id!r} gives {spec.type!r} a target "
+            f"({spec.target!r}), but a {protocol} effect has none: there is one "
+            "action, and naming it says nothing. A field the reader has to "
+            "ignore is worse than no field, so drop it.",
+            file="scenarios.yaml",
+        )
     supplied = (declared or {}).get("primitives")
 
     if supplied is None:

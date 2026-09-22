@@ -552,6 +552,73 @@ class TestTheScheduleIsProtocolAgnostic(unittest.TestCase):
         self.assertEqual(len(line.fired), 2, "entering and leaving, not four")
 
 
+class TestTheCallContractDiffersByTemporality(unittest.TestCase):
+    """Protocol decides where an effect hooks and what it is handed.
+    Temporality decides what it returns.
+
+    A mutation acts and reports: `(before, after)`. A wrapper transforms and
+    reports: the transformed value, and nothing else -- its evidence is derived
+    by the framework.
+
+    One signature cannot be both. The transformed value is the wrapper's whole
+    function, and a mutation has none to give.
+    """
+
+    def test_the_framework_digests_never_the_effect(self):
+        """A wrapper returns the value; Refractal digests it. An effect
+        reporting its own digest would be the subject writing its own receipt --
+        the failure corrected three times already."""
+        from refractal.perturbations import digest_observation
+
+        obs = {"states": b"\x01\x02", "task": "pick"}
+        self.assertEqual(digest_observation(obs), digest_observation(dict(obs)))
+        self.assertNotEqual(digest_observation(obs),
+                            digest_observation({"states": b"\x01\x03",
+                                                "task": "pick"}))
+
+    def test_digestible_is_defined_and_the_rest_refused(self):
+        """Bounded rather than attempted. A digest of a repr would be stable for
+        the wrong reasons -- two identical observations differing by a memory
+        address would read as a change."""
+        from refractal.perturbations import digest_observation
+
+        with self.assertRaises(PerturbationError) as ctx:
+            digest_observation({"odd": object()})
+        self.assertIn("cannot digest", str(ctx.exception))
+
+    def test_nested_structures_digest_by_content(self):
+        from refractal.perturbations import digest_observation
+
+        a = {"images": {"main": b"xy", "wrist": b"zw"}, "states": [1.0, 2.0]}
+        b = {"states": [1.0, 2.0], "images": {"wrist": b"zw", "main": b"xy"}}
+        self.assertEqual(digest_observation(a), digest_observation(b),
+                         "key order is not content")
+
+
+class TestTargetIsProtocolSpecific(unittest.TestCase):
+    """Required for world, optional for observation, absent for action.
+
+    Forcing it everywhere would make a state substitution carry a field the
+    reader has to ignore, and a field a reader has to ignore is worse than no
+    field. The protocol knows the rule, so the protocol declares it.
+    """
+
+    def test_the_rules_are_declared_per_protocol(self):
+        from refractal.perturbations import PROTOCOL_TARGET, PROTOCOLS
+
+        self.assertEqual(set(PROTOCOL_TARGET), set(PROTOCOLS))
+        self.assertEqual(PROTOCOL_TARGET["world"], "required")
+        self.assertEqual(PROTOCOL_TARGET["action"], "absent")
+
+    def test_the_schema_no_longer_forces_one(self):
+        """So an action spec does not have to invent a target to validate."""
+        from refractal.schema.models import PerturbationSpec
+
+        spec = PerturbationSpec(at_step=0, type="add_action_noise",
+                                args={"sigma": 0.1})
+        self.assertIsNone(spec.target)
+
+
 class TestTemporalityIsOrthogonalToProtocol(unittest.TestCase):
     """Two declarations, cutting across each other.
 

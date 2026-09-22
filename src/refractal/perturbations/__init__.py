@@ -42,7 +42,7 @@ from __future__ import annotations
 import hashlib
 import random
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
 
 from ..schema.errors import RefractalError
 
@@ -58,6 +58,8 @@ __all__ = [
     "temporality_of",
     "is_sweepable",
     "level_arg_of",
+    "PROTOCOL_TARGET",
+    "digest_observation",
     "effects",
     "protocol_of",
     "has_inverse",
@@ -171,7 +173,40 @@ class Fired:
 #: name -> callable. Each returns ``(before, after)`` read from the simulator.
 #: Ten lines each, no state, no branching: sophistication belongs in sweep
 #: design and analysis, never in the effect.
-Effect = Callable[[Primitives, str, dict, random.Random], tuple[Any, Any]]
+#: **Two effect types, keyed by TEMPORALITY rather than by protocol.**
+#:
+#: Protocol decides where an effect hooks and what it is handed. Temporality
+#: decides what it returns -- a mutation acts and reports; a wrapper transforms
+#: and reports. One signature cannot be both, because the transformed value is
+#: the wrapper's whole function and a mutation has none to give.
+#:
+#: A mutation returns its evidence: the values either side of the write.
+#:
+#:     (before, after)
+#:
+#: A wrapper returns the TRANSFORMED VALUE, and nothing else. Its evidence is
+#: derived by the framework, not reported by the effect -- the thing being
+#: recorded does not get to produce its own receipt. An effect that computed its
+#: own digest would be a subject writing its own evidence, which is the failure
+#: this project has corrected three times: read the artifact, not a counter;
+#: verify against a different path; the recorder does not certify itself.
+#:
+#:     transformed
+MutationEffect = Callable[[Primitives, str, dict, random.Random], tuple[Any, Any]]
+WrapperEffect = Callable[[Any, str | None, dict, random.Random], Any]
+Effect = MutationEffect | WrapperEffect
+
+#: Whether a protocol's specs name a target, and how strictly.
+#:
+#: Protocol-specific because forcing it everywhere would make an effect like a
+#: state substitution carry a meaningless field, and a field a reader has to
+#: ignore is worse than no field.
+#:
+#: * ``world`` -- **required.** A name the adapter resolves to a handle.
+#: * ``observation`` -- **optional.** Sometimes a key, like which camera; often
+#:   nothing, when the effect transforms the whole observation.
+#: * ``action`` -- **absent.** There is one action; naming it says nothing.
+PROTOCOL_TARGET = {"world": "required", "observation": "optional", "action": "absent"}
 #: Where an effect acts, and therefore what hook it needs. The place is the
 #: protocol: a world effect needs the model, an observation effect needs what the
 #: policy is about to see, an action effect needs what the simulator is about to
@@ -443,6 +478,61 @@ def _apply_force(
     before = list(primitives.get_applied_wrench(target))
     primitives.apply_force(target, [float(x) for x in args["wrench"]])
     return before, list(primitives.get_applied_wrench(target))
+
+
+def digest_observation(value: Any) -> str:
+    """A stable digest of what a wrapper was handed, or produced.
+
+    **Computed here, never by the effect.** A wrapper returns the transformed
+    value and Refractal digests both sides; an effect that reported its own
+    digest would be the subject writing its own receipt, which is the failure
+    this project has corrected three times over.
+
+    Digestible is defined rather than attempted: nested mappings, sequences,
+    numbers, strings, booleans, and anything exposing the buffer protocol --
+    which covers a dict of arrays, and so covers every observation in reach.
+
+    Anything else **raises**, and the adapter is told so. That is better than a
+    digest of a repr, which would be stable for the wrong reasons: two different
+    observations sharing a memory address, or two identical ones differing by
+    one, would both be silently wrong in the column that exists to catch
+    silence.
+    """
+    hasher = hashlib.sha256()
+
+    def absorb(item: Any, path: str = "") -> None:
+        if item is None or isinstance(item, (bool, int, float, str)):
+            hasher.update(f"{path}={item!r}".encode())
+            return
+        if isinstance(item, Mapping):
+            for key in sorted(item, key=str):
+                absorb(item[key], f"{path}.{key}")
+            return
+        if isinstance(item, (bytes, bytearray)):
+            hasher.update(path.encode())
+            hasher.update(bytes(item))
+            return
+        buffer = getattr(item, "tobytes", None)
+        if buffer is not None:                       # arrays, without importing one
+            hasher.update(f"{path}|{getattr(item, 'shape', '')}"
+                          f"|{getattr(item, 'dtype', '')}".encode())
+            hasher.update(buffer())
+            return
+        if isinstance(item, Sequence):
+            for index, element in enumerate(item):
+                absorb(element, f"{path}[{index}]")
+            return
+        raise PerturbationError(
+            f"cannot digest {type(item).__name__} at {path or 'the root'!r} of an "
+            "observation. A wrapper's receipt is a digest of what it was handed "
+            "and what it produced, so a value that cannot be digested cannot be "
+            "verified -- and an unverifiable transform is one whose receipt says "
+            "it applied when nothing happened. Convert it to arrays, mappings "
+            "and primitives, or use an effect that does not touch it."
+        )
+
+    absorb(value)
+    return hasher.hexdigest()[:16]
 
 
 def rng_for_episode(episode_id: str) -> random.Random:

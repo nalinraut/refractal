@@ -533,7 +533,17 @@ class PerturbationSpec(Strict):
     #: happening.
     until_step: int | None = Field(default=None, ge=0)
     type: str
-    target: str
+    #: What the effect acts on, when the protocol has such a thing.
+    #:
+    #: Optional here and required by PROTOCOL: a world effect names an actuator
+    #: or a body, an observation effect sometimes names a camera and often
+    #: nothing, and an action effect has none -- there is one action, and naming
+    #: it says nothing. Forcing it everywhere would make those specs carry a
+    #: field the reader has to ignore, which is worse than no field.
+    #:
+    #: The planner enforces the protocol's rule, because the protocol is what
+    #: knows it.
+    target: str | None = None
     args: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
