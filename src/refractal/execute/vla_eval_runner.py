@@ -199,6 +199,9 @@ def _row(
         "concurrent_with": concurrent_with,
         "harness_version": harness_version,
         "harness_surface": harness_surface,
+        # Written, never left unset: a null here must only ever mean the row
+        # predates the column, not that nobody counted.
+        "perturbation_count": 0,
         "physics_version": physics_version,
         "physics_surface": physics_surface,
         "success": row.success,

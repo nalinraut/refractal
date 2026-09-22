@@ -53,6 +53,25 @@ class ExecuteCase(unittest.TestCase):
         return run_local(self.plan, self.results, **kwargs)
 
 
+class TestARealRunWritesTheCount(ExecuteCase):
+    """A null count must only ever mean `the row predates the column`.
+
+    If the runner left it unset, a fresh unperturbed episode and an old row
+    would be indistinguishable -- and the old rows are the ones phase 1 made
+    valid baselines. The distinction is only worth having if the runner is
+    disciplined about it, so that is what this checks: through the real writer,
+    read back from the Parquet it produced.
+    """
+
+    def test_an_unperturbed_run_records_zero_not_null(self):
+        self.run_once()
+        table = read_episodes(str(self.results), self.plan.plan_id)
+        counts = set(table.column("perturbation_count").to_pylist())
+        self.assertEqual(counts, {0}, "the runner must write 0, never leave it null")
+        levels = set(table.column("perturbation_level").to_pylist())
+        self.assertEqual(levels, {None}, "and no level, since nothing was perturbed")
+
+
 class TestThePerturbationReceiptType(unittest.TestCase):
     """The receipt column, written and read back through Parquet.
 
@@ -64,7 +83,7 @@ class TestThePerturbationReceiptType(unittest.TestCase):
     so the shape is settled first.
     """
 
-    def _round_trip(self, events, level):
+    def _round_trip(self, events, level, count=None):
         import pyarrow as pa
         import pyarrow.parquet as pq
 
@@ -79,6 +98,7 @@ class TestThePerturbationReceiptType(unittest.TestCase):
             "worker_id": "w", "execution_mode": "concurrent", "success": True,
             "is_infra_failure": False, "steps": 271, "elapsed_sec": 4.2,
             "perturbations_fired": events, "perturbation_level": level,
+            "perturbation_count": count,
         })
         table = pa.Table.from_pylist([row], schema=EPISODES_SCHEMA)
         with tempfile.TemporaryDirectory() as tmp:
@@ -143,6 +163,41 @@ class TestThePerturbationReceiptType(unittest.TestCase):
         back = self._round_trip(None, None)
         self.assertIsNone(back["perturbations_fired"])
         self.assertIsNone(back["perturbation_level"])
+
+    def test_the_count_separates_two_meanings_of_a_null_level(self):
+        """A null level means opposite things, and `compare` must tell them
+        apart: an unperturbed episode is the BASELINE the curve is measured
+        against, and a two-perturbation episode has no single level to place
+        anywhere. Without the count both are the same null.
+        """
+        baseline = self._round_trip(None, None, count=0)
+        single = self._round_trip([self._event()], 0.3, count=1)
+        ambiguous = self._round_trip(
+            [self._event(target="a"), self._event(target="b")], None, count=2)
+
+        self.assertIsNone(baseline["perturbation_level"])
+        self.assertIsNone(ambiguous["perturbation_level"])
+        # ... and they are still distinguishable.
+        self.assertEqual(baseline["perturbation_count"], 0)
+        self.assertEqual(ambiguous["perturbation_count"], 2)
+        self.assertEqual(single["perturbation_count"], 1)
+        self.assertEqual(single["perturbation_level"], 0.3)
+
+    def test_an_unperturbed_episode_cannot_just_carry_a_neutral_level(self):
+        """Why the count exists rather than writing a neutral level.
+
+        Neutral depends on the effect -- 1.0 for scale_actuator, 0.0 for
+        apply_force -- so there is no one value an unperturbed row could carry
+        that means `no perturbation` on every axis. Where the baseline sits
+        comes from the effect's definition, which means `compare` has to know
+        it is looking at a baseline.
+        """
+        from refractal.perturbations import effects
+
+        self.assertIn("scale_actuator", effects())
+        self.assertIn("apply_force", effects())
+        # Two effects whose neutral values differ, in one registry. A single
+        # neutral written into the row would be wrong for one of them.
 
 
 class TestSchemaAndLayout(ExecuteCase):

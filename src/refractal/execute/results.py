@@ -127,6 +127,33 @@ EPISODES_SCHEMA = pa.schema(
         # simultaneous levels needs a key this column cannot express, which is
         # an open question rather than something to fudge here.
         pa.field("perturbation_level", pa.float64()),
+        # How many perturbations the episode carried, because a null level
+        # means two opposite things and `compare` has to tell them apart.
+        #
+        #   count 0  -> unperturbed. Null level, and it BELONGS on the curve:
+        #               it is the baseline every other point is measured
+        #               against, and phase 1 made every result recorded before
+        #               perturbations existed a valid base for exactly this.
+        #   count 1  -> one level, in `perturbation_level`.
+        #   count 2+ -> null level, and it does NOT belong on a single axis:
+        #               there is no one level to place it at.
+        #
+        # Without this, "on the curve at the origin" and "off the curve" are the
+        # same null. The same distinction as `absent` versus an empty digest in
+        # the physics surface: nothing looked and there was nothing there are
+        # different claims.
+        #
+        # It also avoids a trap in the other direction. An unperturbed episode
+        # cannot simply carry a neutral level, because neutral depends on the
+        # effect -- 1.0 for scale_actuator, 0.0 for apply_force. Where the
+        # baseline sits on an axis comes from the effect's own definition, so
+        # `compare` has to know it is looking at a baseline in order to place
+        # it, and that is what this column tells it.
+        #
+        # Null only ever means "written before this column existed". The runner
+        # writes 0 for an unperturbed episode rather than leaving it unset, so a
+        # null is always about the schema and never about the episode.
+        pa.field("perturbation_count", pa.int32()),
         pa.field("scene_id", pa.string(), nullable=False),
         pa.field("scene_hash", pa.string(), nullable=False),
         pa.field("task_id", pa.string(), nullable=False),

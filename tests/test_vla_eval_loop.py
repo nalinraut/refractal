@@ -264,6 +264,23 @@ class TestWhatLandsInParquet(LoopCase):
         self.assertEqual(sorted(written), sorted(planned))
         self.assertEqual(len(written), len(set(written)))
 
+    def test_the_perturbation_count_is_written_not_left_null(self):
+        """A null count must only ever mean `this row predates the column`.
+
+        Both backends have to be disciplined about that, and only the local one
+        was tested -- removing this write from the bridge broke nothing, which
+        is how the gap was found. The distinction it protects is that an
+        unperturbed episode BELONGS on a torque-margin curve, at the baseline,
+        while an episode with two perturbations does not belong on any single
+        axis. Both carry a null level; only the count separates them.
+        """
+        plan = make_plan(scenarios=2, checkpoints=("pi0", "pi05"))
+        self.run_loop(plan, FakeHarness())
+        rows = self.rows(plan)
+        self.assertTrue(rows)
+        self.assertEqual({r["perturbation_count"] for r in rows}, {0})
+        self.assertEqual({r["perturbation_level"] for r in rows}, {None})
+
     def test_the_answering_server_is_recorded_per_row(self):
         plan = make_plan(scenarios=2, checkpoints=("pi0", "pi05"))
         self.run_loop(plan, FakeHarness())
