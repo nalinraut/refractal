@@ -189,6 +189,31 @@ def evaluate(
             "checkpoints being compared: the geometry changed between runs, so these "
             "results are not comparable. Re-run, or compare within one geometry."
         )
+    if eligibility.perturbation_unfired:
+        total = eligibility.perturbation_unfired + eligibility.perturbation_experienced
+        verdict.notes.append(
+            f"{eligibility.perturbation_unfired} of {total} perturbed episode(s) "
+            "were assigned a perturbation that never fired -- the trigger came "
+            "after the episode ended. They did not experience their level and "
+            "are not points on its curve. Nor are they baseline data: their "
+            "scenario_hash covers the perturbation, so they cannot join the "
+            "unperturbed units either. Fast episodes escape a late trigger more "
+            "often, so leaving them in would favour whichever checkpoint "
+            "finishes sooner. Trigger at step 0 unless the timing is itself the "
+            "experiment."
+        )
+    if (
+        eligibility.perturbation_unfired
+        and not eligibility.perturbation_experienced
+    ):
+        verdict.blocking.append(
+            f"every one of the {eligibility.perturbation_unfired} perturbed "
+            "episode(s) was assigned a perturbation that never fired, so nothing "
+            "in this comparison measured a perturbed run. A sweep where no "
+            "episode experienced its level is an error, the same way a filter "
+            "that rejects every scenario is -- the results look like clean "
+            "unperturbed runs and would be read as such."
+        )
     if len(eligibility.physics_surfaces) > 1:
         verdict.blocking.append(
             f"episodes were produced by {len(eligibility.physics_surfaces)} different "

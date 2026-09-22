@@ -116,6 +116,12 @@ class Eligibility:
     #: One layer down: the engine's own actuator values. Blocks for the same
     #: reason, and is emphatically not identity -- see execute/physics.py.
     physics_surfaces: set[str] = field(default_factory=set)
+    #: Episodes that were ASSIGNED a perturbation which never fired -- the
+    #: trigger came after the episode ended. They did not experience their
+    #: level, so they are not points on its curve.
+    perturbation_unfired: int = 0
+    #: Episodes that were assigned a perturbation and experienced it.
+    perturbation_experienced: int = 0
     #: Rows sharing one (scene, task, scenario, checkpoint, seed). Not collapsed.
     #:
     #: The container has to match the question. A dict keyed by seed answers
@@ -165,6 +171,48 @@ class Eligibility:
         return lines
 
 
+def experienced_its_level(row: Mapping[str, Any]) -> bool | None:
+    """Did this episode actually undergo the perturbation it was assigned?
+
+    ``None`` for an unperturbed episode, which was assigned nothing. ``True``
+    when every assigned perturbation fired. ``False`` when one did not -- the
+    trigger came after the episode ended.
+
+    **The distinction is load-bearing, and getting it wrong biases the
+    comparison in a direction correlated with the thing being compared.**
+
+    An episode that succeeded at step 150 with a trigger at step 200 never met
+    the weaker gripper: it succeeded unperturbed. Counting that success at the
+    assigned level credits the policy with robustness it never demonstrated.
+
+    And the error is not random. It favours whichever checkpoint finishes
+    faster, because fast episodes escape the trigger more often. A quicker
+    checkpoint would look more torque-robust purely by outrunning the
+    perturbation -- a confound that moves with the very quantity under
+    comparison.
+
+    So the row carries both facts and this decides between them: the declared
+    level is what was asked, written by the runner from the spec, and the
+    receipt is what happened. The curve is built from episodes that experienced
+    their level, and the rest are reported rather than absorbed.
+
+    Note what such an episode is *not*: it is not baseline data either, however
+    much it behaved like it. Its ``scenario_hash`` covers the perturbation, so
+    it is a different experiment from the unperturbed one and cannot join those
+    units. It measured baseline behaviour under a perturbed identity, which
+    makes it unusable for the curve in either direction -- and is the strongest
+    argument for triggering at step 0 in any sweep where mid-episode timing is
+    not itself the subject.
+    """
+    count = row.get("perturbation_count")
+    if not count:
+        return None
+    events = row.get("perturbations_fired") or []
+    if not events:
+        return False
+    return all(event.get("fired_step") is not None for event in events)
+
+
 def build_units(
     rows: Iterable[Mapping[str, Any]],
     *,
@@ -190,6 +238,7 @@ def build_units(
     harness_versions: set[str] = set()
     harness_surfaces: set[str] = set()
     physics_surfaces: set[str] = set()
+    experienced = unfired = 0
     scene_hashes: dict[str, set[str]] = defaultdict(set)
     # Keyed by task_id, not by task_hash: two hashes under one id is the
     # conflict, and keying by the hash would make every conflict look unique.
@@ -214,6 +263,10 @@ def build_units(
         # would block every comparison that mixes a local run with a harness one.
         if row.get("physics_surface") and row["physics_surface"] != "absent":
             physics_surfaces.add(row["physics_surface"])
+        if experienced_its_level(row) is True:
+            experienced += 1
+        elif experienced_its_level(row) is False:
+            unfired += 1
         scene_hashes[row["scene_id"]].add(row["scene_hash"])
         task_hashes[row["task_id"]].add(row["task_hash"])
         if row["is_infra_failure"]:
@@ -238,6 +291,8 @@ def build_units(
         harness_versions=harness_versions,
         harness_surfaces=harness_surfaces,
         physics_surfaces=physics_surfaces,
+        perturbation_unfired=unfired,
+        perturbation_experienced=experienced,
         duplicate_rows=duplicates,
         scene_hash_conflicts={
             scene: hashes for scene, hashes in scene_hashes.items() if len(hashes) > 1

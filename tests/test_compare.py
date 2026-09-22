@@ -225,6 +225,70 @@ class TestOverlapAndProvenance(unittest.TestCase):
         eligibility = build_units(rows, checkpoints=[A, B], min_seeds=2)
         self.assertEqual(eligibility.physics_surfaces, {"aaaa1111"})
 
+    @staticmethod
+    def _perturb(rows, *, level, fired_step):
+        for row in rows:
+            row["perturbation_count"] = 1
+            row["perturbation_level"] = level
+            row["perturbations_fired"] = [{
+                "effect": "scale_actuator", "target": "gripper0_finger1",
+                "specified_step": 200, "fired_step": fired_step,
+                "reason": None if fired_step is not None else "episode ended at 150",
+                "before": [20.0], "after": [6.0] if fired_step is not None else None,
+            }]
+        return rows
+
+    def test_an_episode_that_outran_its_trigger_is_not_on_the_curve(self):
+        """It succeeded UNPERTURBED. Counting that success at the assigned level
+        credits robustness the policy never demonstrated -- and the error
+        favours whichever checkpoint finishes faster, a confound that moves with
+        the quantity under comparison."""
+        from refractal.compare.pairing import experienced_its_level
+
+        fired = self._perturb([dict(r) for r in synthetic({A: {"x": [True]}})],
+                              level=0.3, fired_step=200)[0]
+        missed = self._perturb([dict(r) for r in synthetic({A: {"x": [True]}})],
+                               level=0.3, fired_step=None)[0]
+        baseline = dict(synthetic({A: {"x": [True]}})[0])
+        baseline["perturbation_count"] = 0
+
+        self.assertIs(experienced_its_level(fired), True)
+        self.assertIs(experienced_its_level(missed), False)
+        self.assertIsNone(experienced_its_level(baseline),
+                          "unperturbed was assigned nothing, so the question "
+                          "does not apply to it")
+
+    def test_the_excluded_are_counted_and_reported(self):
+        """Stated, the way the overlap report states what did not join, rather
+        than silently absorbed."""
+        rows = synthetic({A: {"x": [True] * 3}, B: {"x": [True] * 3}})
+        self._perturb(rows, level=0.3, fired_step=None)
+        self._perturb(rows[:2], level=0.3, fired_step=200)
+        eligibility = build_units(rows, checkpoints=[A, B], min_seeds=2)
+        self.assertEqual(eligibility.perturbation_experienced, 2)
+        self.assertEqual(eligibility.perturbation_unfired, len(rows) - 2)
+        verdict = evaluate(eligibility, [A, B], resamples=200, seed=1)
+        self.assertTrue(any("never fired" in n for n in verdict.notes))
+
+    def test_a_sweep_where_nothing_fired_is_an_error(self):
+        """The results look like clean unperturbed runs and would be read as
+        such -- the same failure as a filter that rejects every scenario."""
+        rows = synthetic({A: {"x": [True] * 3}, B: {"x": [True] * 3}})
+        self._perturb(rows, level=0.3, fired_step=None)
+        verdict = evaluate(build_units(rows, checkpoints=[A, B], min_seeds=2),
+                           [A, B], resamples=200, seed=1)
+        self.assertTrue(any("never fired" in b for b in verdict.blocking))
+        self.assertNotEqual(verdict.exit_code, 0)
+
+    def test_an_unperturbed_comparison_says_nothing_about_perturbations(self):
+        """Every comparison so far. The check must cost them no noise."""
+        verdict = evaluate(build_units(synthetic({A: {"x": [True] * 3},
+                                                 B: {"x": [True] * 3}}),
+                                       checkpoints=[A, B], min_seeds=2),
+                           [A, B], resamples=200, seed=1)
+        self.assertFalse(any("fired" in n for n in verdict.notes))
+        self.assertFalse(any("fired" in b for b in verdict.blocking))
+
     def test_sessions_are_tracked(self):
         rows = synthetic({A: {"x": [True] * 3}, B: {"x": [True] * 3}})
         rows[-1]["session_id"] = "session-b"
