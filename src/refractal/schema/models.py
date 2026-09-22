@@ -77,7 +77,30 @@ class ResourceShape(Strict):
     envs_per_process: int = Field(gt=0)
     vram_per_env_mb: int = Field(ge=0)
     vram_base_mb: int = Field(default=0, ge=0)
+    #: Cores one environment needs. **Per environment, not per worker** -- the
+    #: resolver multiplies by how many a worker holds at once, which is the
+    #: checkpoint count under ``execution_mode: concurrent`` and 1 under serial.
+    #:
+    #: Stated because the unit was left implicit and read the other way, and the
+    #: two readings agree on every serial run and diverge silently on concurrent
+    #: ones. A two-checkpoint LIBERO comparison rendered each container onto a
+    #: single core while the worker ran two simulators in it, and the resulting
+    #: 1.8x slowdown looked like the cost of containerisation.
+    #:
+    #: The same ambiguity has now been fixed in three fields of this class --
+    #: ``sec_per_1k_steps`` (worker or simulator), ``startup_sec`` (invocation or
+    #: episode), and this one. A quantity here is per environment unless it says
+    #: otherwise, and if it is not, it says so in its own docstring.
     cpu_cores: int = Field(gt=0)
+    #: Host RAM for the **worker**, not per environment -- the one quantity here
+    #: that is not, which is why it says so.
+    #:
+    #: Left as-is rather than converted with ``cpu_cores``, because the declared
+    #: values were measured per worker and reinterpreting them would silently
+    #: double every container's limit on the strength of a docstring edit. It is
+    #: the same open question, named: a concurrent worker holding two simulators
+    #: plausibly needs more than one holding one, and nobody has measured how
+    #: much. Until someone does, the field means what it was measured as.
     memory_mb: int = Field(default=2048, gt=0)
     #: Wall clock for 1000 steps of **one full batch, as the worker experiences
     #: it** -- not of the simulator.

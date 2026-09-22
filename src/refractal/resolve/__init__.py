@@ -38,6 +38,7 @@ from .fit import (
     SceneDemand,
     allocate_workers,
     assign_cpusets,
+    concurrent_envs,
     budget_model_servers,
 )
 from .lock import BuildLock, load_lock
@@ -180,14 +181,21 @@ def resolve(
 
     # --- placement -------------------------------------------------------
     budgets, server_placement = budget_model_servers(hardware, catalog.run.checkpoints)
+    # Resource shapes are per environment; a concurrent worker holds one per
+    # checkpoint. Both the CPU budget and the pin have to be told that, and it is
+    # told once, here, because this is where the run meets the scenes.
+    envs_per_worker = concurrent_envs(
+        catalog.run.execution_mode, len(catalog.run.checkpoints)
+    )
     allocation = allocate_workers(
         demands,
         hardware,
         budgets,
         pack_below_startup_sec=pack_below_startup_sec,
+        envs_per_worker=envs_per_worker,
     )
     warnings.extend(allocation.warnings)
-    cpusets = assign_cpusets(demands, allocation, hardware)
+    cpusets = assign_cpusets(demands, allocation, hardware, envs_per_worker=envs_per_worker)
 
     for device in budgets:
         if device.used_mb > device.capacity_mb:  # defence in depth; allocation refuses first

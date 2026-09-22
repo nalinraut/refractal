@@ -815,3 +815,94 @@ class TestStartupIsPaidPerInvocation(unittest.TestCase):
                 any("scene construction" in w for w in plan.warnings),
                 "the decision must be reported, not silent",
             )
+
+
+class TestResourceShapesArePerEnvironment(unittest.TestCase):
+    """``cpu_cores`` is per environment, and a worker holds one per concurrent
+    checkpoint.
+
+    The unit was left implicit, and the two readings agree on every serial run --
+    which is why it survived. Under ``concurrent`` a worker runs one thread per
+    checkpoint, each with its own simulator, and reading the field as per-worker
+    pinned a two-simulator container onto one core. Nothing raised; the run
+    completed; the wall clock was 1.8x and looked like a fact about containers.
+
+    So the property is stated as a ratio rather than a constant: whatever a scene
+    declares, comparing two checkpoints concurrently must reserve twice what
+    comparing them serially does.
+    """
+
+    @staticmethod
+    def _width(cpuset: str) -> int:
+        if "-" not in cpuset:
+            return 1
+        lo, hi = cpuset.split("-")
+        return int(hi) - int(lo) + 1
+
+    def _widths(self, mode: str) -> dict[str, int]:
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            tmp.edit("run.yaml", lambda d: d["run"].__setitem__("execution_mode", mode))
+            plan = resolve(root, hardware_profile=HARDWARE)
+            self.assertEqual(len(plan.checkpoints), 2, "fixture must compare two")
+            return {
+                w.worker_id: self._width(w.cpuset)
+                for s in plan.scenes
+                for w in s.workers
+                if w.cpuset
+            }
+
+    def test_concurrent_reserves_twice_the_cores_of_serial(self):
+        serial, concurrent = self._widths("serial"), self._widths("concurrent")
+        self.assertTrue(serial and concurrent, "no worker carried a cpuset")
+        for scene in {w.split("/")[0] for w in serial} & {
+            w.split("/")[0] for w in concurrent
+        }:
+            one = next(v for k, v in serial.items() if k.startswith(scene))
+            two = next(v for k, v in concurrent.items() if k.startswith(scene))
+            self.assertEqual(
+                two,
+                one * 2,
+                f"{scene}: serial pins {one} core(s), concurrent pins {two}; "
+                "two checkpoints means two simulators in the worker",
+            )
+
+    def test_the_pin_is_wide_enough_for_the_threads_that_run_in_it(self):
+        """The failure this prevents, stated directly rather than as a ratio."""
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            tmp.edit(
+                "run.yaml", lambda d: d["run"].__setitem__("execution_mode", "concurrent")
+            )
+            plan = resolve(root, hardware_profile=HARDWARE)
+            threads = len(plan.checkpoints)
+            for scene in plan.scenes:
+                for worker in scene.workers:
+                    if worker.cpuset:
+                        self.assertGreaterEqual(
+                            self._width(worker.cpuset),
+                            threads,
+                            f"{worker.worker_id} runs {threads} simulators in "
+                            f"{self._width(worker.cpuset)} core(s)",
+                        )
+
+    def test_the_cpu_budget_is_not_oversubscribed(self):
+        """Doubling the per-worker demand has to reach the allocator too, not
+        just the pin -- otherwise the plan fits on paper and contends in fact."""
+        with Temp() as root:
+            tmp = Temp.__new__(Temp)
+            tmp.root = root
+            tmp.edit(
+                "run.yaml", lambda d: d["run"].__setitem__("execution_mode", "concurrent")
+            )
+            plan = resolve(root, hardware_profile=HARDWARE)
+            cores = load_catalog(root).hardware(HARDWARE).cpu_cores
+            used = sum(
+                self._width(w.cpuset)
+                for s in plan.scenes
+                for w in s.workers
+                if w.cpuset
+            )
+            self.assertLessEqual(used, cores, f"pinned {used} cores on a {cores}-core host")

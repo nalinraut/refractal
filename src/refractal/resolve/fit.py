@@ -135,6 +135,22 @@ class Allocation:
     warnings: list[str] = field(default_factory=list)
 
 
+def concurrent_envs(execution_mode: str, checkpoints: int) -> int:
+    """How many environments one worker holds at once.
+
+    ``concurrent`` gives a worker one thread per checkpoint, each driving its own
+    environment, so a two-checkpoint comparison puts two simulators in a worker.
+    ``serial`` reaches them one after another and holds one.
+
+    This is the multiplier that turns the per-environment figures in a resource
+    shape into what a worker actually occupies. It lives here, next to the
+    allocator, because concurrency is a property of the run and the shape is a
+    property of the scene -- a scene does not know how many checkpoints will be
+    compared on it, and should not have to.
+    """
+    return max(1, checkpoints) if execution_mode == "concurrent" else 1
+
+
 def budget_model_servers(
     hardware: HardwareProfile, checkpoints: list[Checkpoint]
 ) -> tuple[list[DeviceBudget], dict[str, str]]:
@@ -181,8 +197,14 @@ def allocate_workers(
     budgets: list[DeviceBudget],
     *,
     pack_below_startup_sec: int = 30,
+    envs_per_worker: int = 1,
 ) -> Allocation:
     """Greedy makespan allocation, bounded by CPU, RAM, VRAM and useful ceiling.
+
+    ``envs_per_worker`` is :func:`concurrent_envs` for this run. ``cpu_cores`` in
+    a resource shape is per environment, so a worker holding two of them needs
+    twice the cores, and the CPU budget here has to debit what the worker will
+    actually occupy rather than what one environment would.
 
     Worker layout is placement, not identity: the same experiment split four ways
     and one way is the same experiment, which is why one catalog can target a
@@ -218,7 +240,7 @@ def allocate_workers(
         the budget describing a placement that is not the one in the plan.
         """
         shape = demand.shape
-        if shape.cpu_cores > cpu_free or shape.memory_mb > mem_free:
+        if shape.cpu_cores * envs_per_worker > cpu_free or shape.memory_mb > mem_free:
             return None
         need = shape.vram_mb()
         if need == 0:
@@ -268,7 +290,7 @@ def allocate_workers(
                 )
                 continue
             allocation.workers[demand.scene_id] += 1
-            cpu_free -= demand.shape.cpu_cores
+            cpu_free -= demand.shape.cpu_cores * envs_per_worker
             mem_free -= demand.shape.memory_mb
             if device != "cpu":
                 next(b for b in budgets if b.device_id == device).used_mb += (
@@ -321,7 +343,11 @@ def _pack_or_fail(
 
 
 def assign_cpusets(
-    demands: list[SceneDemand], allocation: Allocation, hardware: HardwareProfile
+    demands: list[SceneDemand],
+    allocation: Allocation,
+    hardware: HardwareProfile,
+    *,
+    envs_per_worker: int = 1,
 ) -> dict[str, str]:
     """Hand each worker distinct cores.
 
@@ -329,12 +355,21 @@ def assign_cpusets(
     contention does not raise -- it just makes every timing measurement noise,
     differently on each run. For a tool whose output is a claim about a measured
     difference, that is the worst possible failure mode.
+
+    The pin has to be as wide as the worker, which is ``cpu_cores`` per
+    environment times :func:`concurrent_envs`. Pinning a concurrent worker to one
+    environment's worth of cores does not merely under-serve it: it is the same
+    failure this function exists to prevent, moved inside the container, where
+    the worker's own threads contend instead of its neighbours. Measured on a
+    two-checkpoint LIBERO comparison, a worker pinned to 1 core ran 77.1 ms/step
+    against 43.6 unpinned on the same host -- and the wall clock read as a fact
+    about containers.
     """
     cpusets: dict[str, str] = {}
     cursor = 0
     for demand in sorted(demands, key=lambda d: d.scene_id):
         for shard in range(allocation.workers.get(demand.scene_id, 0)):
-            cores = demand.shape.cpu_cores
+            cores = demand.shape.cpu_cores * envs_per_worker
             if cursor + cores > hardware.cpu_cores:
                 cursor = 0  # wrap rather than fail; oversubscription is warned on
             lo, hi = cursor, cursor + cores - 1
@@ -350,5 +385,6 @@ __all__ = [
     "SceneDemand",
     "allocate_workers",
     "assign_cpusets",
+    "concurrent_envs",
     "budget_model_servers",
 ]
