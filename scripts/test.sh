@@ -27,4 +27,17 @@ if [ -z "$PY" ]; then
         exit 1
     }
 fi
+# `src` on the path, because CI runs `pip install -e .` and an editable install
+# puts exactly this directory there. So the two run the same code, which is the
+# property this script exists to hold -- and the command now works from a fresh
+# clone with the dependencies present and no install step.
+#
+# Only `src`, never `tests`. That was the original bug: PYTHONPATH=src:tests made
+# `from test_bridge import ...` resolve locally and fail in CI, where `-t .` makes
+# them `tests.test_bridge`. Adding tests/ back would reintroduce it silently.
+#
+# What this cannot catch is a packaging error -- a module that imports fine from
+# src and is missing from the built wheel. CI's install is what catches that.
+export PYTHONPATH="$(pwd)/src${PYTHONPATH:+:$PYTHONPATH}"
+
 exec "$PY" -m unittest discover -s tests -t . "$@"
