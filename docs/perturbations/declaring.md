@@ -42,6 +42,8 @@ when the plan is made rather than mid-episode.
 | `scale_actuator` | multiplies an actuator's **torque limit** by `factor` | `factor` | `scale_actuator`, `get_actuator_limit` |
 | `displace_body` | moves a body once, by a fixed offset | `delta`, a list | `get_body_pose`, `set_body_pose` |
 | `apply_force` | applies a wrench to a body | `wrench`, a list | `apply_force`, `get_applied_wrench` |
+| `drop_observation` | blanks a field of the observation | `fill` | `transform_observation` |
+| `substitute_observation` | replaces a field with another representation of the same thing | `kind`, `name` | `transform_observation`, `alternative` |
 
 Two points of precision on each.
 
@@ -59,6 +61,65 @@ recorded, so composition is visible in the results rather than only in your head
 something changes it, because that is what the underlying field does. It is named
 for what it does. A true one-off impulse — a single instantaneous change of
 momentum — is not implemented.
+
+## Perturbing the observation
+
+The first two effects change the world. The last two change **what the policy
+is shown of it** — same physics, different picture.
+
+`substitute_observation` is the interesting one, and it exists for a specific
+class of problem: **configuration that silently changes what the policy sees.**
+
+A proprioceptive state vector encodes the end-effector's rotation in some
+convention. Pick a different convention and the vector is still the right
+length, still the right units, still the same field — and describes a rotation
+the policy was not trained to read. Nothing downstream can tell. The published
+measurement of that class of mistake is **55 points of success rate**, which
+is larger than most differences anyone is trying to measure between
+checkpoints.
+
+Today that is a setting somebody chose once. As a perturbation it is declared,
+hashed, and joined on a base like any other axis:
+
+```yaml
+    perturbations:
+      - at_step: 0
+        type: substitute_observation
+        target: states
+        args: {kind: state, name: robosuite}
+```
+
+`target` names the field to replace. `kind` and `name` say what to put there —
+what sort of thing is wanted, and which one. Which names exist is your scene's
+business; the refusal lists them when you get one wrong.
+
+**It is categorical, not sweepable.** A representation is this one or that one;
+there is nothing in between and no ordering. So it is a matched comparison at
+each value rather than a curve, which `compare` already does.
+
+### What the receipt says for these
+
+An observation effect applies on **every step it is active**, so its receipt is
+one entry per window rather than one per step, carrying:
+
+- a digest of the observation before and after, from the first application
+- how many steps it applied on
+- **on how many of those the observation actually changed**
+
+The last is the one that matters, and the first is deliberately *not* a
+verdict. A representation swap is frequently **identity**: two rotation
+conventions agree exactly over half the orientations there are and differ by a
+full turn over the rest, so the same correctly applied effect changes nothing
+on some steps and everything on others.
+
+Measured on LIBERO, that is not a rare edge. The wrist sits within a
+ten-thousandth of the boundary between the two at the pose every episode
+starts from, so which side a given episode begins on is decided by
+floating-point noise. A receipt judging the effect by its first application
+would call a working perturbation a no-op on roughly half of episodes.
+
+So: **zero changes across the whole window** is the failure, and it is refused
+at the write. Fewer changes than applications is ordinary.
 
 ## Sustained perturbations
 
@@ -93,6 +154,19 @@ and finish in.
 | `scale_actuator` | × 1/factor | yes |
 | `displace_body` | − delta | yes |
 | `apply_force` | — | **no** |
+| `drop_observation` | you stop applying it | yes |
+| `substitute_observation` | you stop applying it | yes |
+
+The two observation effects end for free, and for a reason worth stating: they
+change nothing that persists. A world mutation has to be undone because the
+simulator is still holding the change. An observation is built fresh every
+step, so ceasing to transform it *is* the undo.
+
+That inverts which case is which. For a world effect, `at_step` is the instant
+it fires and it stays in force by itself. For an observation effect, the window
+is the whole point — leaving `until_step` off means every observation from
+`at_step` to the end, and a single transformed frame has to be asked for
+explicitly with `until_step: at_step + 1`.
 
 `apply_force` **assigns** its wrench rather than adding to it, so undoing it
 would mean restoring a previous value and clobbering anything applied since. It

@@ -34,23 +34,38 @@ happened, and the two are never conflated.
 
 ## What is in scope
 
-**World-side only.** The test for which is which:
+Two protocols, and the line between them is worth keeping sharp:
 
 > Did simulator state change?
 
-A black rectangle drawn on the camera image is **channel-side**. A real object
-placed in front of the camera is **world-side**. They look the same to the policy
-and are entirely different mechanisms.
+A real object placed in front of the camera is **world-side**. A black rectangle
+drawn on the camera image is **observation-side**. They look the same to the
+policy and are entirely different mechanisms.
 
-Channel-side perturbation — image corruption, action noise — is not here and is
-not planned. Robust-Gymnasium supplies the taxonomy for it, and RobustVLA has
-already benchmarked five image corruptions and three action-noise levels against
-pi0 and OpenVLA on LIBERO. That work exists; this is the part that does not.
+**World-side** is the original scope: timed physical events. Published
+robustness work is almost entirely stationary statistical corruption — noise on
+every step. "Cut the gripper's torque at step 200" is a different question, and
+the answer depends on *when*.
 
-What is specific here is **timed** physical events. Published robustness work is
-almost entirely stationary statistical corruption — noise on every step. "Cut the
-gripper's torque at step 200" is a different question, and the answer depends on
-*when*.
+**Observation-side** was added for a narrower reason than image corruption, and
+it is worth being precise about it. Generic corruption is well covered
+elsewhere: Robust-Gymnasium supplies the taxonomy, and RobustVLA has benchmarked
+five image corruptions and three action-noise levels against pi0 and OpenVLA on
+LIBERO. Repeating that is not the point.
+
+What is not covered anywhere is **configuration that silently changes what the
+policy sees**. Which rotation convention the state vector uses, which source it
+is read from — settings that produce an observation of the right shape, the
+right units and the wrong meaning. The published figure for that class of
+mistake is 55 points of success rate, and it is nobody's experiment: it is an
+argument somebody set once and no results table states.
+
+Recording such a setting prevents the wrong comparison. Only making it a
+perturbation enables the right one — declared, hashed, joined on a base, and
+compared like any other axis. See
+[perturbing the observation](declaring.md#perturbing-the-observation).
+
+**Action-side is not built.** The protocol is designed for three and two exist.
 
 ## What does not exist yet
 
@@ -61,6 +76,9 @@ Stated plainly so you do not plan around it:
   it would not change how anything here is declared or recorded — but it is not
   built.
 - **Ramps.** A perturbation is a step change. There is no way to fade one in.
+
+- **Action perturbations.** The design carries three protocols and two are
+  built. Nothing about declaring or recording changes when the third arrives.
 
 Sustained perturbations **are** supported: see
 [`until_step`](declaring.md#sustained-perturbations). Not every effect can carry

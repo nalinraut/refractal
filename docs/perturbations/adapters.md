@@ -1,13 +1,16 @@
 # Making perturbations work in your scene
 
-Perturbation code never talks to a simulator. It talks to six calls, which
-whoever owns the scene supplies. Implement them and every effect works; the
-timeline, the ordering and the recording are already done.
+Perturbation code never talks to a simulator. It talks to a handful of calls,
+which whoever owns the scene supplies. Implement them and every effect works;
+the timeline, the ordering and the recording are already done.
+
+You implement only the ones the perturbations you care about need. Six cover
+the world protocol; observation effects need one or two more.
 
 This also means the perturbation machinery is testable with no simulator at all —
 which is worth knowing when you come to test your own adapter.
 
-## The six primitives
+## The world primitives
 
 ```
 resolve(name) -> handle
@@ -45,6 +48,68 @@ Return the engine's own "is this limited" flag rather than inferring it from the
 range. An actuator can legitimately be declared limited to a range of zero, and
 inferring would call that unlimited — a second implementation of the engine's
 rule, which is how these things go wrong.
+
+## The observation primitives
+
+```
+transform_observation                  # a promise about WHERE, see below
+alternative(kind, name) -> value       # something you can still build
+```
+
+`transform_observation` carries no arguments because it is not really a call:
+it is how you declare that your adapter hooks the observation at the right
+place. The section below says where that is.
+
+### `alternative`, and why the effect cannot do this itself
+
+An observation effect hooks **after** your own transforms — which is correct,
+and costs it reach. Anything your transforms consumed is gone by the time the
+effect sees the result.
+
+A state vector is the case that bites. If you assemble it from selected raw
+fields, the raw fields are no longer there. *Blanking* the vector needs only
+the vector. Substituting the **source it was built from** needs what has
+already been discarded.
+
+Moving the hook earlier would fix the reach and break the evidence, reporting
+changes the policy never saw. So the effect asks instead:
+
+> **The effect selects. The adapter produces.**
+
+`alternative(kind, name)` is that question. You are the only thing that still
+holds the raw observation and knows how to rebuild it another way.
+
+```python
+def alternative(self, kind, name):
+    if kind != "state":
+        raise KeyError(f"this scene builds no {kind!r} alternatives")
+    raw = self._raw_observation()
+    return self._build_state(raw, convention=name)
+```
+
+Two rules for writing one.
+
+**Rebuild it exactly as you build the real one — dtype included.** You are
+producing something that will replace part of the observation, so any
+difference you introduce is a difference the policy receives. Returning a
+32-bit vector where the observation carries 64-bit changes every byte, and the
+receipt then reports a change on every step regardless of whether the thing
+you were actually varying changed anything. The measurement carries a silent
+passenger.
+
+There is an exact check for this, and it costs one run: **ask for the variant
+your adapter is already configured with.** The observation must come back
+byte-identical, and the run must then be refused as a no-op. If it is not
+identical, the difference is yours.
+
+**Keyed by `kind` so one call serves every such need.** A later effect wanting
+a different camera projection or an unfiltered sensor reading asks the same
+primitive with a different `kind`, rather than growing the protocol once per
+effect.
+
+Declaring the observation protocol without this is refused when the plan is
+made, naming what is missing — so an adapter that cannot build alternatives
+fails loudly rather than quietly producing a sweep of no-ops.
 
 ## Two rules that will catch you
 
