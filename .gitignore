@@ -15,3 +15,4 @@ __pycache__/
 # tracked it went stale: a wording fix in docs/ left the built HTML asserting
 # the old text.
 site/
+.mutation-in-progress
