@@ -21,7 +21,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from ..schema.errors import CatalogError, GeneratorError
 from ..schema.canonical import hash_obj
-from ..perturbations import has_inverse, invertible
+from ..perturbations import declaration, has_inverse, invertible
 from ..schema.identity import (
     episode_id,
     base_scenario_hash,
@@ -239,6 +239,57 @@ def expand_episodes(
     return episodes
 
 
+def _refuse_undeclared_primitives(scenario_set, scene_id, spec, declared) -> None:
+    """Compare what the effect says it needs against what the adapter supplies.
+
+    **Capability-based, not identity-based.** The planner does not recognise
+    effects -- it cannot inspect an unfamiliar one and conclude it needs a
+    camera. It compares two declarations, so neither side has to know about the
+    other, and an effect nobody here has heard of is refused for the right
+    reason rather than for being unfamiliar.
+
+    Three outcomes, because **silence and a negative answer are different
+    claims** -- the same distinction the capability probe already draws between
+    an actuator reported as unlimited and one nobody looked at:
+
+    * the adapter lists the primitive          -> allowed
+    * the adapter lists its primitives, and
+      this is not among them                   -> refused: it said no
+    * the adapter lists no primitives at all    -> refused: nobody asked it
+
+    The second and third get different messages because they need different
+    fixes. One is a catalog naming an effect this scene cannot run; the other is
+    a build that never recorded what the scene can do.
+    """
+    known = declaration(spec.type)
+    if known is None:
+        return  # an unknown effect name is refused elsewhere, by name
+    protocol, needs = known
+    supplied = (declared or {}).get("primitives")
+
+    if supplied is None:
+        raise CatalogError(
+            f"scenario_set {scenario_set.id!r} uses {spec.type!r}, which needs "
+            f"{list(needs)} from the {protocol} protocol, but nothing has "
+            f"recorded which primitives scene {scene_id!r} supplies. That is not "
+            "the same as the scene not supplying them -- nobody has asked. Run "
+            "'refractal build' where the adapter is importable.",
+            file="scenarios.yaml",
+        )
+
+    missing = [primitive for primitive in needs if primitive not in supplied]
+    if missing:
+        raise CatalogError(
+            f"scenario_set {scenario_set.id!r} uses {spec.type!r}, which needs "
+            f"{missing} from the {protocol} protocol. Scene {scene_id!r} reports "
+            f"supplying {sorted(supplied)}. The adapter has been asked and does "
+            "not implement these, so the episode would fail partway rather than "
+            "not start. Use an effect this scene can run, or implement the "
+            "missing primitives.",
+            file="scenarios.yaml",
+        )
+
+
 def refuse_unsupported_perturbations(catalog, lock=None) -> None:
     """Refuse a perturbation the scene cannot carry out.
 
@@ -267,6 +318,7 @@ def refuse_unsupported_perturbations(catalog, lock=None) -> None:
         declared = (entries.get(scene_id).capabilities if scene_id in entries else {})
         actuators = (declared or {}).get("actuators")
         for spec in scenario_set.perturbations:
+            _refuse_undeclared_primitives(scenario_set, scene_id, spec, declared)
             if spec.until_step is not None and not has_inverse(spec.type):
                 raise CatalogError(
                     f"scenario_set {scenario_set.id!r} gives {spec.type!r} an "

@@ -941,6 +941,84 @@ class TestTheExpansionSeparatesTheTwoHashes(unittest.TestCase):
         self.assertEqual(len(bases), 2, "on 2 base scenarios, held fixed")
 
 
+class TestCapabilityBasedRefusal(unittest.TestCase):
+    """The planner compares two declarations rather than recognising effects.
+
+    It cannot inspect an unfamiliar effect and conclude it needs a camera, so
+    refusal has to come from what the effect SAYS it needs against what the
+    adapter SAYS it supplies. That is what makes an open registry safe: an
+    effect nobody here has heard of is refused for the right reason instead of
+    for being unfamiliar.
+    """
+
+    SUPPLIES = ["resolve", "scale_actuator", "get_actuator_limit"]
+
+    def _plan(self, capabilities, effect_type="scale_actuator"):
+        from refractal.schema.models import PerturbationSpec
+
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            catalog = load_catalog(root)
+            scene_id = catalog.scenario_sets[0].scene
+            spec = PerturbationSpec(at_step=0, type=effect_type,
+                                    target="gripper0_finger", args={"factor": 0.3})
+            perturbed = catalog.scenario_sets[0].model_copy(
+                update={"perturbations": [spec]})
+            object.__setattr__(catalog, "scenario_sets", [perturbed])
+            from refractal.resolve.lock import BuildLock, SceneEntry
+
+            lock = BuildLock(scenes=[SceneEntry(
+                scene_id=scene_id, scene_hash="sha256:aa", model_hash="sha256:aa",
+                engine_version="3.2.0", capabilities=capabilities)])
+            from refractal.resolve.expand import refuse_unsupported_perturbations
+
+            refuse_unsupported_perturbations(catalog, lock)
+
+    def test_an_adapter_that_supplies_them_is_allowed(self):
+        self._plan({
+            "primitives": self.SUPPLIES,
+            "actuators": {"gripper0_finger": {"force_limited": True,
+                                              "forcerange": [-20.0, 20.0]}},
+        })
+
+    def test_an_adapter_that_says_no_is_refused_for_saying_no(self):
+        """It was asked and does not implement them. The episode would fail
+        partway rather than not start."""
+        with self.assertRaises(CatalogError) as ctx:
+            self._plan({"primitives": ["resolve", "get_body_pose"],
+                        "actuators": {}})
+        message = str(ctx.exception)
+        self.assertIn("does not implement", message)
+        self.assertIn("scale_actuator", message)
+
+    def test_an_adapter_that_said_nothing_is_refused_differently(self):
+        """Silence and a negative answer are different claims, and need
+        different fixes: one is a catalog naming an effect this scene cannot
+        run, the other is a build that never asked."""
+        with self.assertRaises(CatalogError) as ctx:
+            self._plan({"actuators": {}})
+        message = str(ctx.exception)
+        self.assertIn("nobody has asked", message)
+        self.assertIn("refractal build", message)
+        self.assertNotIn("does not implement", message,
+                         "silence must not be reported as a refusal to supply")
+
+    def test_the_two_messages_are_distinguishable(self):
+        """A reader has to be able to tell which fix applies, which means the
+        distinction has to survive into the text and not only the branch."""
+        said_no = refused = None
+        try:
+            self._plan({"primitives": ["resolve"], "actuators": {}})
+        except CatalogError as exc:
+            said_no = str(exc)
+        try:
+            self._plan({"actuators": {}})
+        except CatalogError as exc:
+            refused = str(exc)
+        self.assertTrue(said_no and refused)
+        self.assertNotEqual(said_no, refused)
+
+
 class TestTheSpecsTravelInThePlan(unittest.TestCase):
     """`run` reads the plan, never the catalog.
 
@@ -1043,6 +1121,11 @@ class TestPerturbationsAreRefusedAtPlanTime(unittest.TestCase):
     """
 
     ACTUATORS = {
+        # What the adapter says it supplies. Declared, because the planner
+        # cannot inspect an effect and work out what it calls.
+        "primitives": ["resolve", "scale_actuator", "get_actuator_limit",
+                       "get_body_pose", "set_body_pose", "apply_force",
+                       "get_applied_wrench"],
         "actuators": {
             "gripper0_finger": {"force_limited": True, "forcerange": [-20.0, 20.0]},
             "robot0_torq_j2": {"force_limited": False, "forcerange": [0.0, 0.0]},

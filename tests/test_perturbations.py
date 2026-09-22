@@ -17,6 +17,7 @@ from refractal.perturbations import (
     PerturbationError,
     Primitives,
     Timeline,
+    effects,
     rng_for_episode,
 )
 
@@ -407,6 +408,89 @@ class TestTheSeedIsItsOwn(unittest.TestCase):
         ]
         self.assertEqual(outs[0], outs[1])
         self.assertTrue(outs[0].startswith("["))
+
+
+class TestEveryEffectMeetsItsObligations(unittest.TestCase):
+    """Four promises, checked by walking the registry rather than by review.
+
+    These are what make a declaration mean something. A protocol field with no
+    obligation to read the world back is a label -- and once the registry opens
+    to effects written elsewhere, a promise nothing checks is a promise nobody
+    keeps.
+
+    Each maps to a bug this project has already had.
+    """
+
+    CASES = {
+        "scale_actuator": (spec(at_step=0, factor=0.5), "gripper"),
+        "displace_body": (spec(type="displace_body", target="bowl", at_step=0,
+                               delta=[0.01, 0, 0]), "bowl"),
+        "apply_force": (spec(type="apply_force", target="bowl", at_step=0,
+                             wrench=[0, 0, 5, 0, 0, 0]), "bowl"),
+    }
+
+    def test_every_effect_has_a_case_here(self):
+        """So adding one to the registry and not to this file is a failure
+        rather than a silent gap in the obligations."""
+        self.assertEqual(set(self.CASES), set(effects()))
+
+    def test_1_every_effect_declares_a_protocol_and_its_primitives(self):
+        """The planner has nothing else. It cannot inspect an unfamiliar effect
+        and work out what it calls."""
+        from refractal.perturbations import PROTOCOLS, declaration
+
+        for name in effects():
+            with self.subTest(effect=name):
+                declared = declaration(name)
+                self.assertIsNotNone(declared, f"{name} declares nothing")
+                protocol, needs = declared
+                self.assertIn(protocol, PROTOCOLS)
+                self.assertTrue(needs, f"{name} claims to need no primitives")
+
+    def test_1a_an_effect_cannot_register_without_them(self):
+        from refractal.perturbations import effect as register
+
+        with self.assertRaises(ValueError):
+            register("bogus", protocol="nowhere", needs=("x",))(lambda *a: (0, 0))
+        with self.assertRaises(ValueError) as ctx:
+            register("bogus", protocol="world", needs=())(lambda *a: (0, 0))
+        self.assertIn("cannot be refused before it runs", str(ctx.exception))
+
+    def test_2_every_effect_reads_the_world_back(self):
+        """Returns before and after, read from the simulator either side of the
+        write. This is the one that caught scaling an unlimited actuator: the
+        call succeeded and nothing changed."""
+        for name, (one, _) in self.CASES.items():
+            with self.subTest(effect=name):
+                world = sim()
+                (fired,) = Timeline([one], world, random.Random(0)).step(0)
+                self.assertIsNotNone(fired.before, f"{name} read no before")
+                self.assertIsNotNone(fired.after, f"{name} read no after")
+
+    def test_3_every_effect_is_pure_given_its_rng(self):
+        """No global random, no clock. Same episode, same effect, same result --
+        and getting this wrong destroys reproducibility with no error anywhere."""
+        for name, (one, target) in self.CASES.items():
+            with self.subTest(effect=name):
+                runs = []
+                for _ in range(2):
+                    world = sim()
+                    Timeline([one], world, rng_for_episode("sha256:same")).step(0)
+                    runs.append((dict(world.limits), {k: list(v) for k, v
+                                                      in world.poses.items()},
+                                 dict(world.wrenches)))
+                self.assertEqual(runs[0], runs[1], f"{name} is not reproducible")
+
+    def test_4_no_effect_mutates_its_spec(self):
+        """The spec is hashed. An effect that edits it changes the episode's
+        identity from inside the episode."""
+        import copy
+
+        for name, (one, _) in self.CASES.items():
+            with self.subTest(effect=name):
+                original = copy.deepcopy(one)
+                Timeline([one], sim(), random.Random(0)).step(0)
+                self.assertEqual(one, original, f"{name} mutated its spec")
 
 
 class TestTheModuleNeedsNoSimulator(unittest.TestCase):

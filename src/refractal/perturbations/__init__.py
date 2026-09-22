@@ -52,7 +52,10 @@ __all__ = [
     "PerturbationError",
     "Timeline",
     "effect",
+    "PROTOCOLS",
+    "declaration",
     "effects",
+    "protocol_of",
     "has_inverse",
     "invertible",
     "rng_for_episode",
@@ -144,14 +147,33 @@ class Fired:
 #: Ten lines each, no state, no branching: sophistication belongs in sweep
 #: design and analysis, never in the effect.
 Effect = Callable[[Primitives, str, dict, random.Random], tuple[Any, Any]]
+#: Where an effect acts, and therefore what hook it needs. The place is the
+#: protocol: a world effect needs the model, an observation effect needs what the
+#: policy is about to see, an action effect needs what the simulator is about to
+#: receive. Those cannot share a protocol -- an observation is not a property of
+#: the world and has no handle to resolve.
+PROTOCOLS = ("world", "observation", "action")
+
 _EFFECTS: dict[str, Effect] = {}
 #: name -> how to undo it, as ARGUMENTS for the same effect. Absent means the
 #: effect cannot be ended, and ``until_step`` on it is refused.
 _INVERSES: dict[str, Callable[[dict], dict]] = {}
+#: name -> (protocol, primitives it calls). Declared, never inferred.
+#:
+#: This is the only thing the planner has. It cannot inspect an unfamiliar effect
+#: and work out that it needs a camera, so refusal comes from what the effect
+#: SAYS it needs against what the adapter SAYS it supplies. In a closed registry
+#: the planner could hard-code that; in an open one the declaration is all there
+#: is, which is why it is required rather than optional.
+_DECLARED: dict[str, tuple[str, tuple[str, ...]]] = {}
 
 
 def effect(
-    name: str, *, inverse: Callable[[dict], dict] | None = None
+    name: str,
+    *,
+    protocol: str,
+    needs: tuple[str, ...],
+    inverse: Callable[[dict], dict] | None = None,
 ) -> Callable[[Effect], Effect]:
     """Register an effect, and optionally how to undo it.
 
@@ -174,13 +196,36 @@ def effect(
     rather than given semantics that only work when nothing else is happening.
     """
 
+    if protocol not in PROTOCOLS:
+        raise ValueError(
+            f"effect {name!r} declares protocol {protocol!r}; known protocols "
+            f"are {list(PROTOCOLS)}"
+        )
+    if not needs:
+        raise ValueError(
+            f"effect {name!r} declares no primitives. An effect that needs "
+            "nothing cannot be refused before it runs, and refusing before it "
+            "runs is the only protection an open registry has."
+        )
+
     def register(fn: Effect) -> Effect:
         _EFFECTS[name] = fn
+        _DECLARED[name] = (protocol, tuple(needs))
         if inverse is not None:
             _INVERSES[name] = inverse
         return fn
 
     return register
+
+
+def declaration(name: str) -> tuple[str, tuple[str, ...]] | None:
+    """What this effect says it is and what it says it calls."""
+    return _DECLARED.get(name)
+
+
+def protocol_of(name: str) -> str | None:
+    declared = _DECLARED.get(name)
+    return declared[0] if declared else None
 
 
 def has_inverse(name: str) -> bool:
@@ -196,7 +241,12 @@ def effects() -> dict[str, Effect]:
     return dict(_EFFECTS)
 
 
-@effect("scale_actuator", inverse=lambda args: {"factor": 1.0 / float(args["factor"])})
+@effect(
+    "scale_actuator",
+    protocol="world",
+    needs=("scale_actuator", "get_actuator_limit"),
+    inverse=lambda args: {"factor": 1.0 / float(args["factor"])},
+)
 def _scale_actuator(
     primitives: Primitives, target: str, args: dict, rng: random.Random
 ) -> tuple[Any, Any]:
@@ -224,7 +274,12 @@ def _scale_actuator(
     return before, primitives.get_actuator_limit(target)
 
 
-@effect("displace_body", inverse=lambda args: {"delta": [-float(x) for x in args["delta"]]})
+@effect(
+    "displace_body",
+    protocol="world",
+    needs=("get_body_pose", "set_body_pose"),
+    inverse=lambda args: {"delta": [-float(x) for x in args["delta"]]},
+)
 def _displace_body(
     primitives: Primitives, target: str, args: dict, rng: random.Random
 ) -> tuple[Any, Any]:
@@ -238,7 +293,7 @@ def _displace_body(
     return before, list(primitives.get_body_pose(target))
 
 
-@effect("apply_force")
+@effect("apply_force", protocol="world", needs=("apply_force", "get_applied_wrench"))
 def _apply_force(
     primitives: Primitives, target: str, args: dict, rng: random.Random
 ) -> tuple[Any, Any]:
