@@ -104,6 +104,29 @@ def default_invoke(
     return results[0]
 
 
+def _measured_exposure(receipt: list | None) -> float | None:
+    """How much of its perturbation the episode actually received.
+
+    The counterpart to `_declared_level`, and deliberately not derived from the
+    same place: the level is what the catalog asked for, this is what the
+    simulator's own record says happened.
+
+    Only meaningful for a transform, and only for exactly one of them. A state
+    mutation perturbs every step it applies to by construction, so the ratio
+    would be a constant wearing the costume of a measurement.
+    """
+    if not receipt:
+        return None
+    measured = [
+        event for event in receipt
+        if event.get("applications")
+    ]
+    if len(measured) != 1 or len(receipt) != 1:
+        return None
+    event = measured[0]
+    return float(event.get("applications_changed") or 0) / float(event["applications"])
+
+
 def _declared_level(specs: list | None) -> float | None:
     """The single level to group a curve on, or None when there is not one.
 
@@ -258,6 +281,7 @@ def _row(
         "benchmark_class": benchmark_class,
         "perturbation_count": len(episode_perturbations or ()),
         "perturbation_level": _declared_level(episode_perturbations),
+        "perturbation_exposure": _measured_exposure(receipt),
         "perturbations_fired": receipt or None,
         "physics_version": physics_version,
         "physics_surface": physics_surface,

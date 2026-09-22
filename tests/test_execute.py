@@ -679,3 +679,68 @@ class TestSurfaceManifests(ExecuteCase):
             ),
             {"changed": ["runners/live_runner.py"], "added": [], "removed": []},
         )
+
+
+class TestWhatTheEpisodeActuallyReceived(unittest.TestCase):
+    """`perturbation_level` is what the catalog asked for.
+    `perturbation_exposure` is what the receipt says happened.
+
+    They come apart for a transform whose effect is trajectory-dependent. Two
+    rotation conventions agree exactly over half of all orientations, so an
+    episode is perturbed only on the steps its trajectory spends in the half
+    where they differ -- measured on LIBERO from a fixed action sequence, 2.5%
+    to 15% of steps across start states alone.
+
+    That is the `at_step: 0` problem arriving from geometry rather than timing,
+    and unlike that one no declaration fixes it: nothing anyone writes in a
+    catalog controls where a trajectory goes. Recording it is the whole
+    remedy -- a result reads "N points at 12% exposure", and two checkpoints
+    with different exposures are not read as having had the same treatment.
+    """
+
+    def exposure(self, receipt):
+        from refractal.execute.vla_eval_runner import _measured_exposure
+
+        return _measured_exposure(receipt)
+
+    @staticmethod
+    def _wrapper(applications=80, changed=12):
+        return {"effect": "substitute_observation", "target": "states",
+                "specified_step": 0, "fired_step": 0, "reason": None,
+                "before_digest": "aa", "after_digest": "bb",
+                "applications": applications, "applications_changed": changed}
+
+    @staticmethod
+    def _mutation():
+        return {"effect": "scale_actuator", "target": "g", "specified_step": 0,
+                "fired_step": 0, "reason": None, "before": [20.0],
+                "after": [10.0]}
+
+    def test_it_is_the_fraction_of_applications_that_changed(self):
+        self.assertAlmostEqual(self.exposure([self._wrapper(80, 12)]), 0.15)
+
+    def test_full_exposure_is_one(self):
+        self.assertEqual(self.exposure([self._wrapper(40, 40)]), 1.0)
+
+    def test_an_unperturbed_episode_has_none(self):
+        self.assertIsNone(self.exposure(None))
+        self.assertIsNone(self.exposure([]))
+
+    def test_a_state_mutation_has_none_rather_than_a_constant(self):
+        """It perturbs every step it applies to by construction, so a ratio
+        would be 1.0 wearing the costume of a measurement."""
+        self.assertIsNone(self.exposure([self._mutation()]))
+
+    def test_two_perturbations_have_none(self):
+        """The same rule the level follows: no single number to report."""
+        self.assertIsNone(
+            self.exposure([self._wrapper(), self._wrapper()]))
+        self.assertIsNone(
+            self.exposure([self._wrapper(), self._mutation()]))
+
+    def test_zero_exposure_is_zero_and_not_absent(self):
+        """An episode whose trajectory never entered the half where the
+        conventions differ received nothing, and that is a measurement rather
+        than a missing value. `check_receipts` refuses to write it, so this
+        pins the arithmetic rather than the policy."""
+        self.assertEqual(self.exposure([self._wrapper(80, 0)]), 0.0)

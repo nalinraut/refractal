@@ -147,6 +147,32 @@ EPISODES_SCHEMA = pa.schema(
         # simultaneous levels needs a key this column cannot express, which is
         # an open question rather than something to fudge here.
         pa.field("perturbation_level", pa.float64()),
+        # What the episode actually RECEIVED, as against what it was assigned.
+        #
+        # The fraction of applications on which the perturbation changed the
+        # observation. `perturbation_level` is read from the catalog before the
+        # run; this is read from the receipt after it, and they answer different
+        # questions.
+        #
+        # It exists because a transform's effect can be trajectory-dependent in
+        # a way a state mutation's is not. Two rotation conventions agree
+        # exactly over half of all orientations, so an episode is perturbed only
+        # on the steps its trajectory spends in the half where they differ.
+        # Measured on LIBERO from a fixed action sequence, that ranged from 2.5%
+        # to 15% of steps across start states alone.
+        #
+        # This is the `at_step: 0` problem again, arriving from geometry rather
+        # than timing -- and unlike that one it cannot be declared away, because
+        # no declaration controls where a trajectory goes. What it can be is
+        # RECORDED, so a result reads "N points at 12% exposure" rather than
+        # "N points", and two checkpoints with different exposures are not
+        # compared as though they had received the same treatment.
+        #
+        # Null when the episode carries no perturbation, more than one, or one
+        # whose effect is a state mutation -- for which every applicable step is
+        # perturbed by construction and the number would be a constant 1.0
+        # dressed as a measurement.
+        pa.field("perturbation_exposure", pa.float64()),
         # How many perturbations the episode carried, because a null level
         # means two opposite things and `compare` has to tell them apart.
         #
