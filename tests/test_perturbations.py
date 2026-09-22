@@ -42,6 +42,7 @@ class FakeSim:
         self.limits = dict(limits)
         self.poses = {k: list(v) for k, v in poses.items()}
         self.wrenches = {}
+        self.alternatives = {("state", "joints"): [9.0, 9.0]}
         self.generation += 1
 
     # -- the protocol ----------------------------------------------------
@@ -69,6 +70,15 @@ class FakeSim:
     def set_body_pose(self, name, pose):
         self.calls.append(("set_body_pose", name, list(pose)))
         self.poses[name] = list(pose)
+
+    def alternative(self, kind, name):
+        """What the adapter can still produce that the observation no longer
+        contains. Keyed by kind so one primitive serves any such need, rather
+        than a new one per effect."""
+        try:
+            return self.alternatives[(kind, name)]
+        except KeyError:
+            raise KeyError(f"no {kind} named {name!r}") from None
 
     def apply_force(self, name, wrench):
         self.calls.append(("apply_force", name, list(wrench)))
@@ -436,6 +446,10 @@ class TestEveryEffectMeetsItsObligations(unittest.TestCase):
         "drop_observation": ({"at_step": 0, "type": "drop_observation",
                               "target": "states", "args": {"fill": "zeros"}},
                              {"states": [1.0, 2.0]}),
+        "substitute_observation": ({"at_step": 0, "type": "substitute_observation",
+                                    "target": "states",
+                                    "args": {"kind": "state", "name": "joints"}},
+                                   {"states": [1.0, 2.0]}),
     }
 
     @staticmethod
@@ -527,9 +541,10 @@ class TestEveryEffectMeetsItsObligations(unittest.TestCase):
             if temporality_of(name) != "wrapper":
                 continue
             with self.subTest(effect=name):
-                once = _EFFECTS[name](subject, one.get("target"),
+                world = sim()
+                once = _EFFECTS[name](world, subject, one.get("target"),
                                       dict(one.get("args", {})), random.Random(0))
-                twice = _EFFECTS[name](once, one.get("target"),
+                twice = _EFFECTS[name](world, once, one.get("target"),
                                        dict(one.get("args", {})), random.Random(0))
                 self.assertEqual(once, twice, f"{name} is not idempotent")
 
@@ -665,7 +680,7 @@ class TestWrappersApplyOnEveryActiveStep(unittest.TestCase):
         """The 'applied to nothing' case. A count alone would say it worked."""
         from refractal.perturbations import _DECLARED, _EFFECTS, _TEMPORALITY
 
-        _EFFECTS["noop"] = lambda obs, t, a, r: obs
+        _EFFECTS["noop"] = lambda p, obs, t, a, r: obs
         _DECLARED["noop"] = ("observation", ("transform_observation",))
         _TEMPORALITY["noop"] = "wrapper"
         try:

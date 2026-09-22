@@ -120,6 +120,8 @@ class Primitives(Protocol):
 
     def get_actuator_limit(self, name: str) -> float | None: ...
 
+    def alternative(self, kind: str, name: str) -> Any: ...
+
     def scale_actuator(self, name: str, factor: float) -> None: ...
 
 
@@ -193,8 +195,14 @@ class Fired:
 #: verify against a different path; the recorder does not certify itself.
 #:
 #:     transformed
+#:
+#: **Both receive the primitives.** A wrapper needs them for the same reason the
+#: hook sits where it does: placing the hook after the adapter's own transforms
+#: is correct for evidence, and it means a wrapper cannot reach anything those
+#: transforms consumed. Primitives are how it asks the adapter for what is no
+#: longer in front of it. A wrapper that needs nothing simply ignores them.
 MutationEffect = Callable[[Primitives, str, dict, random.Random], tuple[Any, Any]]
-WrapperEffect = Callable[[Any, str | None, dict, random.Random], Any]
+WrapperEffect = Callable[[Primitives, Any, str | None, dict, random.Random], Any]
 Effect = MutationEffect | WrapperEffect
 
 #: Whether a protocol's specs name a target, and how strictly.
@@ -543,7 +551,8 @@ def digest_observation(value: Any) -> str:
     temporality="wrapper",
 )
 def _drop_observation(
-    observation: Any, target: str | None, args: dict, rng: random.Random
+    primitives: Primitives, observation: Any, target: str | None,
+    args: dict, rng: random.Random
 ) -> Any:
     """Blank a field of the observation the policy is about to receive.
 
@@ -599,6 +608,77 @@ def _drop_observation(
     # A new mapping rather than a mutated one: the caller still holds the
     # original, and a wrapper that edited it in place would make the "before"
     # digest a digest of the after.
+    return rebuild(observation, path)
+
+
+@effect(
+    "substitute_observation",
+    protocol="observation",
+    needs=("transform_observation", "alternative"),
+    temporality="wrapper",
+)
+def _substitute_observation(
+    primitives: Primitives, observation: Any, target: str | None,
+    args: dict, rng: random.Random
+) -> Any:
+    """Replace a field of the observation with an alternative the adapter builds.
+
+    The effect **selects**; the adapter **produces**. That division is forced by
+    where the hook sits: after the adapter's own transforms, which is correct
+    for evidence and means the wrapper cannot reach anything those transforms
+    consumed. A state vector assembled from chosen raw fields is exactly such a
+    thing -- by the time a wrapper sees it, the raw fields are gone.
+
+    So the effect asks, through ``alternative(kind, name)``, and only the
+    adapter knows how to answer.
+
+    ``target`` names the field to replace. ``args`` carry ``kind`` and ``name``:
+    what sort of thing is wanted, and which one.
+
+    The motivating case is the proprioceptive source -- sending a different
+    state representation than the policy was trained on, which the harness's own
+    paper measures at 55 points of success rate. It is a configuration argument
+    today, impossible to ask for deliberately and invisible in a results table.
+    As a perturbation it is declared, hashed, and joined on a base.
+
+    The digest pair is meaningful here in a way worth stating: ``before`` is the
+    normal state vector and ``after`` is a different one, which is precisely
+    what should be visible. Equal digests would mean the adapter returned what
+    was already there.
+    """
+    if not target:
+        raise PerturbationError(
+            "substitute_observation needs a target naming the field to replace, "
+            "such as 'states'"
+        )
+    kind, name = args.get("kind"), args.get("name")
+    if not kind or not name:
+        raise PerturbationError(
+            "substitute_observation needs `kind` and `name` in its args -- what "
+            "sort of thing is wanted, and which one. Keyed by kind so one "
+            "primitive serves every such need rather than one per effect."
+        )
+    if not isinstance(observation, Mapping):
+        raise PerturbationError(
+            f"substitute_observation was handed {type(observation).__name__}, "
+            "which has no fields to replace"
+        )
+
+    path = target.split(".")
+
+    def rebuild(node: Any, rest: list[str]) -> Any:
+        if not isinstance(node, Mapping) or rest[0] not in node:
+            raise PerturbationError(
+                f"the observation has no field {target!r}; it has "
+                f"{sorted(node) if isinstance(node, Mapping) else type(node).__name__}"
+            )
+        out = dict(node)
+        if len(rest) == 1:
+            out[rest[0]] = primitives.alternative(str(kind), str(name))
+            return out
+        out[rest[0]] = rebuild(out[rest[0]], rest[1:])
+        return out
+
     return rebuild(observation, path)
 
 
@@ -793,7 +873,8 @@ class Timeline:
             if temporality_of(spec["type"]) != "wrapper":
                 continue
             transformed = _EFFECTS[spec["type"]](
-                value, spec.get("target"), dict(spec.get("args", {})), self.rng
+                self.primitives, value, spec.get("target"),
+                dict(spec.get("args", {})), self.rng
             )
             state = self._windows.setdefault(
                 _window_key(spec),

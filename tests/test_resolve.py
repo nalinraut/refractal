@@ -1055,6 +1055,47 @@ class TestCapabilityBasedRefusal(unittest.TestCase):
 
             refuse_unsupported_perturbations(catalog, lock)
 
+    def test_capability_refusal_works_across_protocols(self):
+        """The first observation effect needing a primitive, and therefore the
+        first test that refusal is not world-only.
+
+        An adapter can declare the observation protocol -- promising a hook
+        after its own transforms -- and still not be able to build alternatives.
+        Those are different capabilities, and the one that is missing has to be
+        named."""
+        from refractal.schema.models import PerturbationSpec
+
+        spec = PerturbationSpec(at_step=0, type="substitute_observation",
+                                target="states",
+                                args={"kind": "state", "name": "joints"})
+        with self.assertRaises(CatalogError) as ctx:
+            self._plan_spec(spec, capabilities={
+                "primitives": ["resolve", "transform_observation"],
+                "protocols": ["world", "observation"],
+                "actuators": {},
+            })
+        message = str(ctx.exception)
+        self.assertIn("observation protocol", message)
+        # Only the MISSING primitive is listed as missing -- what the adapter
+        # does supply is reported separately, so the reader can see the gap
+        # rather than a list they have to diff themselves.
+        missing = message.split("needs ")[1].split(" from")[0]
+        self.assertEqual(missing, "['alternative']")
+        self.assertIn("reports supplying", message)
+
+    def test_an_adapter_that_can_build_alternatives_is_allowed(self):
+        from refractal.schema.models import PerturbationSpec
+
+        self._plan_spec(
+            PerturbationSpec(at_step=0, type="substitute_observation",
+                             target="states",
+                             args={"kind": "state", "name": "joints"}),
+            capabilities={
+                "primitives": ["resolve", "transform_observation", "alternative"],
+                "protocols": ["world", "observation"],
+                "actuators": {},
+            })
+
     def test_the_two_messages_are_distinguishable(self):
         """A reader has to be able to tell which fix applies, which means the
         distinction has to survive into the text and not only the branch."""
