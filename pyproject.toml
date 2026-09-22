@@ -50,8 +50,19 @@ compare = ["pyarrow>=15.0", "fsspec>=2024.2.0"]
 # ref, which cannot appear in metadata uploaded to PyPI; now it is an ordinary
 # specifier and the Dockerfile does not need to pin a commit.
 vla-eval = ["vla-eval>=0.6.0", "fsspec>=2024.2.0", "pyarrow>=15.0"]
+# Frame recording, and optional on purpose. `run --video` encodes one WebP
+# sprite strip per episode; a run without it needs none of this, and the import
+# is lazy behind an error that names the fix. Declared because "optional" and
+# "undeclared" are different things -- it was the second, and CI found out by
+# failing four tests with ModuleNotFoundError.
+video = ["pillow>=10.0"]
+# What the test suite needs beyond the runtime extras. numpy is here rather than
+# in `execute` because Refractal does not import it: the harness hands arrays in
+# and they pass straight through to Pillow. The tests have to fabricate those
+# arrays, so the dependency is theirs.
+test = ["pillow>=10.0", "numpy>=1.24"]
 # Everything, for a machine that runs the whole pipeline.
-all = ["fsspec>=2024.2.0", "pyarrow>=15.0"]
+all = ["fsspec>=2024.2.0", "pyarrow>=15.0", "pillow>=10.0"]
 
 [build-system]
 requires = ["hatchling"]
