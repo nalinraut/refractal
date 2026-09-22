@@ -21,6 +21,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from ..schema.errors import CatalogError, GeneratorError
 from ..schema.canonical import hash_obj
+from ..perturbations import has_inverse, invertible
 from ..schema.identity import (
     episode_id,
     base_scenario_hash,
@@ -266,6 +267,16 @@ def refuse_unsupported_perturbations(catalog, lock=None) -> None:
         declared = (entries.get(scene_id).capabilities if scene_id in entries else {})
         actuators = (declared or {}).get("actuators")
         for spec in scenario_set.perturbations:
+            if spec.until_step is not None and not has_inverse(spec.type):
+                raise CatalogError(
+                    f"scenario_set {scenario_set.id!r} gives {spec.type!r} an "
+                    f"until_step, but that effect cannot be ended: undoing it "
+                    "would mean restoring a value rather than applying an "
+                    "inverse, which clobbers anything else acting on the same "
+                    f"target. Effects that can be sustained: {invertible()}. "
+                    "Drop until_step to have it last to the end of the episode.",
+                    file="scenarios.yaml",
+                )
             if spec.type != "scale_actuator":
                 continue
             if actuators is None:

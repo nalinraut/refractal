@@ -53,6 +53,8 @@ __all__ = [
     "Timeline",
     "effect",
     "effects",
+    "has_inverse",
+    "invertible",
     "rng_for_episode",
 ]
 
@@ -129,6 +131,10 @@ class Fired:
     fired_at: int
     before: Any
     after: Any
+    #: True when this event ENDED a sustained perturbation rather than starting
+    #: one. Both are real events with real before and after values, and a receipt
+    #: showing two indistinguishable entries would not say which was which.
+    ends: bool = False
     @property
     def changed(self) -> bool:
         return self.before != self.after
@@ -139,21 +145,58 @@ class Fired:
 #: design and analysis, never in the effect.
 Effect = Callable[[Primitives, str, dict, random.Random], tuple[Any, Any]]
 _EFFECTS: dict[str, Effect] = {}
+#: name -> how to undo it, as ARGUMENTS for the same effect. Absent means the
+#: effect cannot be ended, and ``until_step`` on it is refused.
+_INVERSES: dict[str, Callable[[dict], dict]] = {}
 
 
-def effect(name: str) -> Callable[[Effect], Effect]:
+def effect(
+    name: str, *, inverse: Callable[[dict], dict] | None = None
+) -> Callable[[Effect], Effect]:
+    """Register an effect, and optionally how to undo it.
+
+    ``inverse`` returns the ARGUMENTS that reverse this effect -- not the value
+    to restore. That distinction is what makes ``until_step`` compose.
+
+    Restoring a remembered value is the obvious implementation and it is wrong.
+    If one perturbation scales an actuator by 0.5 and a second scales it by 0.6,
+    the first one ending must leave 0.6 of the original, not the value it
+    happened to read before the second existed. Restoring would clobber the
+    second -- the last-write-wins failure that multiplicative composition was
+    built to avoid, returning through the back door.
+
+    Applying the inverse OPERATION composes correctly: x0.5 then x0.6 then
+    x2.0 leaves 0.6, whatever order they end in.
+
+    An effect with no inverse is one that cannot be ended. ``apply_force``
+    assigns the wrench rather than adding to it, so "undo" would have to restore
+    a previous value and would clobber anything applied since. It is refused
+    rather than given semantics that only work when nothing else is happening.
+    """
+
     def register(fn: Effect) -> Effect:
         _EFFECTS[name] = fn
+        if inverse is not None:
+            _INVERSES[name] = inverse
         return fn
 
     return register
+
+
+def has_inverse(name: str) -> bool:
+    """Whether this effect can carry ``until_step``."""
+    return name in _INVERSES
+
+
+def invertible() -> list[str]:
+    return sorted(_INVERSES)
 
 
 def effects() -> dict[str, Effect]:
     return dict(_EFFECTS)
 
 
-@effect("scale_actuator")
+@effect("scale_actuator", inverse=lambda args: {"factor": 1.0 / float(args["factor"])})
 def _scale_actuator(
     primitives: Primitives, target: str, args: dict, rng: random.Random
 ) -> tuple[Any, Any]:
@@ -181,7 +224,7 @@ def _scale_actuator(
     return before, primitives.get_actuator_limit(target)
 
 
-@effect("displace_body")
+@effect("displace_body", inverse=lambda args: {"delta": [-float(x) for x in args["delta"]]})
 def _displace_body(
     primitives: Primitives, target: str, args: dict, rng: random.Random
 ) -> tuple[Any, Any]:
@@ -262,7 +305,38 @@ class Timeline:
     _fired: list[Fired] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
-        self._pending = sorted(self.specs, key=lambda s: (s["at_step"], s["type"]))
+        # A sustained perturbation is TWO triggers: the effect at `at_step`, and
+        # its inverse at `until_step`. Expanded here rather than special-cased in
+        # `step`, so the loop stays one sorted list and one pointer -- ending a
+        # perturbation is the same machinery as starting one.
+        expanded: list[dict] = []
+        for spec in self.specs:
+            expanded.append(dict(spec))
+            until = spec.get("until_step")
+            if until is None:
+                continue
+            if not has_inverse(spec["type"]):
+                raise PerturbationError(
+                    f"{spec['type']!r} cannot carry until_step: it has no inverse, "
+                    f"so there is no defined way to end it. Effects that can be "
+                    f"ended: {invertible()}."
+                )
+            if int(until) <= int(spec["at_step"]):
+                raise PerturbationError(
+                    f"until_step {until} is not after at_step {spec['at_step']}; "
+                    "a perturbation that ends before it starts is a mistake, not "
+                    "a zero-length one."
+                )
+            ending = dict(spec)
+            ending["at_step"] = int(until)
+            ending["args"] = _INVERSES[spec["type"]](dict(spec.get("args", {})))
+            ending.pop("until_step", None)
+            #: Marks this as the END of a sustained perturbation, so the receipt
+            #: says which it is rather than showing two indistinguishable events.
+            ending["_ends"] = True
+            expanded.append(ending)
+
+        self._pending = sorted(expanded, key=lambda s: (s["at_step"], s["type"]))
         for spec in self._pending:
             if spec["type"] not in _EFFECTS:
                 raise PerturbationError(
@@ -286,6 +360,7 @@ class Timeline:
             )
             fired.append(
                 Fired(
+                    ends=bool(spec.get("_ends")),
                     type=spec["type"],
                     target=spec["target"],
                     specified_at=spec["at_step"],

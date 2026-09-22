@@ -516,9 +516,35 @@ class PerturbationSpec(Strict):
     """
 
     at_step: int = Field(ge=0)
+    #: When it ends. Absent means it lasts to the end of the episode.
+    #:
+    #: A sustained perturbation is the realistic one -- a servo that browns out
+    #: and recovers, rather than a gripper that is weak for the whole episode.
+    #:
+    #: Ending applies the effect's INVERSE, not a remembered value, and that is
+    #: what makes it composable: if one perturbation scales an actuator by 0.5
+    #: and another by 0.6, the first ending must leave 0.6 of the original.
+    #: Restoring what it read before the second existed would clobber it.
+    #:
+    #: So only effects with a defined inverse accept this. ``apply_force``
+    #: assigns its wrench rather than adding to it, so undoing it would mean
+    #: restoring a previous value and clobbering anything applied since -- it is
+    #: refused rather than given semantics that hold only when nothing else is
+    #: happening.
+    until_step: int | None = Field(default=None, ge=0)
     type: str
     target: str
     args: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _window(self) -> "PerturbationSpec":
+        if self.until_step is not None and self.until_step <= self.at_step:
+            raise ValueError(
+                f"until_step {self.until_step} is not after at_step "
+                f"{self.at_step}. A perturbation that ends before it starts is "
+                "a mistake, not a zero-length one."
+            )
+        return self
 
 
 class ScenarioSet(Strict):

@@ -215,6 +215,89 @@ class TestTheReceiptRecordsEffectNotIntent(unittest.TestCase):
                 self.assertTrue(fired.changed, f"{name} did not read back a change")
 
 
+class TestSustainedPerturbations(unittest.TestCase):
+    """`until_step` ends a perturbation by applying the effect's INVERSE.
+
+    Not by restoring a remembered value, and that is the whole design. The
+    realistic weak gripper is a servo that browns out and recovers, and a
+    recovery that clobbers whatever else is acting on the same actuator is the
+    last-write-wins failure multiplicative composition exists to prevent.
+    """
+
+    def test_it_reverts_at_the_step_it_names(self):
+        world = sim()
+        line = Timeline([dict(spec(at_step=2, factor=0.25), until_step=5)],
+                        world, random.Random(0))
+        for i in range(8):
+            line.step(i)
+        self.assertEqual(world.limits["gripper"], 20.0, "the limit came back")
+        self.assertEqual([(e.fired_at, e.ends) for e in line.fired],
+                         [(2, False), (5, True)])
+
+    def test_it_is_weakened_only_inside_the_window(self):
+        world = sim()
+        line = Timeline([dict(spec(at_step=2, factor=0.25), until_step=5)],
+                        world, random.Random(0))
+        seen = []
+        for i in range(8):
+            line.step(i)
+            seen.append(world.limits["gripper"])
+        self.assertEqual(seen, [20.0, 20.0, 5.0, 5.0, 5.0, 20.0, 20.0, 20.0])
+
+    def test_ending_one_does_not_clobber_another(self):
+        """The fixture the design needs: two perturbations on one actuator,
+        one ending while the other is still in force. Restoring a remembered
+        value would put the limit back to 20 and lose the second entirely."""
+        world = sim()
+        line = Timeline([
+            dict(spec(at_step=1, factor=0.5), until_step=4),
+            spec(at_step=2, factor=0.6),
+        ], world, random.Random(0))
+        for i in range(6):
+            line.step(i)
+        self.assertAlmostEqual(world.limits["gripper"], 12.0,
+                               msg="20 x 0.5 x 0.6 x 2.0 -- the second survives")
+
+    def test_the_receipt_distinguishes_a_start_from_an_end(self):
+        world = sim()
+        line = Timeline([dict(spec(at_step=0, factor=0.25), until_step=3)],
+                        world, random.Random(0))
+        for i in range(5):
+            line.step(i)
+        start, end = line.fired
+        self.assertFalse(start.ends)
+        self.assertEqual((start.before, start.after), (20.0, 5.0))
+        self.assertTrue(end.ends)
+        self.assertEqual((end.before, end.after), (5.0, 20.0))
+
+    def test_an_effect_with_no_inverse_is_refused(self):
+        """apply_force ASSIGNS its wrench rather than adding to it, so undoing
+        it would restore a previous value and clobber anything since."""
+        with self.assertRaises(PerturbationError) as ctx:
+            Timeline([{"at_step": 0, "until_step": 5, "type": "apply_force",
+                       "target": "bowl", "args": {"wrench": [1, 0, 0, 0, 0, 0]}}],
+                     sim(), random.Random(0))
+        self.assertIn("no inverse", str(ctx.exception))
+
+    def test_a_window_that_closes_before_it_opens_is_refused(self):
+        with self.assertRaises(PerturbationError) as ctx:
+            Timeline([dict(spec(at_step=5, factor=0.5), until_step=5)],
+                     sim(), random.Random(0))
+        self.assertIn("not after", str(ctx.exception))
+
+    def test_an_episode_ending_inside_the_window_leaves_it_unfired(self):
+        """Real and expected: the end never came due. It is reported, not
+        treated as an error, exactly as an unfired start is."""
+        world = sim()
+        line = Timeline([dict(spec(at_step=1, factor=0.5), until_step=99)],
+                        world, random.Random(0))
+        for i in range(5):
+            line.step(i)
+        self.assertEqual(len(line.fired), 1)
+        self.assertEqual(len(line.unfired()), 1)
+        self.assertEqual(world.limits["gripper"], 10.0)
+
+
 class TestComposition(unittest.TestCase):
     """Two perturbations on one actuator, which is the fixture the invariant
     needs -- one perturbation cannot show multiplicative composition, and a

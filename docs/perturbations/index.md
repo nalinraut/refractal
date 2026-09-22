@@ -56,14 +56,15 @@ gripper's torque at step 200" is a different question, and the answer depends on
 
 Stated plainly so you do not plan around it:
 
-- **Sustained perturbations.** A perturbation fires at a step. There is no
-  duration, no `until_step`, no ramp. A weakened gripper stays weakened for the
-  rest of the episode.
-- **State-based triggers.** You cannot say "when the object clears 5 cm". Triggers
-  are step numbers only.
+- **State-based triggers.** You cannot say "when the object clears 5 cm".
+  Triggers are step numbers only. This is additive rather than a restructure —
+  it would not change how anything here is declared or recorded — but it is not
+  built.
+- **Ramps.** A perturbation is a step change. There is no way to fade one in.
 
-Both are additive rather than restructures — neither would change how anything
-here is declared or recorded. They are simply not built.
+Sustained perturbations **are** supported: see
+[`until_step`](declaring.md#sustained-perturbations). Not every effect can carry
+one, and the page says which and why.
 
 ## Where to go next
 

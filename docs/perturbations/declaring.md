@@ -21,11 +21,12 @@ scenario_sets:
 That is one perturbation, firing at the start of every episode in the set, which
 cuts the gripper's torque limit to a tenth of what the model declares.
 
-Four fields:
+Five fields:
 
 | field | |
 |---|---|
 | `at_step` | when it fires, counted from the episode's first step |
+| `until_step` | optional: when it ends. Absent means it lasts to the end |
 | `type` | which effect to run |
 | `target` | a name your adapter resolves — an actuator or a body |
 | `args` | that effect's parameters |
@@ -58,6 +59,62 @@ recorded, so composition is visible in the results rather than only in your head
 something changes it, because that is what the underlying field does. It is named
 for what it does. A true one-off impulse — a single instantaneous change of
 momentum — is not implemented.
+
+## Sustained perturbations
+
+Add `until_step` and the perturbation is in force for a window rather than the
+rest of the episode:
+
+```yaml
+    perturbations:
+      - at_step: 50
+        until_step: 100
+        type: scale_actuator
+        target: gripper0_gripper_finger_joint1
+        args: {factor: 0.1}
+```
+
+That is the realistic version of a weak gripper — a servo that browns out and
+recovers — rather than one that is weak from the moment it matters onward.
+
+**Ending applies the effect's inverse, not a remembered value.** The distinction
+decides whether sustained perturbations compose. If one perturbation scales an
+actuator by 0.5 and another by 0.6, the first one ending must leave 0.6 of the
+original. Putting back the value it read before the second existed would clobber
+the second entirely.
+
+So the end is `× 1/factor`, and the arithmetic works whatever order things start
+and finish in.
+
+### Which effects can be sustained
+
+| effect | how it ends | |
+|---|---|---|
+| `scale_actuator` | × 1/factor | yes |
+| `displace_body` | − delta | yes |
+| `apply_force` | — | **no** |
+
+`apply_force` **assigns** its wrench rather than adding to it, so undoing it
+would mean restoring a previous value and clobbering anything applied since. It
+is refused rather than given semantics that only hold when nothing else is
+happening:
+
+```
+error: scenario_set 'brownout' gives 'apply_force' an until_step, but that
+effect cannot be ended: undoing it would mean restoring a value rather than
+applying an inverse, which clobbers anything else acting on the same target.
+Effects that can be sustained: ['displace_body', 'scale_actuator'].
+```
+
+Drop `until_step` to have it last to the end of the episode.
+
+The results record the start and the end as **two events**, each with the values
+either side of it, and the end marked as an end — so a receipt showing a limit
+going down and then back up says which was which rather than showing two
+indistinguishable entries.
+
+An episode that ends inside the window leaves the end unfired, with a reason,
+exactly as an unfired start does.
 
 ## `at_step: 0`, and why it is usually what you want
 
