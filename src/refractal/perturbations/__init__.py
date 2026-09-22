@@ -180,8 +180,13 @@ class Fired:
     #:
     #: Judging by the first pair alone would call that a no-op whenever step
     #: one happened to land on the identity side. Measured on LIBERO's reset
-    #: pose, that is a coin flip: the wrist sits within 2e-4 of the boundary,
-    #: so which side it falls on is decided by floating-point noise.
+    #: pose, that is a coin flip: the wrist sits within 2.4e-4 of the boundary,
+    #: and 19 of 50 episodes start on the identity side.
+    #:
+    #: DETERMINISTIC, not noisy -- repeated resets give bit-identical values
+    #: and the seed does not move them, because the pose comes from pinned init
+    #: state data. Which side an episode starts on is reproducible; it is
+    #: simply not a fact about anything anyone configured.
     #:
     #: `applications_changed == 0` across the WHOLE window is the real
     #: "applied to nothing". A smaller number than `applications` is ordinary.

@@ -112,11 +112,17 @@ conventions agree exactly over half the orientations there are and differ by a
 full turn over the rest, so the same correctly applied effect changes nothing
 on some steps and everything on others.
 
-Measured on LIBERO, that is not a rare edge. The wrist sits within a
-ten-thousandth of the boundary between the two at the pose every episode
-starts from, so which side a given episode begins on is decided by
-floating-point noise. A receipt judging the effect by its first application
-would call a working perturbation a no-op on roughly half of episodes.
+Measured on LIBERO, that is not a rare edge. The wrist sits within a few
+ten-thousandths of the boundary between the two at the pose every episode
+starts from, and 19 of 50 episodes begin on the side where they agree. A
+receipt judging the effect by its first application would call a working
+perturbation a no-op on roughly two episodes in five.
+
+Being that close to a discontinuity is **reproducible, not random**: repeated
+resets give identical values and changing the seed does not move them, because
+the pose comes from the benchmark's pinned start states. What it is not is
+meaningful — nothing anyone configured decides it, and an unrelated change to
+the simulator could move it.
 
 So: **zero changes across the whole window** is the failure, and it is refused
 at the write. Fewer changes than applications is ordinary.
