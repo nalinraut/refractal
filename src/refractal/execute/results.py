@@ -154,6 +154,25 @@ EPISODES_SCHEMA = pa.schema(
         # writes 0 for an unperturbed episode rather than leaving it unset, so a
         # null is always about the schema and never about the episode.
         pa.field("perturbation_count", pa.int32()),
+        # Which benchmark class actually ran this episode.
+        #
+        # Provenance, never identity, and that is a measured claim rather than a
+        # preference: the same unperturbed episode through LIBEROBenchmark and
+        # through PerturbedLIBEROBenchmark produces bit-identical qpos over 20
+        # steps. The subclass adds a timeline to `step` and an empty timeline
+        # fires nothing, so which class ran is HOW the scene was run -- the same
+        # category as the backend, the execution mode and the cpuset.
+        #
+        # Putting it in scene_hash would have cost exactly what phase 1 bought:
+        # base_scenario_hash equals scenario_hash for an unperturbed scenario so
+        # that every result already recorded is the baseline end of a torque
+        # curve. Moving scene_hash to name the executing class would strand
+        # those and make every sweep re-run its own baseline.
+        #
+        # Recorded anyway, because "it does not change identity" is not the same
+        # as "nobody needs to know", and the claim it rests on is checked by
+        # refractal-libero's verify_libero_claims.py rather than assumed.
+        pa.field("benchmark_class", pa.string()),
         pa.field("scene_id", pa.string(), nullable=False),
         pa.field("scene_hash", pa.string(), nullable=False),
         pa.field("task_id", pa.string(), nullable=False),

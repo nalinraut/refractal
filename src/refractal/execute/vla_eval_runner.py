@@ -240,6 +240,8 @@ def _row(
         # when the episode ended before its trigger. Whether it actually fired
         # is the receipt's job, and `compare` decides between them -- an episode
         # that outran its trigger is not a point on its level's curve.
+        "benchmark_class": getattr(
+            getattr(scene, "external", None), "provider", None),
         "perturbation_count": len(episode_perturbations or ()),
         "perturbation_level": _declared_level(episode_perturbations),
         "perturbations_fired": receipt or None,

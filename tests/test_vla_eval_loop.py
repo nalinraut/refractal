@@ -457,6 +457,35 @@ class TestTheWholeRouteEndToEnd(LoopCase):
             self.assertIn(row["perturbations_fired"], (None, []))
 
 
+class TestTheExecutingClassIsProvenance(LoopCase):
+    """Which benchmark class ran is recorded and does NOT gate a join.
+
+    Measured, not preferred: the same unperturbed episode through
+    LIBEROBenchmark and through PerturbedLIBEROBenchmark produces bit-identical
+    qpos over 20 steps, checked by refractal-libero's claims script. So the
+    class is HOW a scene is run, and putting it in scene_hash would strand every
+    result already recorded as a torque curve's baseline -- which is exactly
+    what phase 1 was built to preserve.
+    """
+
+    def test_it_is_written_per_row(self):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness())
+        classes = {r["benchmark_class"] for r in self.rows(plan)}
+        self.assertEqual(len(classes), 1)
+        self.assertTrue(next(iter(classes)), "the provider must be recorded")
+
+    def test_it_does_not_reach_any_identity(self):
+        """The property the decision rests on, stated where someone changing
+        the schema will see it."""
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness())
+        for row in self.rows(plan):
+            for identity in ("episode_id", "scenario_hash", "base_scenario_hash",
+                             "scene_hash", "task_hash"):
+                self.assertNotIn(row["benchmark_class"], row[identity])
+
+
 class TestResume(LoopCase):
     def test_a_completed_plan_re_runs_nothing(self):
         plan = make_plan(scenarios=3, checkpoints=("pi0", "pi05"))

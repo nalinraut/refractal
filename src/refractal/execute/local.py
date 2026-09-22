@@ -67,6 +67,8 @@ def _row(
         # with a real reading and claim a fact nobody established.
         # Written, never left unset: a null here must only ever mean the row
         # predates the column, not that nobody counted.
+        # No benchmark: the local backend drives the adapter directly.
+        "benchmark_class": None,
         "perturbation_count": 0,
         "physics_version": PHYSICS_ABSENT,
         "physics_surface": PHYSICS_ABSENT,
