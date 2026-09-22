@@ -29,10 +29,12 @@ is visible in the artifact rather than inferred from the absence of an error.
 That is the same rule as reading results back from Parquet instead of trusting a
 counter kept by the code doing the writing, applied to model state.
 
-Where the effect is emergent rather than a state write -- an impulse changes a
-pose over the following steps, not during the call -- the before/after pair
-cannot show it, and the effect says so rather than implying a check it does not
-perform.
+This holds for every effect, with no exemptions. The one that looked like it
+needed one -- a wrench, whose result shows up in the pose only over the steps
+that follow -- turned out to be looking at the wrong field: MuJoCo puts it in
+``data.xfrc_applied``, readable at the write. When an effect really cannot be
+read back, the honest move is to say so and name it as the unguarded one, not to
+invent a check. So far none is.
 """
 
 from __future__ import annotations
@@ -102,6 +104,8 @@ class Primitives(Protocol):
 
     def apply_force(self, name: str, wrench: Sequence[float]) -> None: ...
 
+    def get_applied_wrench(self, name: str) -> Sequence[float]: ...
+
     def get_actuator_limit(self, name: str) -> float | None: ...
 
     def scale_actuator(self, name: str, factor: float) -> None: ...
@@ -125,14 +129,9 @@ class Fired:
     fired_at: int
     before: Any
     after: Any
-    #: False when this effect's result cannot be seen in a before/after pair --
-    #: an impulse acts over the following steps. Says so rather than reporting
-    #: an unchanged pose as though it were a detected no-op.
-    observable: bool = True
-
     @property
     def changed(self) -> bool:
-        return self.observable and self.before != self.after
+        return self.before != self.after
 
 
 #: name -> callable. Each returns ``(before, after)`` read from the simulator.
@@ -140,14 +139,11 @@ class Fired:
 #: design and analysis, never in the effect.
 Effect = Callable[[Primitives, str, dict, random.Random], tuple[Any, Any]]
 _EFFECTS: dict[str, Effect] = {}
-_UNOBSERVABLE: set[str] = set()
 
 
-def effect(name: str, *, observable: bool = True) -> Callable[[Effect], Effect]:
+def effect(name: str) -> Callable[[Effect], Effect]:
     def register(fn: Effect) -> Effect:
         _EFFECTS[name] = fn
-        if not observable:
-            _UNOBSERVABLE.add(name)
         return fn
 
     return register
@@ -199,21 +195,31 @@ def _displace_body(
     return before, list(primitives.get_body_pose(target))
 
 
-@effect("apply_impulse", observable=False)
-def _apply_impulse(
+@effect("apply_force")
+def _apply_force(
     primitives: Primitives, target: str, args: dict, rng: random.Random
 ) -> tuple[Any, Any]:
-    """Apply a wrench once.
+    """Apply a wrench to a body, and read the applied wrench back.
 
-    Marked unobservable: the wrench changes the pose over the steps that follow,
-    not during this call, so the pose either side of it is normally identical.
-    Reporting that as a detected no-op would be a false alarm, and reporting it
-    as a change would be a lie. The pair is recorded for provenance and
-    ``changed`` stays false.
+    Not named ``apply_impulse``, and the measurement is why. In MuJoCo this
+    lands in ``data.xfrc_applied``, which is readable at the write with no
+    physics step -- so the receipt is true here, the pose was simply the wrong
+    thing to look at.
+
+    But ``xfrc_applied`` **persists**: MuJoCo does not clear it between steps.
+    Verified on LIBERO -- written once, still set after a step, and qvel moving
+    because of it. One call is therefore a force that continues until something
+    changes it, which is a sustained perturbation wearing the name of a single
+    event. The name now says which it is.
+
+    A true impulse -- one instantaneous change of momentum -- is a write to
+    ``qvel``, also readable back. It needs the body's degree-of-freedom
+    addresses, and it is not needed by the torque-margin experiment, so it waits
+    for one that does.
     """
-    before = list(primitives.get_body_pose(target))
+    before = list(primitives.get_applied_wrench(target))
     primitives.apply_force(target, [float(x) for x in args["wrench"]])
-    return before, list(primitives.get_body_pose(target))
+    return before, list(primitives.get_applied_wrench(target))
 
 
 def rng_for_episode(episode_id: str) -> random.Random:
@@ -286,7 +292,6 @@ class Timeline:
                     fired_at=index,
                     before=before,
                     after=after,
-                    observable=spec["type"] not in _UNOBSERVABLE,
                 )
             )
             self._index += 1

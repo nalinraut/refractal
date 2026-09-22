@@ -40,7 +40,7 @@ class FakeSim:
         limits, poses = self._initial
         self.limits = dict(limits)
         self.poses = {k: list(v) for k, v in poses.items()}
-        self.forces = []
+        self.wrenches = {}
         self.generation += 1
 
     # -- the protocol ----------------------------------------------------
@@ -71,7 +71,12 @@ class FakeSim:
 
     def apply_force(self, name, wrench):
         self.calls.append(("apply_force", name, list(wrench)))
-        self.forces.append((name, list(wrench)))
+        # Persists, as MuJoCo's xfrc_applied does -- verified on LIBERO: still
+        # set after a step, with qvel moving because of it.
+        self.wrenches[name] = list(wrench)
+
+    def get_applied_wrench(self, name):
+        return list(self.wrenches.get(name, [0.0] * 6))
 
 
 def sim():
@@ -173,18 +178,41 @@ class TestTheReceiptRecordsEffectNotIntent(unittest.TestCase):
         self.assertEqual(fired.after, 20.0)
         self.assertFalse(fired.changed, "a silent no-op must read as unchanged")
 
-    def test_an_emergent_effect_says_so_rather_than_faking_a_check(self):
-        """An impulse acts over the steps after the call, so the pose either
-        side of it is the same. That is not a detected no-op."""
+    def test_a_wrench_is_verified_against_the_field_it_lands_in(self):
+        """The pose was the wrong observable, not an impossible one. MuJoCo puts
+        an applied wrench in data.xfrc_applied, readable at the write with no
+        physics step -- measured on LIBERO. So this effect is guarded like the
+        others and there is no exemption to remember."""
         world = sim()
         line = Timeline(
-            [spec(type="apply_impulse", target="bowl", at_step=0, wrench=[1, 0, 0])],
+            [spec(type="apply_force", target="bowl", at_step=0,
+                  wrench=[0, 0, 5, 0, 0, 0])],
             world, random.Random(0),
         )
         (fired,) = line.step(0)
-        self.assertFalse(fired.observable)
-        self.assertFalse(fired.changed)
-        self.assertEqual(world.forces, [("bowl", [1.0, 0.0, 0.0])])
+        self.assertEqual(list(fired.before), [0.0] * 6)
+        self.assertEqual(list(fired.after), [0.0, 0.0, 5.0, 0.0, 0.0, 0.0])
+        self.assertTrue(fired.changed)
+
+    def test_every_effect_reads_the_world_back(self):
+        """No effect is exempt. If one ever cannot be read back, this fails and
+        the exemption has to be argued rather than assumed."""
+        from refractal.perturbations import effects
+
+        world = sim()
+        cases = {
+            "scale_actuator": spec(at_step=0, factor=0.5),
+            "displace_body": spec(type="displace_body", target="bowl", at_step=0,
+                                  delta=[0.01, 0, 0]),
+            "apply_force": spec(type="apply_force", target="bowl", at_step=0,
+                                wrench=[0, 0, 5, 0, 0, 0]),
+        }
+        self.assertEqual(set(cases), set(effects()), "an effect has no case here")
+        for name, one in cases.items():
+            with self.subTest(effect=name):
+                world.reset()
+                (fired,) = Timeline([one], world, random.Random(0)).step(0)
+                self.assertTrue(fired.changed, f"{name} did not read back a change")
 
 
 class TestComposition(unittest.TestCase):
