@@ -106,11 +106,49 @@ class ExternalSceneProbe(Protocol):
 
     def external_scene_facts(self, scene: Scene) -> dict[str, Any]: ...
 
+    #: Optional. What can be done to the scene, for plan-time refusal of
+    #: perturbations. A probe without it simply declares nothing, and a plan
+    #: that perturbs such a scene is refused for want of a declaration rather
+    #: than allowed on the assumption that it would work.
+    def scene_capabilities(self, scene: Scene) -> dict[str, Any]: ...
+
 
 class ShapeProber(Protocol):
     """Measures how much machine one worker of a scene needs."""
 
     def measure(self, scene: Scene, hardware_profile: str) -> ResourceShape: ...
+
+
+def _capabilities(probe: Any, scene: Scene, report: Any) -> dict[str, Any]:
+    """Ask the probe what can be done to this scene, if it can say.
+
+    Absence is not an error here. It becomes one at plan time, and only for a
+    plan that actually perturbs the scene -- refusing a build because a probe
+    cannot describe actuators would break every catalog that never perturbs
+    anything, which is all of them today.
+
+    A probe that raises is reported and not fatal, for the same reason: reading
+    actuator limits means constructing the environment, which needs a GPU or an
+    EGL context that a build machine may not have.
+    """
+    supplier = getattr(probe, "scene_capabilities", None)
+    if supplier is None:
+        return {}
+    try:
+        declared = supplier(scene)
+    except Exception as exc:  # noqa: BLE001 - a probe failure must not fail the build
+        report.warnings.append(
+            f"scene {scene.id!r}: the probe could not report capabilities ({exc}). "
+            "A plan that perturbs this scene will be refused for want of a "
+            "declaration; one that does not is unaffected."
+        )
+        return {}
+    if not isinstance(declared, dict):
+        raise BuildError(
+            f"the probe returned {type(declared).__name__} for scene {scene.id!r}; "
+            "scene_capabilities must return a dict."
+        )
+    return declared
 
 
 @dataclass
@@ -230,6 +268,7 @@ def build(
                     external=True,
                     ref_key=external_scene_ref_key(scene),
                     facts=facts,
+                    capabilities=_capabilities(probe, scene, report),
                 )
             )
             continue

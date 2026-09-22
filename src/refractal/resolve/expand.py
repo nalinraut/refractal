@@ -236,6 +236,69 @@ def expand_episodes(
     return episodes
 
 
+def refuse_unsupported_perturbations(catalog, lock=None) -> None:
+    """Refuse a perturbation the scene cannot carry out.
+
+    Capability is **per target, not per primitive**, and that distinction is the
+    whole reason this exists. An adapter either supplies ``scale_actuator`` or it
+    does not, which a probe could declare once -- but the primitive is
+    meaningful on one actuator and meaningless on another in the same model.
+
+    Measured on LIBERO: the gripper declares ``forcerange = [-20, 20]`` and
+    every arm actuator declares ``[0, 0]``, which MuJoCo reads as *unlimited*.
+    Scaling an unlimited limit by 0.3 leaves it unlimited. The call succeeds,
+    the episode completes, and a fired-events log that recorded the call would
+    report a perturbation that did nothing -- an entire sweep coming back
+    looking like clean unperturbed runs.
+
+    So the check is against what ``build`` recorded for this scene. A scene with
+    no declaration is refused rather than allowed: "the probe did not say" and
+    "the probe said yes" must not be the same answer, since the failure being
+    prevented is silent and the cost of being wrong is a whole sweep.
+    """
+    entries = {e.scene_id: e for e in (lock.scenes if lock else [])}
+    for scenario_set in catalog.active_scenario_sets():
+        if not scenario_set.perturbations:
+            continue
+        scene_id = scenario_set.scene
+        declared = (entries.get(scene_id).capabilities if scene_id in entries else {})
+        actuators = (declared or {}).get("actuators")
+        for spec in scenario_set.perturbations:
+            if spec.type != "scale_actuator":
+                continue
+            if actuators is None:
+                raise CatalogError(
+                    f"scenario_set {scenario_set.id!r} scales the torque limit of "
+                    f"{spec.target!r} on scene {scene_id!r}, but nothing has recorded "
+                    "which of that scene's actuators have a torque limit. Run "
+                    "'refractal build' where the benchmark is importable. Refused "
+                    "rather than attempted: an actuator with no limit accepts the "
+                    "call, changes nothing, and the run completes looking clean.",
+                    file="scenarios.yaml",
+                )
+            known = actuators.get(spec.target)
+            if known is None:
+                near = sorted(n for n in actuators if spec.target.split("_")[0] in n)
+                raise CatalogError(
+                    f"scenario_set {scenario_set.id!r} perturbs actuator {spec.target!r}, "
+                    f"which scene {scene_id!r} does not have. It has "
+                    f"{sorted(actuators)[:6]}"
+                    + (f"; did you mean {near[0]!r}?" if near else ""),
+                    file="scenarios.yaml",
+                )
+            if not known.get("force_limited"):
+                raise CatalogError(
+                    f"scenario_set {scenario_set.id!r} scales the torque limit of "
+                    f"{spec.target!r} on scene {scene_id!r}, but that actuator has no "
+                    "limit to scale -- MuJoCo's forcerange [0, 0] means unlimited, and "
+                    "scaling unlimited by any factor leaves it unlimited. The episode "
+                    "would run, the log would say the perturbation fired, and nothing "
+                    "would have changed. Perturb an actuator that has a limit, or give "
+                    "this one an absolute limit.",
+                    file="scenarios.yaml",
+                )
+
+
 def task_hashes_for(catalog: Catalog, lock=None) -> dict[str, str]:
     """Task hashes, taking provider-supplied content from the lock when present.
 

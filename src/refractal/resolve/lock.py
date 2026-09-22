@@ -116,6 +116,25 @@ class SceneEntry(Strict):
     #: reason the harness surface records a per-file manifest and not only a
     #: digest: a digest says something changed and leaves you to find out what.
     facts: dict[str, Any] = Field(default_factory=dict)
+    #: What the scene can have done to it, as opposed to what it is.
+    #:
+    #: **Deliberately not in the hash.** A perturbation spec naming a target the
+    #: model cannot support has to be refused when the plan is made rather than
+    #: at step 200 of an episode, and that refusal needs to know which actuators
+    #: exist and which have a torque limit at all. But capability does not change
+    #: what an episode *is*: it constrains which plans are legal, which is a
+    #: planning question. Folding it into ``facts`` would move every scene_hash
+    #: and every plan_id to record something that discriminates nothing.
+    #:
+    #: The shape is up to the probe. For a MuJoCo scene it is
+    #: ``{"actuators": {name: {"force_limited": bool, ...}}}``.
+    #:
+    #: Known gap, and not this field's to close: robosuite's version is in
+    #: nothing that is hashed, so a release that changed an actuator's
+    #: forcerange without touching the BDDL would change the physics and move no
+    #: identity. Recorded here as an open question rather than silently fixed by
+    #: hashing capability, which would be the wrong instrument.
+    capabilities: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskEntry(Strict):

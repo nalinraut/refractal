@@ -30,6 +30,7 @@ from .expand import (
     find_type_only_collisions,
     generate_scenarios,
     subsample,
+    refuse_unsupported_perturbations,
     task_hashes_for,
 )
 from .fit import (
@@ -175,6 +176,14 @@ def resolve(
                 ),
             )
         )
+
+    # --- perturbations: refused here, not at step 200 ---------------------
+    #
+    # The same move as the renderer refusing worker groups the index contract
+    # rejects: a pure function of the plan, checked at the cheapest point that
+    # can see it. A spec naming something the scene cannot do is a mistake in
+    # the catalog, and finding out mid-episode costs the episodes already run.
+    refuse_unsupported_perturbations(catalog, lock)
 
     if not demands:
         raise CatalogError("this catalog expands to zero episodes; nothing to plan")

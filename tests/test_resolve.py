@@ -941,6 +941,81 @@ class TestTheExpansionSeparatesTheTwoHashes(unittest.TestCase):
         self.assertEqual(len(bases), 2, "on 2 base scenarios, held fixed")
 
 
+class TestPerturbationsAreRefusedAtPlanTime(unittest.TestCase):
+    """Capability is per target, not per primitive.
+
+    The adapter supplies `scale_actuator` or it does not -- one declaration.
+    But on LIBERO the gripper has `forcerange = [-20, 20]` and every arm
+    actuator has `[0, 0]`, which MuJoCo reads as unlimited. The same primitive
+    is meaningful on one and meaningless on the other, in one model, so a
+    per-primitive declaration cannot express it.
+
+    Built past the schema's refusal, which is what that technique is for: the
+    identity is settled, the timeline is not, and what is under test is the
+    planner's check rather than the schema's.
+    """
+
+    ACTUATORS = {
+        "actuators": {
+            "gripper0_finger": {"force_limited": True, "forcerange": [-20.0, 20.0]},
+            "robot0_torq_j2": {"force_limited": False, "forcerange": [0.0, 0.0]},
+        }
+    }
+
+    def _plan(self, target, *, capabilities=ACTUATORS, factor=0.3):
+        from refractal.schema.models import PerturbationSpec
+
+        with Temp() as root:
+            tmp = Temp.__new__(Temp); tmp.root = root
+            catalog = load_catalog(root)
+            scene_id = catalog.scenario_sets[0].scene
+            spec = PerturbationSpec(at_step=200, type="scale_actuator",
+                                    target=target, args={"factor": factor})
+            perturbed = catalog.scenario_sets[0].model_copy(
+                update={"perturbations": [spec]})
+            object.__setattr__(catalog, "scenario_sets", [perturbed])
+
+            lock = None
+            if capabilities is not None:
+                from refractal.resolve.lock import BuildLock, SceneEntry
+
+                lock = BuildLock(scenes=[SceneEntry(
+                    scene_id=scene_id, scene_hash="sha256:aa", model_hash="sha256:aa",
+                    engine_version="3.2.0", capabilities=capabilities)])
+            from refractal.resolve.expand import refuse_unsupported_perturbations
+
+            refuse_unsupported_perturbations(catalog, lock)
+
+    def test_an_actuator_with_a_limit_is_allowed(self):
+        self._plan("gripper0_finger")          # no raise
+
+    def test_an_unlimited_actuator_is_refused_with_the_reason(self):
+        with self.assertRaises(CatalogError) as ctx:
+            self._plan("robot0_torq_j2")
+        message = str(ctx.exception)
+        self.assertIn("robot0_torq_j2", message)
+        self.assertIn("unlimited", message)
+
+    def test_an_actuator_the_scene_does_not_have_is_refused_and_suggests(self):
+        with self.assertRaises(CatalogError) as ctx:
+            self._plan("gripper0_thumb")
+        message = str(ctx.exception)
+        self.assertIn("gripper0_thumb", message)
+        self.assertIn("gripper0_finger", message, "should suggest the near miss")
+
+    def test_no_declaration_is_refused_rather_than_assumed(self):
+        """`the probe did not say` and `the probe said yes` must not be the
+        same answer when the failure being prevented is silent."""
+        with self.assertRaises(CatalogError) as ctx:
+            self._plan("gripper0_finger", capabilities={})
+        self.assertIn("refractal build", str(ctx.exception))
+
+    def test_a_catalog_with_no_perturbations_is_untouched(self):
+        """Every catalog today. The check must cost them nothing."""
+        plan = resolve(CATALOG, hardware_profile=HARDWARE)
+        self.assertGreater(plan.total_episodes, 0)
+
+
 class TestResourceShapesArePerEnvironment(unittest.TestCase):
     """``cpu_cores`` is per environment, and a worker holds one per concurrent
     checkpoint.
