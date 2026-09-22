@@ -458,6 +458,27 @@ def check_index_contract(episodes: list[PlannedEpisode], scenarios: Mapping[str,
         )
 
 
+def episode_key(episode_index: int) -> str:
+    """How an episode is named in the perturbation map. **The one definition.**
+
+    Both sides of this boundary used to define it, and they disagreed: the
+    bridge wrote ``"0"``, ``"1"``, and the benchmark read ``f"{task_id}:{idx}"``.
+    Nothing matched, so no timeline was ever built -- and a whole sweep ran
+    unperturbed while every other column said it was working. The contract test
+    could not see it either, because it called the benchmark's own key function
+    on both sides and so tested the benchmark against itself.
+
+    Now the benchmark imports this. Two implementations agreeing by eye is the
+    failure this project keeps finding; one implementation cannot disagree.
+
+    The index, not ``(task_id, index)``, because a worker owns one task whole --
+    ``partition_unit: task`` -- and the index contract guarantees that the
+    harness runs a worker's episodes as ``0..N-1`` in order. Position IS the
+    episode index, and that guarantee is checked before any run starts.
+    """
+    return str(int(episode_index))
+
+
 def perturbation_map(episodes: list[PlannedEpisode]) -> dict[str, Any]:
     """Episode position -> what to do to it, and the id to seed its RNG from.
 
@@ -468,7 +489,7 @@ def perturbation_map(episodes: list[PlannedEpisode]) -> dict[str, Any]:
     from a position that means something different in the next run.
     """
     return {
-        str(index): {
+        episode_key(index): {
             "episode_id": episode.episode_id,
             "specs": [dict(spec) for spec in episode.perturbations],
         }
@@ -902,6 +923,7 @@ __all__ = [
     "EpisodeRow",
     "NullRecordingStore",
     "ReceiptBuffer",
+    "episode_key",
     "StepBuffer",
     "to_episode_row",
     "build_eval_config",
