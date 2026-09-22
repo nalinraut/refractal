@@ -606,6 +606,40 @@ class TestTemporalityIsOrthogonalToProtocol(unittest.TestCase):
             for table in (_EFFECTS, _DECLARED, _TEMPORALITY):
                 table.pop("blur", None)
 
+    def test_a_wrapper_may_not_supply_an_inverse(self):
+        """The declaration is a commitment, so the obligations enforce what was
+        declared rather than a generic shape. A wrapper ends by not being
+        applied; an inverse says it leaves something behind, which is a
+        mutation."""
+        from refractal.perturbations import effect as register
+
+        with self.assertRaises(ValueError) as ctx:
+            register("blurry", protocol="observation", needs=("x",),
+                     temporality="wrapper",
+                     inverse=lambda args: args)(lambda *a: (0, 0))
+        self.assertIn("nothing to undo", str(ctx.exception))
+
+    def test_a_mutation_without_an_inverse_is_legitimate(self):
+        """`apply_force` assigns a wrench that persists, which makes it a
+        mutation, and has no inverse because undoing an assignment would clobber
+        anything written since.
+
+        So "declare mutation and you owe an inverse" is one step too strong. The
+        debt is owed only if the effect is ever SUSTAINED, which registration
+        cannot know -- it is enforced where sustaining happens.
+        """
+        from refractal.perturbations import has_inverse, temporality_of
+
+        self.assertEqual(temporality_of("apply_force"), "mutation")
+        self.assertFalse(has_inverse("apply_force"))
+        # Instantaneous: fine. Sustained: refused, at the point it is sustained.
+        Timeline([spec(type="apply_force", target="bowl", at_step=0,
+                       wrench=[0, 0, 1, 0, 0, 0])], sim(), random.Random(0))
+        with self.assertRaises(PerturbationError):
+            Timeline([{"at_step": 0, "until_step": 5, "type": "apply_force",
+                       "target": "bowl", "args": {"wrench": [0, 0, 1, 0, 0, 0]}}],
+                     sim(), random.Random(0))
+
     def test_a_mutation_still_expands(self):
         line = Timeline([dict(spec(at_step=1, factor=0.5), until_step=4)],
                         sim(), random.Random(0))

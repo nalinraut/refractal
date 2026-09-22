@@ -203,6 +203,26 @@ PROTOCOLS = ("world", "observation", "action")
 #:
 #: The receipt shape follows from this rather than from the protocol -- two
 #: shapes for two temporalities, not three for three protocols.
+#:
+#: **A declaration is a commitment, not a description.** Temporality is not
+#: derivable: the same experiment can be either, depending on how it is written.
+#: Substituting a state vector on every observation is a wrapper; flipping a
+#: configuration flag once so the adapter builds a different one from then on is
+#: a mutation. Same finding, two temporalities.
+#:
+#: So the obligations are the contract that makes the choice honest rather than
+#: a check on a classification:
+#:
+#: * declare **wrapper** and you owe idempotence across repeated application,
+#:   and you owe having nothing to undo -- supplying an inverse contradicts the
+#:   declaration and is refused here.
+#: * declare **mutation** and you owe an inverse *if the effect is ever
+#:   sustained*. Not unconditionally: ``apply_force`` assigns a wrench that
+#:   persists, which makes it a mutation, and has no inverse because undoing an
+#:   assignment would clobber anything written since. It is legitimate and
+#:   simply cannot carry ``until_step``, which is enforced where sustaining
+#:   happens rather than at registration -- registration cannot know whether a
+#:   spec will carry one.
 TEMPORALITIES = ("mutation", "wrapper")
 
 _EFFECTS: dict[str, Effect] = {}
@@ -273,6 +293,13 @@ def effect(
         raise ValueError(
             f"effect {name!r} declares protocol {protocol!r}; known protocols "
             f"are {list(PROTOCOLS)}"
+        )
+    if temporality == "wrapper" and inverse is not None:
+        raise ValueError(
+            f"effect {name!r} declares wrapper and supplies an inverse. A "
+            "wrapper has nothing to undo -- it is in place while active and "
+            "absent otherwise, so it ends by not being applied. An inverse says "
+            "it leaves something behind, which is a mutation."
         )
     if temporality not in TEMPORALITIES:
         raise ValueError(
