@@ -25,7 +25,7 @@ from pathlib import Path
 from tests.test_bridge import install_stand_in_harness
 
 from refractal.execute.results import read_episodes
-from refractal.execute.vla_eval import BridgeError
+from refractal.execute.vla_eval import BridgeError, episode_key
 from refractal.execute.vla_eval_runner import run_vla_eval
 from refractal.schema.models import ExternalScene, ResourceShape
 from refractal.schema.plan import (
@@ -144,7 +144,11 @@ class PerturbingHarness(FakeHarness):
         specs_by_episode = dict(benchmark.get("params", {}).get("perturbations") or {})
         self.receipts = getattr(self, "receipts", {})
         for index in range(benchmark["episodes_per_task"]):
-            entry = specs_by_episode.get(str(index)) or {}
+            # The SHARED key, not this fake's own spelling of it. A fake that
+            # writes its own version of the thing it stands in for cannot see
+            # a mismatch at that boundary -- which is exactly how two sweeps
+            # ran unperturbed while this test passed.
+            entry = specs_by_episode.get(episode_key(index)) or {}
             sim = self.Sim()
             timeline = Timeline(entry.get("specs", ()), sim,
                                 rng_for_episode(str(entry.get("episode_id", index))))
@@ -839,7 +843,7 @@ class TestAPlanRoundTripsIntoARunnableConfig(unittest.TestCase):
         """A plan of local scenes is a perfectly valid plan that this backend
         cannot run. It has to say so, rather than building a config whose
         provider is None and failing inside the harness."""
-        from refractal.execute.vla_eval import BridgeError
+        from refractal.execute.vla_eval import BridgeError, episode_key
         from tests.test_vla_eval_loop import make_plan
 
         plan = make_plan(scenarios=2, checkpoints=("pi0",))
