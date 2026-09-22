@@ -198,6 +198,7 @@ def _row(
     harness_surface: str,
     physics_version: str,
     physics_surface: str,
+    benchmark_class: str | None = None,
     receipt: Any = None,
     episode_perturbations: list | None = None,
     server_url: str,
@@ -240,8 +241,7 @@ def _row(
         # when the episode ended before its trigger. Whether it actually fired
         # is the receipt's job, and `compare` decides between them -- an episode
         # that outran its trigger is not a point on its level's curve.
-        "benchmark_class": getattr(
-            getattr(scene, "external", None), "provider", None),
+        "benchmark_class": benchmark_class,
         "perturbation_count": len(episode_perturbations or ()),
         "perturbation_level": _declared_level(episode_perturbations),
         "perturbations_fired": receipt or None,
@@ -298,6 +298,7 @@ def _run_group(
     harness_version: str,
     harness_surface: str,
     physics: Any,
+    benchmark_override: str | None = None,
     concurrent_with: str | None,
 ) -> tuple[int, str | None]:
     """One harness invocation, start to written rows. Returns (rows, part path).
@@ -345,6 +346,7 @@ def _run_group(
         output_dir=scratch,
         max_steps=_max_steps(group),
         record_video=record_video,
+        benchmark_override=benchmark_override,
     )
     buffer = StepBuffer()
     frames = FrameBuffer(keep_every=frame_every) if record_video else None
@@ -384,6 +386,7 @@ def _run_group(
             scene,
             worker_id,
             receipt=(collected[index] if collected else None),
+            benchmark_class=config["benchmarks"][0]["benchmark"],
             episode_perturbations=_specs_for(outcome),
             session_id=session_id,
             execution_mode=execution_mode,
@@ -451,6 +454,11 @@ def run_vla_eval(
     resume: bool = True,
     record_video: bool = False,
     frame_every: int = 10,
+    #: The class to construct for a PERTURBED episode. Placement, so it comes
+    #: from the run rather than the catalog -- declaring it in a scene's
+    #: `external` block would move scene_hash and strand every existing result
+    #: as a sweep's baseline, for a class measured inert when unperturbed.
+    benchmark_override: str | None = None,
     provenance_plan: Plan | None = None,
 ) -> VlaEvalSummary:
     """Drive the harness once per (worker, checkpoint, seed) and write Parquet."""
@@ -531,6 +539,7 @@ def run_vla_eval(
                         harness_version=harness_version,
                         harness_surface=harness_surface,
                         physics=physics,
+                        benchmark_override=benchmark_override,
                         concurrent_with=",".join(sorted(alongside)) or None,
                     )
 

@@ -486,6 +486,49 @@ class TestTheExecutingClassIsProvenance(LoopCase):
                 self.assertNotIn(row["benchmark_class"], row[identity])
 
 
+class TestTheExecutingClassComesFromTheRun(LoopCase):
+    """Which class runs a perturbed episode is placement, so it is an argument
+    to `run` and not a field in the catalog.
+
+    Declaring it in a scene's `external` block would move scene_hash -- for a
+    class measured to produce bit-identical trajectories when nothing is
+    specified -- and would strand every result already recorded as a sweep's
+    baseline. That is precisely what base_scenario_hash was defined to protect.
+    """
+
+    OVERRIDE = "refractal_libero.perturbed:PerturbedLIBEROBenchmark"
+    SPEC = TestTheWholeRouteEndToEnd.SPEC
+
+    def test_an_unperturbed_plan_keeps_the_catalog_provider(self):
+        """The override applies to perturbed episodes only, so an ordinary run
+        constructs exactly what it always did."""
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        harness = PerturbingHarness()
+        self.run_loop(plan, harness, benchmark_override=self.OVERRIDE)
+        for config in harness.configs:
+            self.assertNotEqual(config["benchmarks"][0]["benchmark"], self.OVERRIDE)
+        for row in self.rows(plan):
+            self.assertNotEqual(row["benchmark_class"], self.OVERRIDE)
+
+    def test_a_perturbed_plan_gets_the_override_and_records_it(self):
+        plan = TestTheWholeRouteEndToEnd._perturbed_plan(self, at_step=5)
+        harness = PerturbingHarness()
+        self.run_loop(plan, harness, benchmark_override=self.OVERRIDE)
+        for config in harness.configs:
+            self.assertEqual(config["benchmarks"][0]["benchmark"], self.OVERRIDE)
+        for row in self.rows(plan):
+            self.assertEqual(row["benchmark_class"], self.OVERRIDE,
+                             "the row records what actually ran")
+
+    def test_it_reaches_no_identity(self):
+        plan = TestTheWholeRouteEndToEnd._perturbed_plan(self, at_step=5)
+        self.run_loop(plan, PerturbingHarness(), benchmark_override=self.OVERRIDE)
+        for row in self.rows(plan):
+            for identity in ("episode_id", "scenario_hash", "base_scenario_hash",
+                             "scene_hash", "task_hash"):
+                self.assertNotIn("Perturbed", row[identity])
+
+
 class TestResume(LoopCase):
     def test_a_completed_plan_re_runs_nothing(self):
         plan = make_plan(scenarios=3, checkpoints=("pi0", "pi05"))

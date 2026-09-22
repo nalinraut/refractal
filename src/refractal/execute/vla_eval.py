@@ -485,6 +485,7 @@ def build_eval_config(
     output_dir: str,
     max_steps: int,
     record_video: bool = False,
+    benchmark_override: str | None = None,
 ) -> dict[str, Any]:
     """The vla-eval config for one worker against one checkpoint.
 
@@ -509,7 +510,21 @@ def build_eval_config(
         "output_dir": output_dir,
         "benchmarks": [
             {
-                "benchmark": external.provider,
+                # The class the harness constructs. Overridden, never derived:
+                # running a perturbed episode needs a benchmark that can run a
+                # timeline, and WHICH class does that is placement -- measured,
+                # not asserted, by a claim that the perturbed LIBERO subclass
+                # produces bit-identical trajectories when nothing is specified.
+                #
+                # So it cannot live in the scene's `external` block, which is
+                # hashed: declaring it there would move scene_hash and strand
+                # every existing result as a sweep's baseline. It comes from the
+                # run instead, and the row records what actually ran.
+                "benchmark": (
+                    benchmark_override
+                    if benchmark_override and any(e.perturbations for e in episodes)
+                    else external.provider
+                ),
                 "subname": dict(external.ref).get("suite"),
                 "episodes_per_task": selection["episodes_per_task"],
                 "tasks": selection["tasks"],
