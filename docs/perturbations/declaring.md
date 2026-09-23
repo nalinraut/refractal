@@ -97,6 +97,63 @@ business; the refusal lists them when you get one wrong.
 there is nothing in between and no ordering. So it is a matched comparison at
 each value rather than a curve, which `compare` already does.
 
+### Dosing: `probability`
+
+The example above substitutes on every step. Add a rate and it applies on a
+declared fraction of them instead:
+
+```yaml
+    perturbations:
+      - at_step: 0
+        probability: 0.08
+        type: drop_observation
+        target: states
+        args: {fill: zeros}
+```
+
+**This is the field that lets you ask what a policy tolerates**, and it is
+worth being clear about why the obvious alternative does not.
+
+You might expect to sweep the *effect* and read how much of it the episode
+received. The trouble is that for many transforms, how much lands is decided
+by the trajectory — and the trajectory is the policy's. Two rotation
+conventions differ only over part of the space of orientations, so an episode
+is perturbed only on the steps it spends there. Measured on LIBERO, the
+trajectory moves that fraction about **six times more than the start state
+does**.
+
+So at one declared setting you get a spread of realized exposures across
+episodes, and the spread is mostly the policy's own doing. Worse, it can run
+backwards: a policy already going wrong may wander into the region where the
+perturbation bites, raising its own exposure. High exposure is then a symptom
+of failing rather than a cause of it, and a curve drawn through those points
+reads the wrong way round.
+
+`probability` has none of that. **The coin does not know what the policy did**,
+so the dose cannot be caused by the outcome. A result reads "fails above 8%
+corrupted observations" — a property of the policy, which transfers to any
+perturbation that corrupts observations at some rate, rather than a property of
+this scene's geometry.
+
+Three things follow.
+
+**The rate is the level a curve groups on.** Declare it and it becomes the
+sweep axis, whatever the effect's own arguments are called.
+
+**It is drawn from the episode's seed**, so the same episode is perturbed on
+the same steps every run, and different episodes get different draws. A dose
+that moved between runs would be unreproducible in exactly the way everything
+here exists to prevent.
+
+**Only transforms can carry one.** A state mutation persists, so applying it on
+a fraction of steps would compound rather than dose — it is refused with the
+list of effects that can.
+
+Check the realized rate against the declared one in the receipt. For an effect
+that changes the observation every time it applies, the two should agree; where
+they do not, the difference is the geometry described above, and that gap is
+the thing worth knowing.
+
 ### What the receipt says for these
 
 An observation effect applies on **every step it is active**, so its receipt is

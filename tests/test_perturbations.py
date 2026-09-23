@@ -1204,3 +1204,32 @@ class TestADeclaredDoseIsAssignedRatherThanObserved(unittest.TestCase):
             0.4,
             "it is the axis, and it belongs to the spec rather than the effect",
         )
+
+    def test_another_protocols_call_does_not_consume_this_specs_draws(self):
+        """Where the gate SITS, not just whether it fires.
+
+        `apply` is called once per protocol per step. A gate placed before the
+        protocol filter draws for every call rather than for the calls that
+        could actually apply, so an episode that also perturbs another channel
+        is dosed on different steps than one that does not -- from the same
+        seed, at the same declared rate.
+
+        Nothing about the rate would look wrong. The dose would simply stop
+        being a function of the episode, which is the property that makes it
+        reproducible.
+        """
+        alone = self._line(0.3, seed=5)
+        for index in range(600):
+            alone.apply(index, "observation", {"states": [1.0, 2.0]})
+
+        shared = self._line(0.3, seed=5)
+        for index in range(600):
+            # A call for a protocol this spec is not registered under. It must
+            # be inert for this spec, draws included.
+            shared.apply(index, "action", [0.0])
+            shared.apply(index, "observation", {"states": [1.0, 2.0]})
+
+        (a,) = [e for e in alone.fired if e.applications]
+        (b,) = [e for e in shared.fired if e.applications]
+        self.assertEqual(a.applications, b.applications,
+                         "the same episode, dosed on the same steps")

@@ -933,7 +933,18 @@ class Timeline:
                 continue
             # The dose gate, drawn AFTER the protocol and temporality filters so
             # a call for another protocol does not consume this spec's draws and
-            # shift the whole sequence.
+            # shift the whole sequence. A test pins it below the protocol
+            # filter by dosing one episode with and without a second protocol
+            # in play.
+            #
+            # Its position below the TEMPORALITY filter is currently
+            # UNEXERCISED, and honestly so: no protocol carries both a mutation
+            # and a wrapper today -- world effects are all mutations,
+            # observation effects all wrappers -- so a mutation is already gone
+            # on the protocol check before it could take a draw. The first
+            # protocol to carry both makes this reachable, and a fixture
+            # invented now would be a fixture for a situation that cannot
+            # arise.
             #
             # From the episode's own seeded generator, so the same episode is
             # perturbed on the same steps every time it runs. A dose that
