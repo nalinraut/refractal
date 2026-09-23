@@ -296,12 +296,21 @@ def _run_compose(args: argparse.Namespace, plan) -> int:
 
 def cmd_render(args: argparse.Namespace) -> int:
     """Write a deployment description from a plan. No Docker, no execution."""
-    from .render import ComposeSettings, RenderError, render_compose
+    from .render import (
+        ComposeSettings, RenderError, render_compose, render_k8s,
+    )
     from .schema.plan import read_plan
 
     plan = read_plan(args.plan)
+    # One settings object for both targets. They differ in what they EMIT, not
+    # in what they need to know -- and a second settings type would let the two
+    # drift on a question like ownership, which is exactly how `render` came to
+    # run containers as root while `run` did not.
+    render = render_k8s if args.target == "k8s" else render_compose
+    output = args.output or (
+        "refractal-jobs.yaml" if args.target == "k8s" else "docker-compose.yml")
     try:
-        text = render_compose(
+        text = render(
             plan,
             ComposeSettings(
                 servers=_servers(args.server),
@@ -338,11 +347,20 @@ def cmd_render(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    out = Path(args.output)
+    out = Path(output)
     out.write_text(text, encoding="utf-8")
-    print(f"  wrote {out}  ({text.count(chr(10) + '  ') and ''}"
-          f"{sum(len(s.workers) for s in plan.scenes)} service(s))")
-    print(f"  next:  mkdir -p {args.results} && docker compose -f {out} up")
+    workers = sum(len(s.workers) for s in plan.scenes)
+    unit = "Job" if args.target == "k8s" else "service"
+    print(f"  wrote {out}  ({workers} {unit}(s))")
+    if args.target == "k8s":
+        # `apply`, not `create`: re-applying is how a partially-run plan is
+        # resumed, and `create` refuses on the Jobs that already exist rather
+        # than leaving them alone.
+        print(f"  next:  kubectl apply -f {out}")
+        print(f"  then:  kubectl get jobs -l refractal.dev/plan="
+              f"{plan.plan_id.split(':', 1)[-1][:32]}")
+    else:
+        print(f"  next:  mkdir -p {args.results} && docker compose -f {out} up")
     return 0
 
 
@@ -590,9 +608,13 @@ def build_parser() -> argparse.ArgumentParser:
         "render", help="write a deployment description from a plan (no Docker)")
     render.add_argument("plan", help="path to plan.json")
     render.add_argument(
-        "--target", choices=("compose",), default="compose",
-        help="only 'compose' exists; k8s is explicitly out of scope")
-    render.add_argument("-o", "--output", default="docker-compose.yml")
+        "--target", choices=("compose", "k8s"), default="compose",
+        help="compose, or k8s (one Job per worker). k8s was deferred rather "
+             "than rejected: what blocked it was a claim that the harness "
+             "hardcodes its model server to localhost, which was wrong")
+    # Defaulted per target below, since "docker-compose.yml" full of Jobs
+    # would be a filename that lies about its contents.
+    render.add_argument("-o", "--output", default=None)
     render.add_argument(
         "--server", action="append", metavar="CKPT=URL",
         help="model server for a checkpoint. Point at the HOST, not a service name: "

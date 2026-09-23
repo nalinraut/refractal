@@ -21,6 +21,7 @@ from refractal.render import (
     RenderError,
     compose_services,
     render_compose,
+    render_k8s,
 )
 from refractal.schema.plan import PlanSchemaError, restrict_to_worker
 from tests.test_vla_eval_loop import make_plan
@@ -382,3 +383,92 @@ class TestBothEntryPointsRenderTheSameOwnership(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             service = self._render_via_cli(tmp, "--user", "4242:4242")
         self.assertEqual(service.get("user"), "4242:4242")
+
+
+class TestTheKubernetesTarget(unittest.TestCase):
+    """k8s was deferred, not rejected, and what deferred it was wrong.
+
+    The execute module has always described k8s as "rendered from plan.json,
+    never hand-written". What held it up was a claim in the design notes that
+    the harness hardcodes its model server to localhost, making multi-host look
+    blocked upstream -- a claim that came from a grep whose only hits were a
+    docstring example and some help text, and which was false: the URL is an
+    overridable default.
+    """
+
+    def _docs(self, **kw):
+        # A cluster-reachable address by default. The shared `settings` helper
+        # uses host.docker.internal, which this target refuses on purpose --
+        # and which is why every one of these errored the first time they ran.
+        kw.setdefault("servers", {"pi0": "ws://10.0.0.5:8000"})
+        self.plan = with_workers(make_plan(scenarios=2, checkpoints=("pi0",)), 2)
+        text = render_k8s(self.plan, settings(**kw))
+        return [d for d in yaml.safe_load_all(text) if d]
+
+    def test_one_job_per_worker(self):
+        docs = self._docs()
+        # Counted from the plan, not hardcoded: `with_workers` splits by TASK,
+        # so asking for two workers on a one-task plan gives one worker with
+        # episodes -- which the first version of this test asserted away.
+        expected = sum(len(s.workers) for s in self.plan.scenes)
+        self.assertEqual(len(docs), expected)
+        self.assertEqual({d["kind"] for d in docs}, {"Job"})
+        self.assertEqual(len({d["metadata"]["name"] for d in docs}), expected,
+                         "a name collision would silently drop a worker")
+
+    def test_the_worker_id_is_in_the_command(self):
+        """Not derived from a completion index. An Indexed Job would need an
+        index-to-worker lookup inside the container, putting part of the
+        placement where nobody reading the manifest can see it."""
+        docs = self._docs()
+        command = docs[0]["spec"]["template"]["spec"]["containers"][0]["command"]
+        self.assertIn("--worker", command)
+        ids = {w.worker_id for s in self.plan.scenes for w in s.workers}
+        self.assertIn(command[command.index("--worker") + 1], ids)
+
+    def test_backoff_is_zero(self):
+        """Resume is group-granular: a retried worker re-runs its whole group.
+        Kubernetes' default backoffLimit of 6 would do that six times,
+        unattended, which is the same reasoning behind Compose's restart: no."""
+        for doc in self._docs():
+            self.assertEqual(doc["spec"]["backoffLimit"], 0)
+            self.assertEqual(
+                doc["spec"]["template"]["spec"]["restartPolicy"], "Never")
+
+    def test_the_user_reaches_the_pod_security_context(self):
+        """The root-ownership hazard is the same one the Compose target had:
+        the run succeeds and leaves results their owner cannot delete."""
+        ctx = self._docs(user="4242:4243")[0]["spec"]["template"]["spec"]
+        self.assertEqual(ctx["securityContext"]["runAsUser"], 4242)
+        self.assertEqual(ctx["securityContext"]["runAsGroup"], 4243)
+        self.assertEqual(ctx["securityContext"]["fsGroup"], 4243)
+
+    def test_requests_equal_limits(self):
+        """Which is what puts the pod in Guaranteed QoS -- the precondition for
+        exclusive cores under cpuManagerPolicy=static. Without equality there
+        is no pinning available at all, however the kubelet is configured."""
+        res = self._docs()[0]["spec"]["template"]["spec"]["containers"][0]["resources"]
+        self.assertEqual(res["requests"], res["limits"])
+
+    def test_scratch_is_not_a_hostPath(self):
+        """Per-pod and disposable. A hostPath would put two workers' harness
+        scratch in one directory."""
+        volumes = {v["name"]: v for v in
+                   self._docs()[0]["spec"]["template"]["spec"]["volumes"]}
+        self.assertIn("emptyDir", volumes["scratch"])
+        self.assertNotIn("hostPath", volumes["scratch"])
+
+    def test_a_docker_internal_server_is_refused(self):
+        """`host.docker.internal` exists inside Docker and nowhere in a
+        cluster. The pod would start, fail to connect, and look like a dead
+        server rather than a name that was never going to resolve."""
+        with self.assertRaises(RenderError) as ctx:
+            self._docs(servers={"pi0": "ws://host.docker.internal:8000"})
+        self.assertIn("host.docker.internal", str(ctx.exception))
+
+    def test_the_plan_label_selects_one_experiment(self):
+        """So every pod of one comparison is addressable:
+        `kubectl get jobs -l refractal.dev/plan=<id>`."""
+        docs = self._docs()
+        labels = {d["metadata"]["labels"]["refractal.dev/plan"] for d in docs}
+        self.assertEqual(len(labels), 1)
