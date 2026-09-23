@@ -203,6 +203,22 @@ def experienced_its_level(row: Mapping[str, Any]) -> bool | None:
     makes it unusable for the curve in either direction -- and is the strongest
     argument for triggering at step 0 in any sweep where mid-episode timing is
     not itself the subject.
+
+    A transform reaches the same state by a second route, which cost a live
+    run to find. An effect that is legitimately identity on some inputs -- two
+    rotation conventions agree wherever the quaternion already lies in the
+    hemisphere one of them normalises to -- has episodes whose whole trajectory
+    stays where the two agree. It applied on every step and changed nothing.
+
+    That episode did not experience its level either, and it is the SAME
+    finding as outrunning a trigger rather than a new one: assigned a
+    perturbation, ran without it, and its scenario_hash keeps it out of the
+    baseline. Excluded, counted, reported.
+
+    Arriving from geometry rather than timing has one consequence worth
+    stating: firing at step 0 does not prevent it. Nothing anyone writes in a
+    catalog decides where a trajectory goes, so unlike the timing case this
+    cannot be designed away -- only measured and excluded.
     """
     count = row.get("perturbation_count")
     if not count:
@@ -210,7 +226,15 @@ def experienced_its_level(row: Mapping[str, Any]) -> bool | None:
     events = row.get("perturbations_fired") or []
     if not events:
         return False
-    return all(event.get("fired_step") is not None for event in events)
+    if not all(event.get("fired_step") is not None for event in events):
+        return False
+    # A wrapper that applied and never changed anything. `applications` is null
+    # for a state mutation, which perturbs every step it applies to by
+    # construction -- so this asks only of effects that can be identity.
+    for event in events:
+        if event.get("applications") and not event.get("applications_changed"):
+            return False
+    return True
 
 
 def build_units(

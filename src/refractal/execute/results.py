@@ -361,16 +361,23 @@ def check_receipts(rows: Iterable[dict[str, Any]]) -> None:
     field landed null. Every guard checked that a receipt ARRIVED; none checked
     that it arrived populated, and a live sweep was needed to notice.
 
-    A wrapper has a third way to arrive empty, and it needs its own check.
-    Its receipt is a digest pair and two counts, and a transform that ran on
-    every step while never changing anything has a full `applications` count
-    and a `applications_changed` of zero. Every field is populated; nothing
-    happened.
+**A wrapper that changed nothing is NOT refused here**, and an earlier
+    version of this was wrong to. Zero changes across a whole episode looks
+    like a transform hooked where its output is discarded, and it is equally
+    what a real episode looks like when the effect is legitimately identity on
+    that trajectory: two rotation conventions agree wherever the quaternion
+    already lies in the hemisphere one normalises to, so an episode that stays
+    there is perturbed on no step at all.
 
-    Note what is NOT checked: the first digest pair being equal. A wrapper may
-    be identity on some inputs and not others -- a rotation convention swap is
-    exactly that -- so equal digests at step one is ordinary rather than
-    suspicious. Only zero changes across the whole window is the failure.
+    That is a measurement -- exposure zero -- not a missing one. A live run
+    found this by being refused at episode 120, having written the same claim
+    into a test comment and then guarding against it.
+
+    It belongs where outrunning a trigger belongs: `experienced_its_level`
+    excludes the episode from the curve and reports it, and a comparison in
+    which NO episode experienced its level is refused there. Per-episode is
+    ordinary; run-wide is the failure, and only the analysis can see the
+    difference.
 
     Checked at the write, which is the earliest point that can see it and the
     loudest place to say so: the alternative is discovering it at analysis, or
@@ -397,17 +404,6 @@ def check_receipts(rows: Iterable[dict[str, Any]]) -> None:
             # HAS a fired step, so a check placed after that `continue` can
             # never run -- which is what the first version of this did, and
             # every test still passed because nothing reached it.
-            applications = event.get("applications")
-            if applications and not event.get("applications_changed"):
-                raise RefractalError(
-                    f"perturbation {event.get('effect')!r} applied on "
-                    f"{applications} steps and changed the observation on none "
-                    "of them. The receipt is fully populated and records a "
-                    "transform that passed its input through unchanged, which "
-                    "reads downstream as a level that was measured. Either the "
-                    "effect is a no-op on this scene, or it is hooked somewhere "
-                    "its output is discarded."
-                )
             if event.get("fired_step") is not None:
                 continue
             if not event.get("reason"):

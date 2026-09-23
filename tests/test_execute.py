@@ -113,27 +113,58 @@ class TestAReceiptMustSayWhatItMeans(unittest.TestCase):
         check([{"episode_id": "e", "perturbation_count": 0,
                 "perturbations_fired": []}])
 
-    def test_a_wrapper_that_changed_nothing_is_refused(self):
-        """The wrapper's own way of arriving empty.
+    def test_a_wrapper_that_changed_nothing_is_WRITTEN(self):
+        """It is a measurement, not a missing one, and refusing it was wrong.
 
-        Every field populated, a full application count, and the observation
-        identical on every one of them -- a transform hooked where its output
-        is discarded looks exactly like this, and downstream it reads as a
-        level that was measured.
+        Zero changes over a whole episode looks like a transform hooked where
+        its output is discarded. It is equally what a real episode looks like
+        when the effect is legitimately identity on that trajectory: two
+        rotation conventions agree wherever the quaternion already lies in the
+        hemisphere one of them normalises to, so an episode that stays there is
+        perturbed on no step at all.
 
-        This also guards the guard's PLACEMENT. A wrapper always has a
-        fired_step, so the first version of this check sat after the
-        `continue` that skips fired events and could never run. Every test
-        passed. This one fails if it moves back.
+        A live run found this by being refused at episode 120 -- after the same
+        claim had been written into a test comment here and then guarded
+        against. Per-episode is ordinary; run-wide is the failure, and only the
+        analysis can tell them apart.
         """
-        from refractal.schema.errors import RefractalError
+        self._write([{"effect": "substitute_observation", "target": None,
+                      "specified_step": 0, "fired_step": 0, "reason": None,
+                      "before_digest": "aa", "after_digest": "aa",
+                      "applications": 200, "applications_changed": 0}])
 
-        with self.assertRaises(RefractalError) as ctx:
-            self._write([{"effect": "substitute_observation", "target": None,
-                          "specified_step": 0, "fired_step": 0, "reason": None,
-                          "before_digest": "aa", "after_digest": "aa",
-                          "applications": 200, "applications_changed": 0}])
-        self.assertIn("changed the observation on none", str(ctx.exception))
+    def test_and_the_analysis_excludes_it_from_the_curve(self):
+        """Where the exclusion belongs: the same place outrunning a trigger
+        goes. Written, excluded, reported -- not refused at the write."""
+        from refractal.compare.pairing import experienced_its_level
+
+        self.assertIs(
+            experienced_its_level({
+                "perturbation_count": 1,
+                "perturbations_fired": [{
+                    "effect": "substitute_observation", "fired_step": 0,
+                    "applications": 200, "applications_changed": 0}]}),
+            False)
+        self.assertIs(
+            experienced_its_level({
+                "perturbation_count": 1,
+                "perturbations_fired": [{
+                    "effect": "substitute_observation", "fired_step": 0,
+                    "applications": 200, "applications_changed": 12}]}),
+            True)
+
+    def test_a_state_mutation_is_unaffected_by_that_rule(self):
+        """It has no `applications`, because it perturbs every step it applies
+        to by construction. The wrapper rule must not reach it."""
+        from refractal.compare.pairing import experienced_its_level
+
+        self.assertIs(
+            experienced_its_level({
+                "perturbation_count": 1,
+                "perturbations_fired": [{
+                    "effect": "scale_actuator", "fired_step": 0,
+                    "before": [20.0], "after": [10.0]}]}),
+            True)
 
     def test_a_wrapper_identity_on_SOME_steps_is_fine(self):
         """Not every wrapper changes every input, and the first pair being
