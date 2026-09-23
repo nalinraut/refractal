@@ -701,10 +701,49 @@ class ResultWriter:
             handle.write(plan_json.encode("utf-8"))
 
     def copy_catalog(self, catalog_root: str) -> None:
-        """Results and the definitions that produced them travel together."""
+        """Results and the definitions that produced them travel together.
+
+        **The walk is materialised before anything is written**, and the
+        destination is pruned out of it. Both are needed because the results
+        directory is very often *inside* the catalog -- ``-o ./results
+        --catalog .`` is the obvious way to run from a catalog directory, and
+        it is what the docs show.
+
+        `os.walk` is lazy, so writing into the tree it is walking makes it
+        descend into what it has just created. That is not a slow copy: the
+        catalog nests inside itself once per level until the path exceeds the
+        filesystem limit, and the error that surfaces is ``File name too
+        long`` -- which reads as a path-length problem rather than a copy that
+        was never going to terminate.
+
+        Pruning the destination is the second half, and is right on its own
+        merits: a provenance copy of the catalog should not contain a
+        half-written copy of the results it is provenance for.
+        """
         import os
 
-        for dirpath, _, filenames in os.walk(catalog_root):
+        root = os.path.abspath(catalog_root)
+        # Only meaningful for a local destination; an object store cannot be
+        # inside the catalog directory.
+        destination = os.path.abspath(self.prefix) if "://" not in self.prefix else None
+        entries = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            if destination is not None:
+                dirnames[:] = [
+                    d for d in dirnames
+                    if os.path.abspath(os.path.join(dirpath, d)) != destination
+                    and not os.path.abspath(os.path.join(dirpath, d)).startswith(
+                        destination + os.sep)
+                    # Also prune the results root itself, not only the
+                    # comparison directory inside it: the next run writes a
+                    # sibling comparison there and would otherwise be copied
+                    # into this one's provenance.
+                    and os.path.abspath(os.path.join(dirpath, d))
+                    != os.path.abspath(self.results_uri)
+                ]
+            entries.append((dirpath, list(filenames)))
+
+        for dirpath, filenames in entries:
             rel_dir = os.path.relpath(dirpath, catalog_root)
             for name in filenames:
                 if name.startswith("."):

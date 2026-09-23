@@ -744,3 +744,76 @@ class TestWhatTheEpisodeActuallyReceived(unittest.TestCase):
         than a missing value. `check_receipts` refuses to write it, so this
         pins the arithmetic rather than the policy."""
         self.assertEqual(self.exposure([self._wrapper(80, 0)]), 0.0)
+
+
+class TestCopyingACatalogThatContainsItsOwnResults(unittest.TestCase):
+    """`-o ./results --catalog .` is the obvious way to run from a catalog
+    directory, and it did not terminate.
+
+    `os.walk` is lazy, so writing the provenance copy into the tree being
+    walked makes it descend into what it has just created. The catalog nests
+    inside itself once per level until the path exceeds the filesystem limit.
+
+    What surfaced was `OSError: File name too long`, which reads as a
+    path-length problem -- a wrong diagnosis that points at the digest in the
+    directory name rather than at a copy that was never going to stop.
+    """
+
+    def _catalog(self, tmp):
+        import os
+
+        os.makedirs(f"{tmp}/cat/assets", exist_ok=True)
+        with open(f"{tmp}/cat/scenes.yaml", "w") as fh:
+            fh.write("scenes: []\n")
+        with open(f"{tmp}/cat/assets/thing.xml", "w") as fh:
+            fh.write("<mujoco/>\n")
+        return f"{tmp}/cat"
+
+    def _writer(self, results_uri):
+        from refractal.execute.results import ResultWriter
+
+        return ResultWriter(results_uri, "sha256:deadbeef")
+
+    def test_it_terminates_and_copies_the_catalog(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = self._catalog(tmp)
+            writer = self._writer(f"{catalog}/results")   # INSIDE the catalog
+            writer.copy_catalog(catalog)
+            copied = writer.fs.glob(f"{writer.prefix}/catalog/**")
+            names = {p.rsplit("/", 1)[-1] for p in copied}
+            self.assertIn("scenes.yaml", names)
+            self.assertIn("thing.xml", names)
+
+    def test_the_results_tree_is_not_copied_into_itself(self):
+        """Not merely terminating -- the provenance copy must not contain a
+        half-written copy of the results it is provenance for."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = self._catalog(tmp)
+            writer = self._writer(f"{catalog}/results")
+            writer.copy_catalog(catalog)
+            marker = f"{writer.prefix}/catalog/"
+            inside = [p[len(marker):] for p in writer.fs.glob(f"{marker}**")
+                      if p.startswith(marker)]
+            self.assertFalse(
+                [p for p in inside if "comparison_id=" in p or p.startswith("results")],
+                f"the results tree came along for the ride: {inside}",
+            )
+            self.assertEqual(sorted(inside), ["assets", "assets/thing.xml",
+                                              "scenes.yaml"])
+
+    def test_a_catalog_beside_the_results_still_copies_whole(self):
+        """The ordinary case must not be pruned by the fix."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = self._catalog(tmp)
+            writer = self._writer(f"{tmp}/elsewhere")
+            writer.copy_catalog(catalog)
+            names = {p.rsplit("/", 1)[-1]
+                     for p in writer.fs.glob(f"{writer.prefix}/catalog/**")}
+            self.assertIn("scenes.yaml", names)
+            self.assertIn("thing.xml", names)
