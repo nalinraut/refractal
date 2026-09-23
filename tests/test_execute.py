@@ -770,9 +770,28 @@ class TestCopyingACatalogThatContainsItsOwnResults(unittest.TestCase):
         return f"{tmp}/cat"
 
     def _writer(self, results_uri):
+        """With rows already written, which is what puts the results tree in
+        the walk's listing.
+
+        A first version of this created the writer and copied immediately. The
+        results directory did not exist yet, so `os.walk` never saw it and the
+        fixture could not reproduce the bug -- both mutations of the fix
+        survived against it while the tests stayed green.
+
+        Provenance is copied last in a real run, after the rows. The fixture
+        has to be in that state or it is testing a different situation.
+        """
+        import os
+
         from refractal.execute.results import ResultWriter
 
-        return ResultWriter(results_uri, "sha256:deadbeef")
+        writer = ResultWriter(results_uri, "sha256:deadbeef")
+        os.makedirs(f"{writer.prefix}/checkpoint=pi0/scene=s/episodes",
+                    exist_ok=True)
+        with open(f"{writer.prefix}/checkpoint=pi0/scene=s/episodes/part.parquet",
+                  "w") as fh:
+            fh.write("rows\n")
+        return writer
 
     def test_it_terminates_and_copies_the_catalog(self):
         import tempfile
