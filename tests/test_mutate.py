@@ -39,8 +39,9 @@ class Case(unittest.TestCase):
         mutate.run_suite = lambda python=None: (tests, failures, "")
 
     def mutate_it(self, **kw):
+        base = kw.pop("baseline", mutate.Baseline(10))
         return check("m", "src.py", [("value = 1", "value = 2")],
-                     baseline_tests=kw.pop("baseline_tests", 10), **kw)
+                     baseline=base, **kw)
 
 
 class TestItRefusesAnUntrustworthyRun(Case):
@@ -67,11 +68,18 @@ class TestItRefusesAnUntrustworthyRun(Case):
         with self.assertRaises(MutationError):
             self.mutate_it()
 
-    def test_a_mutation_that_breaks_nothing_is_a_finding_not_a_pass(self):
+    def test_a_mutation_that_breaks_nothing_is_UNDETERMINED_without_a_witness(self):
+        """Not a coverage gap. Not a pass either.
+
+        A mutation nothing notices means the check it breaks is untested, OR
+        that the mutation changes no behaviour at all. Those are opposite
+        findings and a failure count cannot tell them apart, so the result
+        stays undetermined until something shows the mutation did anything.
+        """
         self.given(tests=10, failures=0)
         with self.assertRaises(MutationError) as ctx:
             self.mutate_it()
-        self.assertIn("NOTHING FAILED", str(ctx.exception))
+        self.assertIn("UNDETERMINED", str(ctx.exception))
 
     def test_a_real_bite_returns_the_count(self):
         self.given(tests=10, failures=3)
@@ -96,7 +104,7 @@ class TestItAlwaysRestores(Case):
     def test_a_mutation_that_does_not_apply_leaves_the_file_alone(self):
         self.given(tests=10, failures=1)
         with self.assertRaises(MutationError) as ctx:
-            check("m", "src.py", [("absent", "x")], baseline_tests=10)
+            check("m", "src.py", [("absent", "x")], baseline=mutate.Baseline(10))
         self.assertIn("did not apply", str(ctx.exception))
         self.assertEqual(self.target.read_text(encoding="utf-8"), "value = 1\n")
 
@@ -134,3 +142,46 @@ class TestAnInterruptedSweep(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheBaselineIsATypeNotANumber(Case):
+    """A verdict from a red tree is not a verdict.
+
+    `main` refuses to start on a failing tree. Every caller reaching for
+    `check` directly was trusting itself to have done the same, and that failed
+    exactly once in the way it always does: the caller took the test count from
+    `run_suite` and threw the failure count away. Two sweeps of verdicts were
+    computed against a tree already broken by an edit to the mutation runner
+    itself, so a kill might have been the pre-existing failure and a survival
+    might have been masked by it.
+
+    So the check moved to where the evidence is used rather than where it was
+    convenient to put it -- which is the same move that put the test-count
+    check here rather than in the caller.
+    """
+
+    def test_a_bare_count_is_refused(self):
+        """The shape of the misuse: a caller that has not proven the tree was
+        green cannot produce the thing `check` requires."""
+        self.given(tests=10, failures=3)
+        with self.assertRaises(MutationError) as ctx:
+            self.mutate_it(baseline=10)
+        self.assertIn("green_baseline", str(ctx.exception))
+
+    def test_and_the_file_is_never_touched(self):
+        """It refuses BEFORE applying, so a bad call cannot also leave the
+        tree mutated."""
+        self.given(tests=10, failures=3)
+        with self.assertRaises(MutationError):
+            self.mutate_it(baseline=10)
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "value = 1\n")
+
+    def test_a_red_tree_yields_no_baseline_at_all(self):
+        self.given(tests=10, failures=2)
+        with self.assertRaises(MutationError) as ctx:
+            mutate.green_baseline()
+        self.assertIn("already failing", str(ctx.exception))
+
+    def test_a_green_tree_yields_one(self):
+        self.given(tests=10, failures=0)
+        self.assertEqual(mutate.green_baseline(), 10)

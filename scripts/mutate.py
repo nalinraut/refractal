@@ -22,6 +22,25 @@ counter says so. The test *count* is checked against a baseline taken from the
 unmutated tree, so a run that executes a subset is refused as loudly as one that
 executes nothing.
 
+A surviving mutation is not yet a finding
+-----------------------------------------
+
+A mutation that nothing notices means one of two very different things:
+
+    the check it breaks is not tested        -- a real gap
+    the mutation does not change behaviour   -- nothing at all
+
+These look identical from a failure count, and the second is easy to write by
+accident: a rewrite that moves a guard past a filter it was already past, an
+operator swapped where the operands are equal. One was nearly recorded as a
+coverage gap here.
+
+So survival now requires a **witness**: a snippet shown to produce different
+output under the original and the mutant. Without one the result is
+UNDETERMINED rather than a gap -- the same rule as ``0 failures from 0 tests``,
+one level up. A mutation is an instrument, and an instrument that did not move
+says nothing about what it was pointed at.
+
 Restoring
 ---------
 
@@ -81,12 +100,53 @@ def run_suite(python: str | None = None) -> tuple[int, int, str]:
     return int(match.group(1)), len(OUTCOME.findall(output)), output
 
 
+class Baseline(int):
+    """A test count from a tree that was green when it was taken.
+
+    A plain int cannot carry that, and every caller reaching for `check`
+    directly was left to remember it. One did not -- it destructured the
+    failure count away and swept a red tree, so two runs of verdicts meant
+    nothing. The precondition is a type now rather than a convention.
+    """
+
+    __slots__ = ()
+
+
+def green_baseline(python: str | None = None) -> Baseline:
+    """Run the suite and return its size, refusing to return one if it is red."""
+    tests, failures, _ = run_suite(python)
+    if failures:
+        raise MutationError(
+            f"the tree is already failing {failures} test(s). Nothing can be "
+            "concluded about any mutation from a run that was red to begin "
+            "with. Fix the tree, then take a baseline."
+        )
+    return Baseline(tests)
+
+
+def run_witness(source: str, python: str | None = None) -> str:
+    """Run a snippet against the tree as it currently stands.
+
+    Its whole job is to show that a mutation changed something. Failure is a
+    result rather than an error -- a mutant that makes the witness raise has
+    demonstrably changed behaviour -- so the return code and stderr are part of
+    the answer, not an exception.
+    """
+    proc = subprocess.run(
+        [python or sys.executable, "-c", source],
+        cwd=ROOT, capture_output=True, text=True,
+        env={"PYTHONPATH": "src", "PATH": "/usr/bin:/bin"},
+    )
+    return f"rc={proc.returncode}\n{proc.stdout}\n{proc.stderr.strip()[-300:]}"
+
+
 def check(
     name: str,
     path: str,
     pairs: list[tuple[str, str]],
     *,
-    baseline_tests: int,
+    baseline: Baseline,
+    witness: str | None = None,
     python: str | None = None,
 ) -> int:
     """Apply a mutation, run the suite, restore, and report how many tests died.
@@ -94,9 +154,23 @@ def check(
     Raises rather than returning zero when the run itself was not trustworthy:
     a suite that executed a different number of tests than the baseline is not
     evidence about the mutation, whichever direction it moved.
+
+    ``witness`` is a snippet that must behave differently under the mutant. It
+    is what separates a coverage gap from a mutation that changed nothing, and
+    it is only consulted when the suite stays green -- a mutation the tests
+    already killed needs no further proof that it did something.
     """
     target = ROOT / path
     original = target.read_text(encoding="utf-8")
+    if not isinstance(baseline, Baseline):
+        raise MutationError(
+            f"{name}: `baseline` must come from `green_baseline()`, which "
+            "refuses a tree that is already failing. Passing a bare count lets "
+            "a red baseline through, and then a kill may be the pre-existing "
+            "failure while a survival is masked by it -- which happened, from "
+            "a caller that took the test count and discarded the failures."
+        )
+    before = run_witness(witness, python) if witness else None
     # A sentinel, because the restore lives in a `finally` and SIGKILL does not
     # run one. An interrupted sweep leaves the tree mutated and the next run's
     # baseline fails for a reason that looks like a real regression -- which is
@@ -108,21 +182,39 @@ def check(
         raise MutationError(f"{name}: the mutation did not apply -- {exc}") from exc
     try:
         tests, failures, output = run_suite(python)
+        after = run_witness(witness, python) if witness else None
     finally:
         target.write_text(original, encoding="utf-8")
         SENTINEL.unlink(missing_ok=True)
 
-    if tests != baseline_tests:
+    if tests != baseline:
         raise MutationError(
             f"{name}: the mutated run executed {tests} tests, the baseline "
-            f"executed {baseline_tests}. A different set of tests is not "
+            f"executed {int(baseline)}. A different set of tests is not "
             "evidence about this mutation. Refusing to report a number."
         )
     if failures == 0:
+        if witness is None:
+            raise MutationError(
+                f"{name}: UNDETERMINED. The mutation applied and nothing "
+                "failed, which means either the check it breaks is untested or "
+                "the mutation changes no behaviour at all. Those are opposite "
+                "findings and a failure count cannot tell them apart. Supply a "
+                "witness -- a snippet that behaves differently under the "
+                "mutant -- and this can say which."
+            )
+        if after == before:
+            raise MutationError(
+                f"{name}: EQUIVALENT, so this says nothing about coverage. The "
+                "witness behaved identically with and without the mutation, so "
+                "the mutation did not change what the code does. Write a "
+                "stronger mutation, or accept that this line has no observable "
+                f"effect to break.\n    witness gave: {before!r}"
+            )
         raise MutationError(
-            f"{name}: the mutation applied and NOTHING FAILED. Either the "
-            "check it breaks is not tested, or the mutation does not change "
-            "behaviour. Both are findings; neither is a pass."
+            f"{name}: SURVIVED, and the witness proves it is a real gap. The "
+            "mutation demonstrably changes behaviour and the whole suite stayed "
+            f"green.\n    original: {before!r}\n    mutant:   {after!r}"
         )
     return failures
 
@@ -134,12 +226,12 @@ def main(argv: list[str]) -> int:
     except MutationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    tests, failures, _ = run_suite(python)
-    if failures:
-        print(f"the tree is not green ({failures} failing); fix before mutating",
-              file=sys.stderr)
+    try:
+        base = green_baseline(python)
+    except MutationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(f"baseline: {tests} tests, green")
+    print(f"baseline: {int(base)} tests, green")
     return 0
 
 
