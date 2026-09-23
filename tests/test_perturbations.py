@@ -1109,3 +1109,98 @@ class TestTheTwoPathsDoNotRunEachOthersSpecs(unittest.TestCase):
             ["scale_actuator", "substitute_observation"],
             "and both appear in the receipt, each from its own path",
         )
+
+
+class TestADeclaredDoseIsAssignedRatherThanObserved(unittest.TestCase):
+    """`probability` makes exposure exogenous, which is the whole point.
+
+    The measured alternative does not support the experiment people want from
+    it. An effect whose strength depends on the trajectory -- two rotation
+    conventions differ only where the quaternion's scalar part is negative --
+    has an exposure the policy itself determines. Measured on LIBERO: the
+    trajectory moves exposure about six times more than the start state does,
+    so at one declared level the spread across episodes is mostly the policy's
+    doing.
+
+    That makes "success against realized exposure" a correlation, and one
+    pointing the wrong way as easily as the right one: a policy already failing
+    may wander into the region where the conventions differ, raising its own
+    exposure. High exposure is then a symptom.
+
+    A declared dose has none of that. The coin does not know what the policy
+    did, so the treatment cannot be caused by the outcome, and "fails above
+    8% corrupted observations" is a statement about the policy rather than
+    about this scene's geometry.
+    """
+
+    def _line(self, probability, seed=0):
+        from refractal.perturbations import Timeline
+
+        return Timeline(
+            specs=[{"at_step": 0, "type": "drop_observation", "target": "states",
+                    "args": {"fill": "zeros"}, "probability": probability}],
+            primitives=sim(),
+            rng=random.Random(seed),
+        )
+
+    def _run(self, line, steps=2000):
+        for index in range(steps):
+            line.apply(index, "observation", {"states": [1.0, 2.0]})
+        (event,) = [e for e in line.fired if e.applications]
+        return event
+
+    def test_the_realized_rate_matches_the_declared_one(self):
+        """Verified rather than assumed: the receipt is what says the dose
+        landed, exactly as it does for a torque limit."""
+        event = self._run(self._line(0.25))
+        self.assertAlmostEqual(event.applications / 2000, 0.25, places=1)
+
+    def test_every_application_changed_so_exposure_equals_the_dose(self):
+        """Blanking a live field always changes it, which is what makes this
+        effect a clean dose -- realized exposure is the declared rate rather
+        than the rate times some geometric factor."""
+        event = self._run(self._line(0.25))
+        self.assertEqual(event.applications_changed, event.applications)
+
+    def test_the_same_episode_is_dosed_identically_every_run(self):
+        """A dose that moved between runs would be unreproducible in exactly
+        the way this design exists to prevent."""
+        first = self._run(self._line(0.3, seed=11))
+        again = self._run(self._line(0.3, seed=11))
+        self.assertEqual(first.applications, again.applications)
+
+    def test_different_episodes_get_different_draws(self):
+        """Otherwise every episode is perturbed on the same steps and the dose
+        is one sample repeated."""
+        a = self._run(self._line(0.3, seed=1))
+        b = self._run(self._line(0.3, seed=2))
+        self.assertNotEqual(a.applications, b.applications)
+
+    def test_a_state_mutation_cannot_carry_one(self):
+        """It persists, so a fraction of steps would compound rather than dose.
+        Refused where until_step on an uninvertible effect is refused, and for
+        the same kind of reason: not every effect has the semantics."""
+        from refractal.perturbations import PerturbationError, Timeline
+
+        with self.assertRaises(PerturbationError) as ctx:
+            Timeline([dict(spec(at_step=0, factor=0.5), probability=0.5)],
+                     sim(), random.Random(0))
+        self.assertIn("rate of exposure", str(ctx.exception))
+
+    def test_a_zero_dose_is_refused(self):
+        from refractal.perturbations import PerturbationError
+
+        with self.assertRaises(PerturbationError) as ctx:
+            self._line(0.0)
+        self.assertIn("unperturbed episode", str(ctx.exception))
+
+    def test_the_dose_is_the_level_a_curve_groups_on(self):
+        from refractal.execute.vla_eval_runner import _declared_level
+
+        self.assertEqual(
+            _declared_level([{"at_step": 0, "type": "drop_observation",
+                              "target": "states", "args": {"fill": "zeros"},
+                              "probability": 0.4}]),
+            0.4,
+            "it is the axis, and it belongs to the spec rather than the effect",
+        )

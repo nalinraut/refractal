@@ -814,6 +814,26 @@ class Timeline:
             ending["_ends"] = True
             expanded.append(ending)
 
+        for spec in self.specs:
+            probability = spec.get("probability")
+            if probability is None:
+                continue
+            if not 0.0 < float(probability) <= 1.0:
+                raise PerturbationError(
+                    f"probability {probability} is not in (0, 1]. Zero would "
+                    "declare a perturbation that never applies, which is an "
+                    "unperturbed episode wearing a perturbed identity."
+                )
+            if temporality_of(spec["type"]) != "wrapper":
+                raise PerturbationError(
+                    f"{spec['type']!r} cannot carry a probability: it changes "
+                    "simulator state, which persists, so applying it on a "
+                    "fraction of steps would compound rather than dose. A "
+                    "probability is a rate of exposure, and only an effect "
+                    "that is reapplied every step has one. Effects that can: "
+                    f"{sorted(n for n in _EFFECTS if temporality_of(n) == 'wrapper')}."
+                )
+
         self._pending = sorted(expanded, key=lambda s: (s["at_step"], s["type"]))
         for spec in self._pending:
             if spec["type"] not in _EFFECTS:
@@ -910,6 +930,17 @@ class Timeline:
             if declared is None or declared[0] != protocol:
                 continue
             if temporality_of(spec["type"]) != "wrapper":
+                continue
+            # The dose gate, drawn AFTER the protocol and temporality filters so
+            # a call for another protocol does not consume this spec's draws and
+            # shift the whole sequence.
+            #
+            # From the episode's own seeded generator, so the same episode is
+            # perturbed on the same steps every time it runs. A dose that
+            # changed between runs would be unreproducible in the one way this
+            # whole design exists to prevent.
+            probability = spec.get("probability")
+            if probability is not None and self.rng.random() >= float(probability):
                 continue
             transformed = _EFFECTS[spec["type"]](
                 self.primitives, value, spec.get("target"),

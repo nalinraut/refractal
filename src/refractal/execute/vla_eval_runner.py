@@ -152,6 +152,12 @@ def _declared_level(specs: list | None) -> float | None:
     """
     if not specs or len(specs) != 1:
         return None
+    # A declared dose IS the level. It is the axis the curve groups on, and it
+    # belongs to the spec rather than to the effect -- any wrapper can carry
+    # one, so no effect declares it as its level argument.
+    probability = specs[0].get("probability")
+    if probability is not None:
+        return float(probability)
     key = level_arg_of(specs[0].get("type", ""))
     if key is None:
         return None          # categorical, by the effect's own declaration
