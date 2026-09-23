@@ -149,10 +149,45 @@ here exists to prevent.
 a fraction of steps would compound rather than dose — it is refused with the
 list of effects that can.
 
+#### The declared rate is not the realized one, and the gap is not small
+
+A rate is a coin per step, so what an episode actually receives varies around
+it — more so the shorter the episode. Measured through the real gate, 200
+episodes per cell:
+
+| declared | over 100 steps | over 220 steps |
+|---|---|---|
+| 5% | 2.0% – 9.0% | 2.7% – 7.3% |
+| 10% | 5.0% – 15.0% | 7.3% – 13.2% |
+| 25% | 18.0% – 33.0% | 20.9% – 29.5% |
+
+*(central 90% of episodes; LIBERO-Spatial caps at 220 steps)*
+
+At 5% over 100 steps an episode receives anywhere from 0.4× to 1.8× the
+declared rate. **Do not read a per-episode declared rate as exact.** The
+receipt's realized exposure is what says what that episode got.
+
+**Group on the declared rate anyway.** The spread is per episode; the mean over
+a cell converges to the declared value, so it is within-cell noise that episode
+count handles — the ordinary reason to run more episodes, not a reason to
+change the axis.
+
+Grouping on realized exposure instead is worse, and not obviously so. Episode
+length is itself an outcome — a task that succeeds stops early — and a shorter
+episode has a wider spread of realized rates. So the extreme bins fill with
+short episodes and the middle with long ones. Simulating a case where exposure
+has **no effect at all** and success is a coin flip, binning by realized
+exposure produces an apparent swing from 72% to 96%. Every point of it is
+artifact.
+
+That is a different confound from the one `probability` was introduced to
+remove, arriving by a different route, and it is why the declared rate is the
+axis and the measured one is the check.
+
 Check the realized rate against the declared one in the receipt. For an effect
-that changes the observation every time it applies, the two should agree; where
-they do not, the difference is the geometry described above, and that gap is
-the thing worth knowing.
+that changes the observation every time it applies, the two should agree within
+that spread; where they do not, the difference is the geometry described above,
+and that gap is the thing worth knowing.
 
 ### What the receipt says for these
 
