@@ -321,3 +321,64 @@ class TestTheRenderCommandAcceptsWhatItEmits(unittest.TestCase):
                 service["command"][service["command"].index("--frame-every") + 1], "5")
             self.assertEqual(
                 service["deploy"]["resources"]["reservations"]["devices"][0]["count"], 1)
+
+
+def _write_minimal_plan(path):
+    """The smallest plan the renderer accepts, written to disk."""
+    import json
+
+    plan = with_workers(make_plan(scenarios=2, checkpoints=("pi0",)), 1)
+    json.dump(plan.model_dump(mode="json"), open(path, "w"))
+
+
+class TestBothEntryPointsRenderTheSameOwnership(unittest.TestCase):
+    """`run --backend compose` and `render` produce the same file, and one of
+    them was producing containers that run as root.
+
+    `run` defaulted `user` to the caller's uid:gid. `render` passed
+    `args.user` straight through, so omitting the flag emitted no `user:` key
+    at all -- and a container with no `user:` is root.
+
+    **The failure is quiet in the worst direction.** The run succeeds, because
+    root can write anywhere. What it leaves behind is a results tree the person
+    who launched it does not own: they cannot delete it, cannot overwrite it,
+    and a later run resuming into it fails on a permission error that says
+    nothing about where the ownership came from.
+
+    Found by a smoke test whose output directory could not be removed
+    afterwards -- and the rendered file already carried a comment warning about
+    root-owned bind mounts, which the renderer was itself creating.
+    """
+
+    def _render_via_cli(self, tmp, *extra):
+        """Through the command handler, because that is where the defaulting
+        lives -- ComposeSettings would happily take None either way."""
+        import os
+
+        from refractal.cli import main
+
+        plan_path = f"{tmp}/plan.json"
+        _write_minimal_plan(plan_path)
+        out = f"{tmp}/compose.yml"
+        code = main(["render", plan_path, "--target", "compose",
+                     "--server", "pi0=ws://h:1", "--results", tmp,
+                     "-o", out, *extra])
+        self.assertEqual(code, 0)
+        doc = yaml.safe_load(open(out).read())
+        return next(iter(doc["services"].values()))
+
+    def test_render_without_user_still_pins_the_caller(self):
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self._render_via_cli(tmp)
+        self.assertEqual(service.get("user"), f"{os.getuid()}:{os.getgid()}",
+                         "a container with no user: runs as root")
+
+    def test_an_explicit_user_still_wins(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self._render_via_cli(tmp, "--user", "4242:4242")
+        self.assertEqual(service.get("user"), "4242:4242")

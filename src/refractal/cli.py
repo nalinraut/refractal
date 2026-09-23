@@ -305,7 +305,22 @@ def cmd_render(args: argparse.Namespace) -> int:
             plan,
             ComposeSettings(
                 servers=_servers(args.server),
-                user=args.user,
+                # Defaulted here the way `run --backend compose` defaults it.
+                # It was not, and the two entry points rendering the same file
+                # disagreed: `run` produced containers owned by the caller,
+                # `render` produced containers running as root.
+                #
+                # The failure is quiet in the worst way. The run SUCCEEDS --
+                # root can write anywhere -- and leaves every result file
+                # root-owned, so the person who launched it cannot delete or
+                # overwrite their own results, and a later run resuming into
+                # that directory fails on a permission error that says nothing
+                # about its cause.
+                #
+                # The rendered file already carries a comment warning about
+                # exactly this for the bind-mount target. It was warning about
+                # a hazard the renderer was creating.
+                user=args.user or f"{os.getuid()}:{os.getgid()}",
                 plan_file=args.plan_file or args.plan,
                 catalog_dir=args.catalog,
                 results_dir=args.results,
