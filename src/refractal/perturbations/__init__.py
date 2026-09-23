@@ -937,14 +937,17 @@ class Timeline:
             # filter by dosing one episode with and without a second protocol
             # in play.
             #
-            # Its position below the TEMPORALITY filter is currently
-            # UNEXERCISED, and honestly so: no protocol carries both a mutation
-            # and a wrapper today -- world effects are all mutations,
-            # observation effects all wrappers -- so a mutation is already gone
-            # on the protocol check before it could take a draw. The first
-            # protocol to carry both makes this reachable, and a fixture
-            # invented now would be a fixture for a situation that cannot
-            # arise.
+            # Its position below the TEMPORALITY filter is, today, not merely
+            # untested but EQUIVALENT: moving it above changes no behaviour any
+            # witness can detect, because no protocol carries both a mutation
+            # and a wrapper -- world effects are all mutations, observation
+            # effects all wrappers -- so a mutation is already gone on the
+            # protocol check before it could take a draw.
+            #
+            # Equivalent-for-now rather than equivalent. The first protocol to
+            # carry both makes the two orders differ, and the mutation becomes
+            # a real finding at that point rather than a fixture invented for a
+            # situation that cannot yet arise.
             #
             # From the episode's own seeded generator, so the same episode is
             # perturbed on the same steps every time it runs. A dose that
