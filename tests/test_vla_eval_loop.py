@@ -1276,3 +1276,41 @@ class TestExposureReachesTheParquet(LoopCase):
         self.run_loop(plan, ObservationPerturbingHarness())
         for row in self.rows(plan):
             self.assertIsNone(row["perturbation_exposure"])
+
+
+class TestTheResourceReceiptReachesTheParquet(LoopCase):
+    """The declaration that had no receipt now has one, over the whole route.
+
+    `vram_per_env_mb: 0` removed the planner's GPU constraint rather than
+    skewing it, and cost fifteen hours of workers spinning on an EGL context
+    they would never get. What makes a declaration checkable is the observed
+    figure landing in the artifact -- not a helper that could compute it.
+
+    The distinction under test is absent versus zero. A worker whose platform
+    will not attribute GPU memory -- a container, whose pid is in another
+    namespace -- must write NULL, because a zero here is indistinguishable from
+    the false declaration that started this.
+    """
+
+    def test_rss_lands_and_is_plausible(self):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness())
+        rows = self.rows(plan)
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertIsNotNone(row["peak_rss_mb"],
+                                 "RSS is measurable everywhere; absent means "
+                                 "nothing sampled, which would be a bug here")
+            self.assertGreater(row["peak_rss_mb"], 5)
+            self.assertLess(row["peak_rss_mb"], 100_000)
+
+    def test_vram_is_absent_rather_than_zero_when_unattributable(self):
+        """On a machine with no GPU, or in a container, the figure cannot be
+        attributed. Absent says so; 0 would claim the worker used none."""
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness())
+        for row in self.rows(plan):
+            self.assertNotEqual(
+                row["peak_vram_mb"], 0,
+                "0 means 'used none'. Unattributable must be NULL -- the two "
+                "were conflated once and it removed the planner's constraint.")
