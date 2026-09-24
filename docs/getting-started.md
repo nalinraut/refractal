@@ -145,6 +145,8 @@ The exit code is the gate; the text is for the human deciding what to do about i
 results/comparison_id=82b73f18…/
   plan.json                          the experiment, copied in
   catalog/                           the source, copied in
+  render/<digest>.json               what was supplied at RUN time
+  harness/<surface>.json             digests of the code that ran
   checkpoint=baseline/scene=cube-bowl-v1/episodes/part-….parquet
   checkpoint=candidate/scene=cube-bowl-v1/episodes/part-….parquet
 ```
@@ -153,6 +155,27 @@ Partitioned by comparison, checkpoint and scene, so several workers write
 concurrently without coordinating and a later run can list what already exists.
 One row per episode, with the identity it was run under and the provenance of the
 process that ran it.
+
+The four provenance entries answer different questions, and the split is the
+point:
+
+| | |
+|---|---|
+| `plan.json` | what the experiment **is** — the identity `comparison_id` digests |
+| `catalog/` | where it came from, so the run can explain itself later |
+| `render/` | server addresses, backend, results URI — what was supplied when it ran |
+| `harness/` | per-file digests of the harness code that actually loaded |
+
+`render/` is recorded and deliberately **not** hashed. A server address is a
+property of a machine, not of an experiment; folding it into `plan_id` would
+make the same experiment on two machines two experiments — the same reason
+`results_uri` is excluded, since otherwise writing to `./results` and to `s3://`
+produces ids that never join.
+
+It is keyed by a digest of those settings and appended rather than overwritten,
+so a comparison resumed on a second machine keeps both. **More than one entry
+means the runs did not agree about how they were deployed**, which is what
+somebody needs to see before explaining a difference in the numbers.
 
 ## What to change next
 
