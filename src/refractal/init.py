@@ -96,7 +96,18 @@ scenario_sets:
       cube_x:  {range: [0.05, 0.20], steps: 6}
       cube_y:  {range: [-0.10, 0.10], steps: 5}
       bowl_yaw: {value: 0.0}
-    perturbations: []   # reserved; validated, not executed yet
+    # Empty here because this example has no simulator behind it, and a
+    # perturbation acts on one: it changes the world mid-episode -- a weaker
+    # gripper, a displaced object -- or what the policy is shown of it.
+    #
+    # Declared as data so it is hashed into the scenario, which means a
+    # perturbed episode is a DIFFERENT experiment from its unperturbed
+    # counterpart and cannot silently join it. Each episode also carries a
+    # base identity covering the unperturbed scenario, so results recorded
+    # before you started perturbing become the baseline end of a later sweep.
+    #
+    # See docs/perturbations/ once you have a real scene.
+    perturbations: []
 """
 
 RUN = """\
