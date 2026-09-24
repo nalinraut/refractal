@@ -87,9 +87,31 @@ second calls the first. These are they:
 | `--video` | emit `--video` in each service's command |
 | `--frame-every N` | keep every Nth frame, default 10 |
 
-`render` additionally takes `--target compose` (the only target; k8s is out of
-scope), `-o/--output` for where to write, and `--plan-file` for the host path to
-the plan when it differs from the path you passed.
+`render` additionally takes `--target`, `-o/--output` for where to write, and
+`--plan-file` for the host path to the plan when it differs from the path you
+passed.
+
+Two targets exist. `compose` is the default and writes a Compose file with one
+service per worker. `k8s` writes one Kubernetes Job per worker, in a single
+multi-document YAML, and defaults its output to `refractal-jobs.yaml`.
+
+The Kubernetes target states three things it cannot promise, in the rendered
+file's own header rather than here:
+
+* `hostPath` results are correct on one node and wrong the moment two workers
+  land on different ones — each writes into a different filesystem and the
+  comparison splits in half with no error anywhere. A real cluster needs one
+  ReadWriteMany volume.
+* The `cpu` limits are not the `cpuset` the planner computed. Requests are set
+  equal to limits, which earns Guaranteed QoS, but exclusive cores also need
+  the kubelet running `cpuManagerPolicy: static`.
+* `backoffLimit: 0` is deliberate. Resume is group-granular, so a retried
+  worker re-runs its whole group; Kubernetes' default of 6 would do that six
+  times, unattended.
+
+It refuses a server addressed as `host.docker.internal`, which exists inside
+Docker and nowhere in a cluster: the pod would start, fail to connect, and look
+like a dead server rather than a name that was never going to resolve.
 
 `run --backend compose` additionally takes:
 
