@@ -24,6 +24,7 @@ people running one experiment would produce artifacts that could not join.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -94,14 +95,62 @@ class ComposeSettings:
     #: environment and dies on its first frame rather than at preflight.
     gpus: int = 0
 
-    def image_for(self, engine: str) -> str:
-        image = {**DEFAULT_IMAGES, **self.images}.get(engine)
+    def image_for(self, engine: str, provider: str | None = None) -> str:
+        """The image for one scene: by provider if it has one, else by engine.
+
+        Engine alone is too coarse, and the comment that used to sit here --
+        "an engine decides the image because the image exists to provide the
+        engine" -- described an image that does not exist.
+        `refractal-libero:local` is 8.94 GB of MuJoCo AND LIBERO AND the
+        harness: named for the engine, carrying the benchmark. That holds
+        while one engine means one benchmark, and breaks the moment a catalog
+        wants LIBERO and RoboCasa in one comparison, since both are `mujoco`.
+
+        What belongs in the catalog is the REQUIREMENT, not the image, and it
+        is already there: an external scene declares its provider, which is
+        exactly "what this scene needs", is already part of identity, and
+        already survives the compile into plan.json -- its own docstring says
+        it is carried "so a backend can name the benchmark that owns this
+        scene without the catalog".
+
+        So the provider is the key when there is one, and the engine is the
+        fallback, which is what a local MJCF scene has and all it needs.
+
+        The provider is an import string, so a key may name any dotted or
+        colon-separated token of it: ``--image libero=...`` matches
+        ``vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark``. Two keys
+        matching one provider is refused rather than resolved by declaration
+        order -- picking one silently is how a scene ends up in the wrong
+        image, and the wrong image is a different benchmark.
+        """
+        images = {**DEFAULT_IMAGES, **self.images}
+        if provider:
+            if provider in images:
+                return images[provider]
+            tokens = {t.lower() for t in re.split(r"[.:]", provider) if t}
+            # Only user-supplied keys token-match. Engine names stay reserved
+            # for the fallback, so a provider whose path happens to contain
+            # "mujoco" cannot capture the engine default.
+            hits = sorted(
+                k for k in self.images
+                if k not in DEFAULT_IMAGES and k.lower() in tokens
+            )
+            if len(hits) > 1:
+                raise RenderError(
+                    f"image keys {hits} all match provider {provider!r}. One "
+                    "scene cannot take two images, and choosing by order would "
+                    "put it in whichever happened to be declared first. Name a "
+                    "key that identifies this provider uniquely."
+                )
+            if hits:
+                return images[hits[0]]
+        image = images.get(engine)
         if image is None:
             raise RenderError(
-                f"no image for engine {engine!r}. Known: "
-                f"{sorted({**DEFAULT_IMAGES, **self.images})}. An engine decides the "
-                "image because the image exists to provide the engine; pass "
-                "images={...} to name one."
+                f"no image for engine {engine!r}"
+                + (f" or provider {provider!r}" if provider else "")
+                + f". Known: {sorted(images)}. Key images by the provider when "
+                "two benchmarks share an engine, or by the engine otherwise."
             )
         return image
 
@@ -228,7 +277,8 @@ def _service(
     volumes += [f"{m}:ro" for m in settings.source_mounts]
 
     service: dict[str, Any] = {
-        "image": settings.image_for(scene.engine),
+        "image": settings.image_for(
+            scene.engine, getattr(scene.external, "provider", None)),
         "command": command,
         "volumes": volumes,
         # Never restart. A crashed worker that restarts re-runs its whole group
@@ -431,7 +481,8 @@ def _job(plan, scene, worker, settings: ComposeSettings, name: str) -> str:
 
     container: dict[str, Any] = {
         "name": "worker",
-        "image": settings.image_for(scene.engine),
+        "image": settings.image_for(
+            scene.engine, getattr(scene.external, "provider", None)),
         "command": command,
         "volumeMounts": mounts,
         "resources": resources,

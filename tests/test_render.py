@@ -22,6 +22,7 @@ from refractal.render import (
     compose_services,
     render_compose,
     render_k8s,
+    DEFAULT_IMAGES,
 )
 from refractal.schema.plan import PlanSchemaError, restrict_to_worker
 from tests.test_vla_eval_loop import make_plan
@@ -33,6 +34,13 @@ def settings(**kw):
     base = dict(servers=dict(SERVERS), user="1000:1000")
     base.update(kw)
     return ComposeSettings(**base)
+
+
+def _external(provider):
+    """The minimal ExternalScene a renderer needs to see a provider."""
+    from refractal.schema.models import ExternalScene
+
+    return ExternalScene(provider=provider)
 
 
 def with_workers(plan, count):
@@ -472,3 +480,64 @@ class TestTheKubernetesTarget(unittest.TestCase):
         docs = self._docs()
         labels = {d["metadata"]["labels"]["refractal.dev/plan"] for d in docs}
         self.assertEqual(len(labels), 1)
+
+
+class TestTheImageKeyIsTheRequirementNotTheEngine(unittest.TestCase):
+    """Engine alone cannot identify which image a scene needs.
+
+    The comment that used to justify keying on engine -- "an engine decides
+    the image because the image exists to provide the engine" -- described an
+    image that does not exist. `refractal-libero:local` is 8.94 GB of MuJoCo
+    AND LIBERO AND the harness: named for the engine, carrying the benchmark.
+    That holds while one engine means one benchmark and breaks the moment a
+    catalog wants LIBERO and RoboCasa in one comparison, since both are
+    `mujoco`.
+
+    What belongs in the catalog is the requirement, not the image, and it was
+    already there: an external scene's `provider` is exactly "what this scene
+    needs", is already part of identity, and already survives the compile --
+    its own docstring says it is carried so a backend can name the benchmark
+    without the catalog. No schema change was needed, only a less coarse key.
+    """
+
+    LIBERO = "vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark"
+    CASA = "vla_eval.benchmarks.robocasa.benchmark:RoboCasaBenchmark"
+
+    def test_two_benchmarks_on_one_engine_get_different_images(self):
+        s = settings(images={"libero": "reg/libero:v1", "robocasa": "reg/casa:v1"})
+        self.assertEqual(s.image_for("mujoco", self.LIBERO), "reg/libero:v1")
+        self.assertEqual(s.image_for("mujoco", self.CASA), "reg/casa:v1")
+
+    def test_a_scene_with_no_provider_falls_back_to_the_engine(self):
+        """A local MJCF scene has no provider, and the engine is all it needs."""
+        self.assertEqual(settings().image_for("mujoco", None),
+                         DEFAULT_IMAGES["mujoco"])
+
+    def test_the_full_import_string_works_as_a_key(self):
+        s = settings(images={self.LIBERO: "exact:1"})
+        self.assertEqual(s.image_for("mujoco", self.LIBERO), "exact:1")
+
+    def test_two_keys_matching_one_provider_is_refused(self):
+        """Not resolved by declaration order. Picking one silently is how a
+        scene ends up in the wrong image, and a wrong image is a different
+        benchmark -- which would run and produce numbers."""
+        s = settings(images={"libero": "a:1", "benchmarks": "b:1"})
+        with self.assertRaises(RenderError) as ctx:
+            s.image_for("mujoco", self.LIBERO)
+        self.assertIn("all match provider", str(ctx.exception))
+
+    def test_an_engine_name_inside_a_provider_cannot_capture_the_default(self):
+        """Only user-supplied keys token-match. Otherwise a provider whose
+        module path contains 'mujoco' would shadow the engine fallback."""
+        self.assertEqual(settings().image_for("mujoco", "pkg.mujoco.thing:X"),
+                         DEFAULT_IMAGES["mujoco"])
+
+    def test_the_rendered_service_uses_the_provider_key(self):
+        """Over the whole route, not just the helper."""
+        plan = with_workers(make_plan(scenarios=2, checkpoints=("pi0",)), 1)
+        for scene in plan.scenes:
+            object.__setattr__(scene, "external", _external(self.LIBERO))
+        doc = yaml.safe_load(render_compose(
+            plan, settings(images={"libero": "reg/libero:v1"})))
+        images = {s["image"] for s in doc["services"].values()}
+        self.assertEqual(images, {"reg/libero:v1"})
