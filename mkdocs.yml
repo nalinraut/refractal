@@ -22,6 +22,7 @@ nav:
   - Getting started: getting-started.md
   - Using it:
       - Writing a catalog: writing-a-catalog.md
+      - Catalog reference: catalog-reference.md
       - Reading a comparison: reading-a-comparison.md
       - Execution modes: execution-mode.md
   - Connecting a simulator:

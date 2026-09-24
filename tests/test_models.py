@@ -206,3 +206,54 @@ class TestPassthroughPredicate(unittest.TestCase):
         from refractal.schema import check_arity
 
         check_arity(from_benchmark, "predicate", "refractal.predicates:from_benchmark")
+
+class TestEveryCatalogFieldIsDocumented(unittest.TestCase):
+    """The reference must cover every field, and stay covering it.
+
+    An audit found eighteen schema fields absent from the docs, seven of them
+    findable only by reading models.py -- including both VRAM knobs, which is
+    how `vram_per_env_mb: 0` survived with a confident wrong comment beside it.
+
+    A hand-maintained reference drifts the moment a field is added. This makes
+    the drift a failing test instead of something noticed a year later, which
+    is the same move as every other check here: not a rule someone remembers,
+    a guard they cannot get wrong.
+    """
+
+    #: Fields written by tooling rather than by a catalog author. Listed rather
+    #: than pattern-matched, so adding one is a deliberate edit.
+    NOT_AUTHORED = {
+        ("Scene", "model_hash"),          # written by `refractal build`
+        ("Scene", "engine_version"),      # written by `refractal build`
+    }
+
+    def _fields(self):
+        import inspect
+
+        from refractal.schema import models
+
+        for name, obj in vars(models).items():
+            if not (inspect.isclass(obj) and hasattr(obj, "model_fields")):
+                continue
+            if obj.__module__ != models.__name__:
+                continue
+            for field, info in obj.model_fields.items():
+                if (name, field) in self.NOT_AUTHORED:
+                    continue
+                yield name, (info.alias or field)
+
+    def test_the_reference_mentions_every_field(self):
+        import pathlib
+        import re
+
+        doc = pathlib.Path("docs/catalog-reference.md").read_text()
+        missing = sorted({
+            f"{cls}.{key}" for cls, key in self._fields()
+            if not re.search(rf"`{re.escape(key)}`", doc)
+        })
+        self.assertEqual(
+            missing, [],
+            "these catalog fields are in the schema and not in "
+            "docs/catalog-reference.md -- a field a user can set and cannot "
+            "look up is how a wrong declaration survives",
+        )
