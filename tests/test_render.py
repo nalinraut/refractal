@@ -526,11 +526,24 @@ class TestTheImageKeyIsTheRequirementNotTheEngine(unittest.TestCase):
             s.image_for("mujoco", self.LIBERO)
         self.assertIn("all match provider", str(ctx.exception))
 
-    def test_an_engine_name_inside_a_provider_cannot_capture_the_default(self):
-        """Only user-supplied keys token-match. Otherwise a provider whose
-        module path contains 'mujoco' would shadow the engine fallback."""
-        self.assertEqual(settings().image_for("mujoco", "pkg.mujoco.thing:X"),
-                         DEFAULT_IMAGES["mujoco"])
+    def test_an_engine_name_inside_a_provider_cannot_capture_the_key(self):
+        """Engine names stay reserved for the fallback.
+
+        Without that, a provider whose module path happens to contain an
+        engine name would token-match the user's key for that ENGINE, and a
+        scene would take the image belonging to a different engine.
+
+        The discriminating case needs both engines overridden -- with the
+        shipped defaults, mujoco and mjx are the same string, so every path
+        gives the same answer and a mutation of the guard is EQUIVALENT rather
+        than surviving. A first version of this test asserted the shipped
+        default and proved nothing.
+        """
+        s = settings(images={"mujoco": "A:1", "mjx": "B:1"})
+        self.assertEqual(
+            s.image_for("mjx", "pkg.mujoco.thing:X"), "B:1",
+            "the mjx scene must take the mjx image, not the one whose key "
+            "happens to appear in its provider's module path")
 
     def test_the_rendered_service_uses_the_provider_key(self):
         """Over the whole route, not just the helper."""
