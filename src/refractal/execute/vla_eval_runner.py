@@ -50,6 +50,7 @@ from ..perturbations import level_arg_of
 from .physics import ABSENT as PHYSICS_ABSENT
 from .physics import actuator_facts, physics_digest, physics_manifest
 from .harness import describe_installed_harness
+from .resources import PeakWatcher
 from .results import ResultWriter
 from .vla_eval import (
     ReceiptBuffer,
@@ -248,6 +249,7 @@ def _row(
     started_at: dt.datetime,
     ended_at: dt.datetime,
     concurrent_with: str | None,
+    peaks: Any = None,
 ) -> dict[str, Any]:
     """One Parquet row.
 
@@ -276,6 +278,13 @@ def _row(
         "execution_mode": execution_mode,
         "server_url": server_url,
         "concurrent_with": concurrent_with,
+        # The resource receipt. Absent rather than zero when nothing sampled,
+        # for the same reason the VRAM figure is null rather than zero when the
+        # platform will not attribute it: "nobody looked" and "used none" are
+        # different claims, and reading the first as the second is what removed
+        # the planner's GPU constraint.
+        "peak_rss_mb": getattr(peaks, "rss_mb", None) or None,
+        "peak_vram_mb": getattr(peaks, "vram_mb", None),
         "harness_version": harness_version,
         "harness_surface": harness_surface,
         # Written, never left unset: a null here must only ever mean the row
@@ -416,6 +425,14 @@ def _run_group(
     # counter and the rows by Refractal's content-addressed id. Zipped rather
     # than looked up, which is the same correspondence rows_from_benchmark_result
     # already relies on.
+    # Sampled once per harness invocation, at the point the episodes for this
+    # group have just finished and the process is still the one that ran them.
+    # Not a background thread: a sampler would contend for the single core the
+    # worker is pinned to, and the cost of that pinning is what is being
+    # measured.
+    peaks = PeakWatcher()
+    peaks.sample()
+
     collected = receipts.in_order()
     if collected and len(collected) != len(outcomes):
         raise BridgeError(
@@ -442,6 +459,7 @@ def _run_group(
             started_at=started_at,
             ended_at=ended_at,
             concurrent_with=concurrent_with,
+            peaks=peaks,
         )
         for index, outcome in enumerate(outcomes)
     ]

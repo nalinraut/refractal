@@ -867,3 +867,68 @@ class TestCopyingACatalogThatContainsItsOwnResults(unittest.TestCase):
                      for p in writer.fs.glob(f"{writer.prefix}/catalog/**")}
             self.assertIn("scenes.yaml", names)
             self.assertIn("thing.xml", names)
+
+
+class TestTheResourceReceipt(unittest.TestCase):
+    """Resource declarations were the one input to planning with no receipt.
+
+    Every other claim here is checked by reading an artifact. Declarations were
+    trusted, and the cost is on record: `vram_per_env_mb: 0` did not skew the
+    packing, it REMOVED the GPU constraint, so the planner put ten rendering
+    workers on a card with room for four and never refused. EGL busy-waits
+    rather than failing, so four of them spun for fifteen hours with no error
+    and no log line.
+
+    A wrong number gives a wrong plan, which somebody notices. A zero gives no
+    constraint, which nobody does.
+    """
+
+    def test_rss_is_a_high_water_mark_in_mib(self):
+        """Not a sample. The kernel keeps the maximum, so a peak between two
+        polls cannot be missed -- which matters because sampling is done at
+        episode boundaries rather than continuously."""
+        from refractal.execute.resources import peak_rss_mb
+
+        first = peak_rss_mb()
+        # Plausible for a Python process in MiB. If ru_maxrss were read as
+        # bytes this would be ~0; as KiB-without-conversion, ~1000x too big.
+        self.assertGreater(first, 5)
+        self.assertLess(first, 100_000)
+        ballast = [bytearray(4_000_000) for _ in range(8)]
+        self.assertGreaterEqual(peak_rss_mb(), first)
+        del ballast
+
+    def test_unattributable_vram_is_None_and_never_zero(self):
+        """The distinction the whole column exists for.
+
+        There is no per-process GPU accounting available, so the figure comes
+        from nvidia-smi's per-PID table -- which cannot see a containerised
+        worker, whose pid is in another namespace. Returning 0 there would
+        manufacture the exact claim that caused the incident: a zero meaning
+        "nobody looked", read downstream as "costs nothing".
+        """
+        from refractal.execute.resources import current_vram_mb
+
+        # A pid that will not appear in any GPU table.
+        self.assertIsNone(current_vram_mb(pid=-1))
+
+    def test_the_watcher_keeps_maxima_and_leaves_vram_absent(self):
+        from refractal.execute.resources import PeakWatcher
+
+        w = PeakWatcher()
+        self.assertIsNone(w.vram_mb, "absent before anything is sampled")
+        w.sample()
+        self.assertGreater(w.rss_mb, 0)
+        before = w.rss_mb
+        w.sample()
+        self.assertGreaterEqual(w.rss_mb, before, "maxima never decrease")
+
+    def test_the_row_carries_absent_rather_than_zero(self):
+        """A row written with nothing sampled must say nothing was sampled."""
+        from refractal.execute.results import EPISODES_SCHEMA
+
+        self.assertIn("peak_rss_mb", EPISODES_SCHEMA.names)
+        self.assertIn("peak_vram_mb", EPISODES_SCHEMA.names)
+        for name in ("peak_rss_mb", "peak_vram_mb"):
+            self.assertTrue(EPISODES_SCHEMA.field(name).nullable,
+                            f"{name} must be able to say 'not measured'")

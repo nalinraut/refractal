@@ -173,6 +173,25 @@ EPISODES_SCHEMA = pa.schema(
         # perturbed by construction and the number would be a constant 1.0
         # dressed as a measurement.
         pa.field("perturbation_exposure", pa.float64()),
+        # WHAT THE WORKER ACTUALLY USED. The one input to planning that had no
+        # receipt, and the gap that cost fifteen hours: `vram_per_env_mb: 0`
+        # did not skew the packing, it removed the GPU constraint entirely, so
+        # the planner packed ten rendering workers onto a card with room for
+        # four and never refused.
+        #
+        # Recorded so the declaration becomes checkable the way everything else
+        # here is checkable, and so `--expect-from` can eventually re-fit the
+        # resource model the way it already re-fits duration.
+        pa.field("peak_rss_mb", pa.int32()),
+        # NULL MEANS "COULD NOT ATTRIBUTE", NOT "USED NONE". There is no
+        # per-process GPU accounting API available, so this comes from
+        # nvidia-smi's per-PID table -- which works on the host and cannot work
+        # inside a container, whose pid is in another namespace.
+        #
+        # Writing 0 there would manufacture exactly the claim that started
+        # this: a zero meaning "nobody looked", read downstream as "costs
+        # nothing".
+        pa.field("peak_vram_mb", pa.int32()),
         # How many perturbations the episode carried, because a null level
         # means two opposite things and `compare` has to tell them apart.
         #
