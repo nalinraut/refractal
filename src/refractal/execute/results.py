@@ -27,6 +27,7 @@ Polars read the directory as one table regardless.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass
@@ -685,6 +686,70 @@ class ResultWriter:
         with self.fs.open(staging, "wb") as handle:
             handle.write(json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"))
         self.fs.mv(staging, target)
+
+    def write_render_manifest(self, settings: dict) -> None:
+        """What was supplied at RUN time, recorded beside what was planned.
+
+        The comparison directory already holds `plan.json` (the experiment),
+        `catalog/` (its source) and `harness/<surface>.json` (digests of the
+        code that ran). Render-time inputs were the one category with no
+        record -- so two runs differing in image, uid, server address or
+        backend produced rows that looked identical and could not be told
+        apart afterwards.
+
+        Third instance of one pattern: a fact that shaped the run, absent from
+        the artifact. The resource receipt was the first, the placement digest
+        the second.
+
+        **Recorded, deliberately not hashed.** An image tag and a server
+        address are properties of a machine, not of an experiment. Folding
+        them into `plan_id` would make the same experiment on two machines two
+        experiments -- the exact reasoning that kept `results_uri` out, since
+        otherwise writing to `./results` and to `s3://` yields ids that never
+        join. The digest is for comparability; this is for explaining what
+        differed.
+
+        Appended rather than overwritten. A comparison is resumable and can be
+        finished from a second machine, so the honest record is every set of
+        render inputs that contributed to it, not the last one to run.
+        """
+        directory = f"{self.prefix}/render"
+        self.fs.makedirs(directory, exist_ok=True)
+        digest = hashlib.sha256(
+            json.dumps(settings, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:16]
+        target = f"{directory}/{digest}.json"
+        if self.fs.exists(target):
+            # Skips a redundant write, and that is ALL it does. The dedup is
+            # the filename: it is a digest of the settings, so identical
+            # inputs land on the same path whether or not this returns early.
+            # Removing this check is equivalent, which a witness confirmed --
+            # an earlier comment here claimed the guard was what made "the
+            # same inputs twice one fact", and it was not.
+            return
+        staging = f"{directory}/.tmp-{uuid.uuid4().hex}.json"
+        with self.fs.open(staging, "wb") as handle:
+            handle.write(json.dumps(
+                settings, indent=2, sort_keys=True, default=str).encode("utf-8"))
+        self.fs.mv(staging, target)
+
+    def read_render_manifests(self) -> dict[str, dict]:
+        """Every recorded set of render inputs, by digest.
+
+        More than one means the comparison was produced by runs that did not
+        agree about how they were deployed -- legitimate when resuming
+        elsewhere, and the thing somebody needs to see before explaining a
+        difference in the numbers.
+        """
+        try:
+            paths = self.fs.glob(f"{self.prefix}/render/*.json")
+        except FileNotFoundError:
+            return {}
+        out: dict[str, dict] = {}
+        for path in paths:
+            with self.fs.open(path, "rb") as handle:
+                out[Path(path).stem] = json.loads(handle.read().decode("utf-8"))
+        return out
 
     def read_harness_manifests(self) -> dict[str, dict[str, str]]:
         """Every recorded surface manifest, by digest. Empty when none were written."""

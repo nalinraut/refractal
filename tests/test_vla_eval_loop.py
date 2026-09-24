@@ -1314,3 +1314,59 @@ class TestTheResourceReceiptReachesTheParquet(LoopCase):
                 row["peak_vram_mb"], 0,
                 "0 means 'used none'. Unattributable must be NULL -- the two "
                 "were conflated once and it removed the planner's constraint.")
+
+
+class TestRenderInputsAreRecorded(LoopCase):
+    """Render-time inputs shaped the run and appeared in no artifact.
+
+    The comparison directory already held `plan.json`, `catalog/` and
+    `harness/<surface>.json` -- all of them "record what actually ran". What
+    was supplied at run time was the one category missing, so two runs against
+    different servers, or a different backend, produced rows nobody could tell
+    apart afterwards.
+
+    Third instance of one pattern: a fact that shaped the run, absent from the
+    artifact. The resource receipt was the first, the placement digest the
+    second.
+
+    Recorded and deliberately NOT hashed. A server address is a property of a
+    machine; folding it into plan_id would make one experiment on two machines
+    two experiments -- the same reasoning that kept results_uri out, since
+    otherwise writing to ./results and to s3:// yields ids that never join.
+    """
+
+    def _writer(self, plan):
+        from refractal.execute.results import ResultWriter
+
+        return ResultWriter(self.results, plan.plan_id)
+
+    def test_the_servers_and_backend_are_written(self):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness())
+        manifests = self._writer(plan).read_render_manifests()
+        self.assertEqual(len(manifests), 1)
+        (entry,) = manifests.values()
+        self.assertEqual(entry["backend"], "vla-eval")
+        self.assertIn("pi0", entry["servers"])
+        self.assertIn("refractal_version", entry)
+
+    def test_it_does_not_reach_plan_id(self):
+        """The whole point. A plan carrying an address would not travel."""
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness())
+        (entry,) = self._writer(plan).read_render_manifests().values()
+        # The comparison is named by plan_id, and nothing render-time appears
+        # in that name -- which is what lets the same experiment run against a
+        # different server and still join.
+        prefix = self._writer(plan).prefix
+        self.assertIn(plan.plan_id.split(":", 1)[-1], prefix)
+        for url in entry["servers"].values():
+            self.assertNotIn(url, prefix)
+        self.assertNotIn(str(entry["results_uri"]), plan.plan_id)
+
+    def test_identical_inputs_record_once(self):
+        """Resuming with the same setup is one fact, not two."""
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness())
+        self.run_loop(plan, FakeHarness())
+        self.assertEqual(len(self._writer(plan).read_render_manifests()), 1)

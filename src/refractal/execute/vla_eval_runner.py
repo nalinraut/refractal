@@ -105,6 +105,14 @@ def default_invoke(
     return results[0]
 
 
+def _refractal_version() -> str:
+    """Imported lazily: this module is the runtime, and a package-level import
+    here would be a cycle."""
+    from .. import __version__
+
+    return __version__
+
+
 def _measured_exposure(receipt: list | None) -> float | None:
     """How much of its perturbation the episode actually received.
 
@@ -556,6 +564,23 @@ def run_vla_eval(
     #
     # An identity document that contradicts its own digest is worse than none.
     writer.write_plan((provenance_plan or plan).to_json())
+    # What was supplied at run time, beside what was planned. Server addresses
+    # and the backend shaped this run and appeared in no artifact, so two runs
+    # against different servers produced rows nobody could tell apart.
+    #
+    # Recorded, not hashed: an address is a property of a machine, and folding
+    # it into plan_id would make one experiment on two machines two
+    # experiments.
+    writer.write_render_manifest({
+        "backend": "vla-eval",
+        "servers": dict(sorted(servers.items())),
+        "catalog_root": catalog_root,
+        "results_uri": results_uri,
+        "benchmark_override": benchmark_override,
+        "record_video": bool(record_video),
+        "frame_every": frame_every,
+        "refractal_version": _refractal_version(),
+    })
     if catalog_root is not None:
         writer.copy_catalog(catalog_root)
 
