@@ -91,8 +91,20 @@ def cmd_plan(args: argparse.Namespace) -> int:
             print("  no usable prior episodes; expected duration not computed",
                   file=sys.stderr)
         else:
+            # TWO DIFFERENT QUANTITIES, and printing them adjacent without
+            # saying so reads as a contradiction: the bound above is a
+            # MAKESPAN -- the longest worker, since workers run in parallel --
+            # while this is TOTAL WORK, the sum over every episode. An "at most
+            # 4 min" above an "expected 39 min" looks incoherent and is not:
+            # 39 minutes of work across 10 workers IS about 4 minutes.
+            #
+            # So the wall-clock is spelled out rather than left as arithmetic
+            # the reader has to notice is needed.
+            workers = sum(len(s.workers) for s in plan.scenes) or 1
             print(
-                f"  expected {_fmt_duration(expectation.seconds)}, from "
+                f"  expected {_fmt_duration(expectation.seconds)} of work"
+                f" (~{_fmt_duration(expectation.seconds // workers)} wall clock"
+                f" across {workers} worker(s)), from "
                 f"{expectation.sample} prior episode(s) of "
                 f"{expectation.learned_from}"
             )

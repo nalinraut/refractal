@@ -138,3 +138,49 @@ class TestItStaysOutOfThePlan(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheTwoNumbersAreLabelledAsDifferentThings(unittest.TestCase):
+    """The bound and the expectation measure different quantities, and printing
+    them adjacent without saying so reads as a contradiction.
+
+    `plan.estimated_seconds` is a MAKESPAN: the longest worker, since workers
+    run in parallel. `Expectation.seconds` is TOTAL WORK: the sum over every
+    episode, never divided by anything. So "at most 4 min" above "expected 39
+    min" looks incoherent and is not -- 39 minutes of work across ten workers
+    is about four minutes.
+
+    It was read as an arithmetic bug for exactly that reason, and it is not
+    one. The fix is to say which is which and spell out the wall clock, rather
+    than leave the division as something the reader has to notice is needed.
+    """
+
+    def test_the_expectation_is_total_work_not_a_makespan(self):
+        """The property that makes the labelling correct, and the reason the
+        two printed numbers are not comparable as they stand.
+
+        `expected_seconds` sums over every episode and never divides by worker
+        count -- so splitting the same episodes across more workers must not
+        change it. The makespan above it does change, which is exactly why one
+        cannot be read against the other without saying which is which.
+        """
+        rows_for = lambda p: [
+            {"task_id": e.task_id, "steps": 100, "is_infra_failure": False,
+             "checkpoint_id": "pi0"}
+            for s in p.scenes for w in s.workers for e in w.episodes]
+
+        one = make_plan(scenarios=4, seeds=(0,), checkpoints=("pi0",))
+        got_one = expected_seconds(one, rows_for(one))
+
+        # The same episodes, redistributed over more workers. Built with the
+        # shared helper rather than by mutating the plan: Plan is frozen, and
+        # reaching past that would be testing a model I had to break first.
+        from tests.test_render import with_workers
+
+        many = with_workers(
+            make_plan(scenarios=4, seeds=(0,), checkpoints=("pi0",)), 2)
+        got_many = expected_seconds(many, rows_for(many))
+
+        self.assertEqual(got_one.seconds, got_many.seconds,
+                         "work is work however it is divided; only the "
+                         "makespan moves with worker count")
