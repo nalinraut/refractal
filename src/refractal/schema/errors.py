@@ -34,6 +34,21 @@ class GeneratorError(RefractalError, ValueError):
     """A scenario generator was asked for something it cannot produce."""
 
 
+class MissingExtraError(RefractalError, ImportError):
+    """An optional dependency is needed for what was asked and is not installed.
+
+    Subclasses ``ImportError`` as well, so ``except ImportError`` around a
+    lazy import still catches it and the class can be raised from an ``except
+    ImportError`` block without changing what callers can catch.
+
+    Exists because the alternative is what a plain install used to do: ``pip
+    install refractal`` followed by ``refractal run`` raised ``No module named
+    'fsspec'`` from inside a module the user has never heard of, naming a
+    package they did not choose. The install is correct and the command is
+    reasonable; only the message was missing.
+    """
+
+
 class NotImplementedInV1(RefractalError):
     """A field exists in the schema, is validated, and is deliberately inert.
 

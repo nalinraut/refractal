@@ -34,11 +34,35 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..schema.errors import RefractalError
+from ..schema.errors import MissingExtraError, RefractalError
 
-import fsspec
-import pyarrow as pa
-import pyarrow.parquet as pq
+# Guarded, and the convention is already in this file: the Pillow import below
+# names the extra and says what to do. fsspec and pyarrow are the two a user
+# meets first, and they were the two that raised a bare ModuleNotFoundError
+# from a module nobody chose to import.
+#
+# Import time rather than call time because this module cannot do anything
+# without them: every read and every write goes through pyarrow, and every path
+# through fsspec. A lazy guard per function would repeat the same message in a
+# dozen places and still fail at the first one.
+#
+# Caught cleanly despite being an import-time raise: every `from .execute`
+# in the CLI is inside a function, so this lands within `args.func(args)` and
+# `main()` prints it as `error: ...`. That laziness is what keeps `plan` and
+# `build` working with none of this installed, and tests/test_boundaries.py
+# fails the build if it stops being true.
+try:
+    import fsspec
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+except ImportError as exc:  # pragma: no cover - depends on what is installed
+    raise MissingExtraError(
+        f"{exc.name!r} is needed to read or write results and is not installed. "
+        'Install it with `pip install "refractal[execute]"` to run a plan, or '
+        '`pip install "refractal[compare]"` to read results somebody else wrote. '
+        "`refractal plan` and `refractal build` do not need it, which is why it "
+        "is an extra rather than a dependency."
+    ) from exc
 
 #: One row per episode. Order is the read order; keep identity columns first so
 #: a human running `head` sees what the row *is* before what happened to it.
