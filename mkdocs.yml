@@ -1,5 +1,11 @@
 site_name: Refractal
 site_description: Paired comparison of policy checkpoints over content-addressed episodes.
+# Where the built site is served from. Without it mkdocs emits no canonical
+# link and no sitemap, so every page looks equally authoritative to a crawler
+# and the copies on GitHub's blob view compete with the rendered ones.
+site_url: https://nalinraut.github.io/refractal/
+repo_url: https://github.com/nalinraut/refractal
+edit_uri: edit/main/docs/
 docs_dir: docs
 
 # The readthedocs theme ships with MkDocs, so building the docs needs no

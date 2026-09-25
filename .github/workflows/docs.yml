@@ -1,0 +1,101 @@
+# Build the docs and serve them from GitHub Pages.
+#
+# `mkdocs build --strict` fails on a dead cross-link, so a broken reference
+# stops the deploy rather than shipping. The docs have been renamed once
+# already; strict is what stops the next time shipping broken.
+#
+# Runs on pushes that touch the docs, and on demand. Not on every push: the
+# deploy is a full site upload and most commits do not change a word of it.
+#
+# Setup required once, in the repository:
+#
+#   Settings -> Pages -> Build and deployment -> Source: GitHub Actions
+#
+# Until that is set, the deploy step fails with a "Pages is not enabled" error
+# and nothing is served, which is the right failure.
+
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+# One deploy at a time, and a newer push supersedes an older one still queued.
+# Without this, two quick pushes race and whichever finishes last wins, which
+# is not necessarily the newer.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # mkdocs only. The readthedocs theme ships with it, which is why the
+      # theme was chosen: the docs build with one dependency and no lockfile.
+      - run: pip install mkdocs
+
+      # --strict turns a dead link from a warning into a failure. mkdocs.yml
+      # already sets strict: true; passing it here as well means a future edit
+      # to that file cannot quietly turn it off for CI.
+      - name: build
+        run: mkdocs build --strict
+
+      # Every page the nav claims exists. mkdocs builds a file that is missing
+      # from the nav without complaint, and `strict` does not catch the
+      # reverse: a nav entry pointing at a file that was deleted is a link into
+      # nothing. Checked here because the nav is the reading order and a hole
+      # in it is invisible until somebody clicks.
+      - name: the nav and the built site agree
+        run: |
+          python - <<'PY'
+          import pathlib, sys, yaml
+          cfg = yaml.safe_load(pathlib.Path("mkdocs.yml").read_text())
+          site = pathlib.Path("site")
+          missing = []
+          def walk(node):
+              if isinstance(node, dict):
+                  for v in node.values(): walk(v)
+              elif isinstance(node, list):
+                  for v in node: walk(v)
+              elif isinstance(node, str) and node.endswith(".md"):
+                  stem = node[:-3]
+                  built = site / (stem + "/index.html")
+                  alt = site / (stem + ".html")
+                  if stem in ("README", "index"):
+                      built = site / "index.html"
+                  if not built.exists() and not alt.exists():
+                      missing.append(node)
+          walk(cfg.get("nav", []))
+          if missing:
+              print("::error::nav lists pages that were not built: " + ", ".join(missing))
+              sys.exit(1)
+          print(f"every nav entry resolves to a built page")
+          PY
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
