@@ -40,4 +40,28 @@ fi
 # src and is missing from the built wheel. CI's install is what catches that.
 export PYTHONPATH="$(pwd)/src${PYTHONPATH:+:$PYTHONPATH}"
 
-exec "$PY" -m unittest discover -s tests -t . "$@"
+# A filtered run produces partial coverage, and partial coverage makes every
+# guard the filter skipped look newly unreached. So arguments mean "just the
+# tests", and the guard check belongs to the full run only.
+if [ "$#" -gt 0 ]; then
+    exec "$PY" -m unittest discover -s tests -t . "$@"
+fi
+
+# Guards, under coverage. A guard nobody has seen fire is a guard nobody knows
+# works, and this project has already shipped one: an error message asserting a
+# guarantee about `max_envs` that the code did not provide, found by accident
+# because nothing had ever run the line.
+#
+# Skipped rather than failed when coverage is absent, because the extra is not
+# required to develop here. Loudly, because a check that silently does not run
+# is indistinguishable from one that passes.
+if "$PY" -c "import coverage" >/dev/null 2>&1; then
+    "$PY" -m coverage run --source=src/refractal -m unittest discover -s tests -t .
+    "$PY" -m coverage json -o .coverage.json -q
+    "$PY" scripts/lint_guards.py .coverage.json
+else
+    "$PY" -m unittest discover -s tests -t .
+    echo
+    echo "note: coverage is not installed, so guards were NOT checked."
+    echo "      pip install coverage, or run: pip install -e '.[test]'"
+fi

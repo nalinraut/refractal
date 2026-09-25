@@ -123,6 +123,9 @@ def _axis_values(spec: ParamSpec, rng: random.Random) -> list[Any]:
         return [spec.value]
     if form == "random":
         return [_draw(spec, rng.random()) for _ in range(int(spec.samples))]
+    # unreachable: ParamSpec.form returns one of exactly four strings or raises,
+    # and all four are handled above. Kept so that adding a fifth form without
+    # extending this function fails loudly instead of returning None.
     raise GeneratorError(f"unhandled parameter form {form!r}")
 
 
@@ -152,6 +155,9 @@ def _draw(spec: ParamSpec, u: float) -> Any:
         # supplying both a distribution and a range.
         x = statistics.NormalDist(spec.mean, spec.std).inv_cdf(min(max(u, 1e-12), 1 - 1e-12))
         return min(max(x, lo), hi)
+    # unreachable: reached only for form == "random", and _check_form has
+    # already refused a random spec whose distribution is neither uniform nor
+    # normal. Kept so a third distribution cannot be added silently.
     raise GeneratorError(f"unhandled parameter form {form!r}")
 
 

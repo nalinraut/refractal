@@ -1,0 +1,55 @@
+# Guards no test reaches, which some configuration could.
+#
+# Not a list of shortcomings: it is the set of error paths whose message has
+# never been read by anyone, recorded precisely so that number is known rather
+# than assumed. Checked by scripts/lint_guards.py against a coverage run.
+#
+# This file may SHRINK and may not GROW. Writing a test for one of these fails
+# the lint until its line is deleted, which is the ratchet working.
+#
+# A guard that cannot fire in any configuration does not belong here. Mark it
+# in the source with `# unreachable: <reason>` instead.
+#
+# Keyed file::function::exception, never by line number.
+refractal/build/__init__.py::build::BuildError
+refractal/build/__init__.py::_capabilities::BuildError
+refractal/compare/verdict.py::evaluate::ValueError
+refractal/execute/results.py::verify_written::OutputMissingError
+refractal/execute/results.py::write_strips::OutputMissingError
+refractal/execute/vla_eval.py::check_index_contract::BridgeError
+refractal/execute/vla_eval.py::worker_selection::BridgeError
+refractal/execute/vla_eval_runner.py::default_invoke::BridgeError
+refractal/execute/vla_eval_runner.py::_max_steps::BridgeError
+refractal/execute/vla_eval_runner.py::_run_group::BridgeError
+refractal/perturbations/__init__.py::_drop_observation::PerturbationError
+refractal/perturbations/__init__.py::rebuild::PerturbationError
+refractal/perturbations/__init__.py::_substitute_observation::PerturbationError
+refractal/render/__init__.py::compose_services::RenderError
+refractal/render/__init__.py::render_k8s::RenderError
+refractal/resolve/expand.py::generate_scenarios::GeneratorError
+refractal/resolve/expand.py::refuse_unsupported_perturbations::CatalogError
+refractal/resolve/expand.py::task_hashes_for::CatalogError
+refractal/resolve/fit.py::budget_model_servers::CapacityError
+refractal/resolve/fit.py::_pack_or_fail::CapacityError
+refractal/resolve/__init__.py::resolve::CapacityError
+refractal/resolve/__init__.py::resolve::CatalogError
+refractal/resolve/lock.py::filter_survivors::CatalogError
+refractal/resolve/lock.py::load_lock::CatalogError
+refractal/schema/canonical.py::_encode::CanonicalizationError
+refractal/schema/canonical.py::normalize_number::CanonicalizationError
+refractal/schema/canonical.py::normalize_params::CanonicalizationError
+refractal/schema/identity.py::_scene_files::CatalogError
+refractal/schema/identity.py::scene_identity::CatalogError
+refractal/schema/importstr.py::resolve_import_string::ImportStringError
+refractal/schema/loader.py::load_catalog::CatalogError
+refractal/schema/loader.py::_read_yaml::CatalogError
+refractal/schema/loader.py::scene::KeyError
+refractal/schema/loader.py::task::KeyError
+refractal/schema/loader.py::_validate::CatalogError
+refractal/schema/models.py::_check_form::ValueError
+refractal/schema/models.py::_check_max_envs::ValueError
+refractal/schema/models.py::_check::ValueError
+refractal/schema/models.py::_explain_interleaved::ValueError
+refractal/schema/models.py::_window::ValueError
+refractal/schema/plan.py::locate_plan::CatalogError
+refractal/schema/plan.py::read_plan::CatalogError

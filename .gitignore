@@ -16,3 +16,5 @@ __pycache__/
 # the old text.
 site/
 .mutation-in-progress
+.coverage.json
+.coverage
