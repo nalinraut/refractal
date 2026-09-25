@@ -1,0 +1,136 @@
+# Rehearse a release against TestPyPI, on demand.
+#
+# Run it from the Actions tab before tagging. It does everything publish.yml
+# does except the permanent part, so the first time a build meets a real index
+# is not the time it can never be taken back.
+#
+# What it CANNOT do is the reason the rehearsal exists. The README is the
+# entire PyPI page, and whether it reads well is a judgement. This uploads it
+# and prints the link; somebody still has to open it and look.
+#
+# Deliberately `workflow_dispatch` and not a tag or a push. A rehearsal that
+# runs on every commit becomes noise, and TestPyPI keeps every version it is
+# given.
+#
+# Setup required once, on TestPyPI:
+#
+#   test.pypi.org -> refractal -> Manage -> Publishing -> Add a new publisher
+#     Owner:        nalinraut
+#     Repository:   refractal
+#     Workflow:     rehearse.yml
+#     Environment:  testpypi
+
+name: rehearse
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: version
+        id: v
+        run: |
+          ver=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "rehearsing $ver"
+
+      # A rehearsal of a version TestPyPI already holds is worse than none.
+      # `skip-existing` below would keep the OLD upload, the smoke test would
+      # install those bytes and pass, and the run would report success about an
+      # artefact this build never produced.
+      #
+      # TestPyPI, unlike PyPI, lets you delete a release. So there is a way out
+      # that does not involve burning a version number, and the message says so.
+      - name: this version is not already on TestPyPI
+        run: |
+          ver='${{ steps.v.outputs.ver }}'
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+                   "https://test.pypi.org/pypi/refractal/$ver/json")
+          if [ "$code" = "200" ]; then
+            echo "::error::refractal $ver is already on TestPyPI. Rehearsing it \
+          would upload nothing and then smoke-test the bytes already there. \
+          Delete that release on test.pypi.org, or bump the version."
+            exit 1
+          fi
+          echo "$ver is not on TestPyPI: the rehearsal will test what this run builds."
+
+      - name: the changelog names this version
+        run: |
+          grep -q "^## ${{ steps.v.outputs.ver }}" CHANGELOG.md || {
+            echo "::error::CHANGELOG.md has no '## ${{ steps.v.outputs.ver }}' section"; exit 1; }
+
+      - name: build
+        run: |
+          pip install build
+          rm -rf dist
+          python -m build
+
+      - name: verify the wheel against the source tree
+        run: python scripts/verify_wheel.py dist/*.whl
+
+      - name: twine check
+        run: |
+          pip install twine
+          twine check dist/*
+
+      - name: publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # Kept despite the check above, which makes it unreachable in the
+          # normal case. It covers the race where two rehearsals of one version
+          # run at once: the loser should not fail the job, it should stop.
+          skip-existing: true
+
+  # Install what was just published and use it. Separate job so it runs against
+  # the index rather than the build directory: the question is whether what
+  # TestPyPI serves works, not whether dist/ works.
+  smoke:
+    needs: rehearse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install from TestPyPI
+        run: |
+          ver=$(curl -s https://test.pypi.org/pypi/refractal/json | python -c "import sys,json;print(json.load(sys.stdin)['info']['version'])")
+          echo "installing refractal==$ver"
+          # TestPyPI does not mirror the real index, so dependencies come from
+          # PyPI. Without the extra index, pydantic and pyyaml resolve to
+          # whatever placeholder happens to sit on TestPyPI under those names.
+          pip install --index-url https://test.pypi.org/simple/ \
+                      --extra-index-url https://pypi.org/simple/ \
+                      "refractal==$ver"
+      # The boundary that matters, checked against the published artefact:
+      # `plan` works with none of the optional dependencies present.
+      - name: plan on a bare install
+        run: |
+          mkdir demo && cd demo
+          refractal init .
+          refractal plan catalog --hardware laptop -o plan.json
+      - name: run refuses cleanly without the execute extra
+        run: |
+          cd demo
+          out=$(refractal run plan.json -o r --catalog catalog 2>&1 || true)
+          echo "$out"
+          case "$out" in
+            *"refractal[execute]"*) echo "names the extra: good" ;;
+            *) echo "::error::expected the missing-extra message, got: $out"; exit 1 ;;
+          esac
+
+      - name: where to look
+        run: |
+          echo "Open https://test.pypi.org/project/refractal/ and read the page."
+          echo "This workflow proved it installs and runs. It cannot tell you"
+          echo "whether the README reads well, and that is what the page is."
