@@ -40,10 +40,20 @@ fi
 # src and is missing from the built wheel. CI's install is what catches that.
 export PYTHONPATH="$(pwd)/src${PYTHONPATH:+:$PYTHONPATH}"
 
-# A filtered run produces partial coverage, and partial coverage makes every
-# guard the filter skipped look newly unreached. So arguments mean "just the
-# tests", and the guard check belongs to the full run only.
-if [ "$#" -gt 0 ]; then
+# A SELECTED run produces partial coverage, and partial coverage makes every
+# guard the selection skipped look newly unreached. So a selector means "just
+# the tests" and the guard check belongs to a full run.
+#
+# A selector is an argument that does not start with `-`. The first version of
+# this treated ANY argument as a selector, which silently disabled the guard
+# check in CI: CI runs `./scripts/test.sh -v`, and `-v` sets verbosity without
+# selecting anything. The check ran nowhere except on a developer's machine
+# typing the bare command, which is the one place it was least needed.
+selected=
+for arg in "$@"; do
+    case "$arg" in -*) ;; *) selected=1 ;; esac
+done
+if [ -n "$selected" ]; then
     exec "$PY" -m unittest discover -s tests -t . "$@"
 fi
 
@@ -56,11 +66,11 @@ fi
 # required to develop here. Loudly, because a check that silently does not run
 # is indistinguishable from one that passes.
 if "$PY" -c "import coverage" >/dev/null 2>&1; then
-    "$PY" -m coverage run --source=src/refractal -m unittest discover -s tests -t .
+    "$PY" -m coverage run --source=src/refractal -m unittest discover -s tests -t . "$@"
     "$PY" -m coverage json -o .coverage.json -q
     "$PY" scripts/lint_guards.py .coverage.json
 else
-    "$PY" -m unittest discover -s tests -t .
+    "$PY" -m unittest discover -s tests -t . "$@"
     echo
     echo "note: coverage is not installed, so guards were NOT checked."
     echo "      pip install coverage, or run: pip install -e '.[test]'"
