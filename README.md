@@ -264,4 +264,5 @@ is theirs; the comparison is ours.
 
 ## Licence
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache-2.0. See [LICENSE](https://github.com/nalinraut/refractal/blob/main/LICENSE)
+and [NOTICE](https://github.com/nalinraut/refractal/blob/main/NOTICE).
