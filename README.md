@@ -1,5 +1,10 @@
 # Refractal
 
+[![PyPI](https://img.shields.io/pypi/v/refractal)](https://pypi.org/project/refractal/)
+[![Python](https://img.shields.io/pypi/pyversions/refractal)](https://pypi.org/project/refractal/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/nalinraut/refractal/blob/main/LICENSE)
+[![CI](https://github.com/nalinraut/refractal/actions/workflows/ci.yml/badge.svg)](https://github.com/nalinraut/refractal/actions/workflows/ci.yml)
+
 **A closed-loop evaluation compiler.**
 
 Refractal turns a declared set of scenarios into a plan you can inspect before running, 
