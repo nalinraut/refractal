@@ -1,0 +1,126 @@
+# Publish on a version tag, and refuse to publish anything the tag does not name.
+#
+# A PyPI upload is permanent: name plus version can never be uploaded twice. So
+# this runs the same gates docs/releasing.md runs by hand, in the same order,
+# and every one of them can stop the upload.
+#
+# What it does NOT replace is the TestPyPI rehearsal. That catches README
+# rendering, and the README is the entire PyPI page. Rehearse by hand, then tag.
+#
+# Setup required once, on PyPI, before the first automated run:
+#
+#   pypi.org -> refractal -> Manage -> Publishing -> Add a new publisher
+#     Owner:        nalinraut
+#     Repository:   refractal
+#     Workflow:     publish.yml
+#     Environment:  pypi
+#
+# That is Trusted Publishing: PyPI accepts a short-lived OIDC token minted by
+# GitHub for this workflow in this repository, so no API token is stored as a
+# secret and none can leak from one. If it is not configured, the publish step
+# fails with an authentication error and nothing is uploaded.
+
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  # The full suite, on the tagged commit. A tag is not a promise that CI passed
+  # on it: tags can be moved, and a green run on main says nothing about a tag
+  # pointing three commits back.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .[execute,test]
+      - run: ./scripts/test.sh -v
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Mints the OIDC token Trusted Publishing exchanges with PyPI. Without
+      # this the publish step cannot authenticate, which is the intended
+      # failure: no token, no upload.
+      id-token: write
+      # Creates the GitHub release at the end.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The tag must name the version being built. Tagging v0.2.0 on a tree
+      # whose pyproject still says 0.1.0a1 would otherwise publish 0.1.0a1
+      # under a tag claiming otherwise, and the wrong half is unrecoverable:
+      # 0.1.0a1 is then spent and 0.2.0 was never released.
+      - name: the tag agrees with pyproject
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "tag=$tag  pyproject=$ver"
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $ver in pyproject.toml"
+            exit 1
+          fi
+
+      # The changelog must mention this version. A release with no entry is one
+      # nobody can read the intent of later, and it is the artefact users reach
+      # for before the commit history.
+      - name: the changelog names this version
+        run: |
+          ver=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          grep -q "^## $ver" CHANGELOG.md || {
+            echo "::error::CHANGELOG.md has no '## $ver' section"; exit 1; }
+
+      # Deleted, never reused. `uv build` adds to dist/ without clearing it, so
+      # a stale wheel from an earlier version would be uploaded alongside the
+      # new one and win on any resolver that saw it first.
+      - name: build
+        run: |
+          pip install build
+          rm -rf dist
+          python -m build
+
+      # Verify the artefact, not the source tree. Catches a subpackage missing
+      # from the wheel while git status stays clean, which an unanchored
+      # .gitignore pattern produces silently.
+      - name: verify the wheel against the source tree
+        run: python scripts/verify_wheel.py dist/*.whl
+
+      - name: twine check
+        run: |
+          pip install twine
+          twine check dist/*
+
+      - name: publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      # Only after the upload succeeds. A release pointing at a version that is
+      # not on PyPI is worse than no release.
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          # The changelog section for this version, without its heading, as the
+          # release body. One source for what changed, not two that drift.
+          awk -v v="## $ver" '
+            $0 ~ "^" v {found=1; next}
+            found && /^## / {exit}
+            found {print}
+          ' CHANGELOG.md > body.md
+          prerelease=""
+          case "$ver" in *a*|*b*|*rc*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "refractal $ver" \
+            --notes-file body.md \
+            $prerelease

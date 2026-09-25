@@ -6,7 +6,7 @@ This is not the commit history. The history records why a decision was made;
 this records what a user gets in a version they can install. Different
 audiences, and the history is the better read for the first question.
 
-## 0.1.0a1 (unreleased)
+## 0.1.0a1 (2026-09-25)
 
 First alpha. Every stage is implemented and tested against real model servers
 as well as the synthetic backend.
