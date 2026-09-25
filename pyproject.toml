@@ -72,4 +72,12 @@ build-backend = "hatchling.build"
 packages = ["src/refractal"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/refractal", "tests", "examples", "docs", "README.md", "LICENSE"]
+# An explicit list, so a new top-level file is absent from the sdist until
+# somebody adds it here. CHANGELOG.md was written and silently left out, which
+# is the failure this list trades for: nothing unintended ships, and something
+# intended can be forgotten. The check is `tarfile.getnames()` after a build,
+# not reading this line.
+include = [
+    "src/refractal", "tests", "examples", "docs",
+    "README.md", "CHANGELOG.md", "LICENSE",
+]
