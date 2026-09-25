@@ -1,7 +1,7 @@
 # Refractal
 
-Refractal runs the same experiment against two checkpoints and tells you whether
-the difference is real.
+Refractal runs the same experiment against two or more checkpoints and tells you
+whether the difference is real.
 
 It sits on top of an evaluation harness rather than replacing one. The harness
 answers *what did this checkpoint score*; Refractal answers *did my change help*,

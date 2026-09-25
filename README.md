@@ -1,6 +1,14 @@
 # Refractal
 
-**Run the same evaluation twice and know whether the difference is real.**
+**A closed-loop evaluation compiler.**
+
+Refractal turns a declared set of scenarios into a plan you can inspect before running, 
+executes it on your chosen backend with the policy acting in simulation, and tells you 
+whether the difference between two checkpoints is real.
+
+Backends: local, Docker Compose, Kubernetes.
+
+Run the same evaluation twice and know whether the difference is real.
 
 You have a policy. You changed something. You want to know if the new version is
 better.
@@ -23,7 +31,7 @@ $ refractal plan catalog --hardware laptop -o plan.json
   360 episodes across 1 scene(s), 2 worker(s), at most 37 min
   that is an upper bound: every episode is costed at its full step limit,
   and episodes that succeed finish sooner.
-  wrote plan.json  (plan_schema 1, plan_id sha256:82b73f180a7a...)
+  wrote plan.json  (plan_schema 3, plan_id sha256:82b73f180a7a...)
 
 $ refractal run plan.json -o results --catalog catalog
 $ refractal compare results $(python -c "import json;print(json.load(open('plan.json'))['plan_id'])")
@@ -33,18 +41,20 @@ About a minute end to end, with no GPU, no simulator and no checkpoints: the
 example runs against a built-in fake benchmark, so the machinery is real and only
 the robot is not.
 
-**[Start here →](docs/getting-started.md)**
+**[Start here →](https://github.com/nalinraut/refractal/blob/main/docs/getting-started.md)**
 
 ## Documentation
 
 | | |
 |---|---|
-| [Getting started](docs/getting-started.md) | Install to verdict, start to finish. |
-| [Writing a catalog](docs/writing-a-catalog.md) | Describing your own experiment, and which edits invalidate existing results. |
-| [Reading a comparison](docs/reading-a-comparison.md) | Every number in the output and when not to trust it. |
-| [Adapter contract](docs/adapter-contract.md) · [example](docs/adapter-example.md) | Connecting your own simulator. |
-| [Against vla-eval](docs/backend-vla-eval.md) · [In containers](docs/backend-compose.md) | Running at scale. |
-| [Execution modes](docs/execution-mode.md) · [Releasing](docs/releasing.md) | |
+| [Getting started](https://github.com/nalinraut/refractal/blob/main/docs/getting-started.md) | Install to verdict, start to finish. |
+| [Writing a catalog](https://github.com/nalinraut/refractal/blob/main/docs/writing-a-catalog.md) | Describing your own experiment, and which edits invalidate existing results. |
+| [Catalog reference](https://github.com/nalinraut/refractal/blob/main/docs/catalog-reference.md) | Every file and every field, for looking things up. A key not listed there is rejected. |
+| [Reading a comparison](https://github.com/nalinraut/refractal/blob/main/docs/reading-a-comparison.md) | Every number in the output and when not to trust it. |
+| [Perturbations](https://github.com/nalinraut/refractal/blob/main/docs/perturbations/index.md) · [declaring](https://github.com/nalinraut/refractal/blob/main/docs/perturbations/declaring.md) · [adapters](https://github.com/nalinraut/refractal/blob/main/docs/perturbations/adapters.md) · [sweeps](https://github.com/nalinraut/refractal/blob/main/docs/perturbations/sweeps.md) | Changing the world mid-episode, when success rates alone cannot separate two checkpoints. |
+| [Adapter contract](https://github.com/nalinraut/refractal/blob/main/docs/adapter-contract.md) · [example](https://github.com/nalinraut/refractal/blob/main/docs/adapter-example.md) | Connecting your own simulator. |
+| [Against vla-eval](https://github.com/nalinraut/refractal/blob/main/docs/backend-vla-eval.md) · [In containers](https://github.com/nalinraut/refractal/blob/main/docs/backend-compose.md) | Running at scale. |
+| [Execution modes](https://github.com/nalinraut/refractal/blob/main/docs/execution-mode.md) · [Releasing](https://github.com/nalinraut/refractal/blob/main/docs/releasing.md) | |
 
 ## What it does
 
@@ -131,6 +141,7 @@ placement part of the provenance rather than an accident of the day.
 | `refractal.resolve` | catalog → `plan.json` | no |
 | `refractal.build` | facts that need the engine → `build.lock` | yes |
 | `refractal.execute` | runs a plan; three backends | yes |
+| `refractal.perturbations` | timed changes to world, observation or action | no |
 | `refractal.render` | plan → deployment file | no |
 | `refractal.compare` | Parquet → verdict | no |
 
@@ -144,14 +155,24 @@ resume works by episode identity rather than by a counter.
 
 ## Backends
 
-| | |
-|---|---|
-| `--backend local` | simulates outcomes; no infrastructure |
-| `--backend vla-eval` | drives the harness against running model servers |
-| `--backend compose` | one container per worker, over the same entrypoint |
+Two things are called a backend and it is worth keeping them apart. `refractal
+run --backend X` executes a plan. `refractal render --target Y` writes a
+deployment file that something else executes.
 
-`refractal render` writes the Compose file without Docker installed, so you can
-read it before running it.
+| `refractal run --backend` | |
+|---|---|
+| `local` | simulates outcomes; no infrastructure |
+| `vla-eval` | drives the harness against running model servers |
+| `compose` | one container per worker, over the same entrypoint |
+
+| `refractal render --target` | |
+|---|---|
+| `compose` | a Compose file; `docker compose up` runs it |
+| `k8s` | one Job per worker; `kubectl apply` runs it |
+
+Kubernetes is reached through `render`, not through `run`: Refractal writes the
+Jobs and your cluster schedules them. Both targets render **without Docker or a
+cluster installed**, so you can read the file before running it.
 
 ## Install
 
@@ -170,18 +191,40 @@ bootstrap is resampling, and Cochran's Q is a permutation test.
 Alpha. Every stage is implemented and tested, and the identity-bearing fields are
 still able to move between versions, which is what the `a` in `0.1.0a1` is for.
 
-Validated against real model servers as well as the synthetic backend: 1,362
-episodes across five runs, including a 600-episode comparison whose success rate
+Validated against real model servers as well as the synthetic backend: **15,490
+episodes across 13 runs**, including a 600-episode comparison whose success rate
 was predicted from an earlier run's data before it was run and came back within
 two points.
+
+The largest is a 2,700-episode comparison of three checkpoints across three
+LIBERO suites, executed twice under one `plan_id` — once locally, once as one
+container per worker:
+
+| | wall clock | episode work | overall success |
+|---|---|---|---|
+| local, workers in sequence | 317 min | 314 min | 72.6% |
+| compose, workers in parallel | **171 min** | 462 min | 72.0% |
+
+Placement moved the wall clock by 1.86× and the result by 0.6 points. The two
+placements agreed on **92.0%** of episodes — while re-running a *single*
+placement against itself agreed on only **89.7%**, so two deployments differ
+less than one deployment differs from its own rerun. That is the claim the
+content-addressed identity exists to support, and it is measured rather than
+asserted.
+
+The 462 minutes of episode work against 314 is the honest other half:
+parallelism bought real wall clock and was not free, because four workers
+contend where one had the machine to itself.
 
 ## What is not here yet
 
 - **Trajectory quality metrics.** The `steps.parquet` schema is declared and
   nothing writes it, deliberately: writing it against synthetic data would bake in
   guesses about what a real adapter can record.
-- **`--backend k8s`.** The `--worker` entrypoint that Compose renders against is
-  the same one a Kubernetes job would use.
+- **`--backend k8s`.** `refractal render --target k8s` writes the Jobs and they
+  run against the same `--worker` entrypoint Compose uses, but nothing supervises
+  them from inside Refractal: no `run` subcommand submits them, watches them, or
+  collects their exit codes. Rendered and applied, not driven.
 - **Resource-shape probing.** `refractal build` carries hand-declared shapes
   forward and records whether they were measured. A lint refuses a comment
   claiming a measurement when nothing recorded one.

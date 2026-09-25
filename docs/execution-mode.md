@@ -9,16 +9,42 @@ run:
 
 | mode | what happens | pick it when |
 |---|---|---|
-| `serial` | every task for checkpoint A, then every task for checkpoint B | one policy at a time fits in VRAM, or you want durations comparable across checkpoints |
-| `concurrent` | both checkpoints at once, each against its own server | you want the wall clock halved and do not need to compare durations |
+| `serial` | within one task: every seed for checkpoint A, then B, then C — then the next task | you want durations comparable across checkpoints |
+| `concurrent` | every checkpoint at once, each against its own server | you want the wall clock divided and do not need to compare durations |
 
 It is recorded on every row and is **not** part of the experiment's identity, so
 a run in either mode joins a comparison with the other.
 
+## `serial` does not mean one server at a time
+
+The loop is **task-outer, checkpoint-inner**. A three-checkpoint run therefore
+reads `pi0 pi05 starvla pi0 pi05 starvla …`, one block per task — measured at 30
+blocks across 30 tasks, with **0 of 124 invocations overlapping a different
+checkpoint**. That last figure is the guarantee the mode makes: one policy is
+stepping at any instant, so a duration measured under `serial` is not contended.
+
+What it does **not** give you is a smaller GPU. An earlier version of this table
+said to pick `serial` when "one policy at a time fits in VRAM". That is exactly
+backwards: because the round-robin returns to every checkpoint on every task,
+**every model server stays resident for the whole run**. Nothing is unloaded
+between blocks. Three servers at 9728 + 10240 + 8704 MiB occupy 28 672 MiB of a
+32 108 MiB card in `serial` just as they would in `concurrent` — which left room
+for four workers rather than twelve, and cost most of a factor of two in wall
+clock on a real run.
+
+Budget VRAM for **all** the servers in either mode. The modes differ in when
+policies *step*, not in when they are *loaded*.
+
+The ordering is deliberate beyond that guarantee. Interleaving per task means
+thermal drift, cache state, or a noisy neighbour lands on every arm alike;
+running all of A and then all of B would confound the checkpoint with the hour
+it ran in.
+
 ## `concurrent`
 
-Both checkpoints run at the same time against separate servers. Requires both servers
-resident, so check VRAM before choosing it.
+Every checkpoint runs at the same time against its own server. Requires the same
+servers resident as `serial` — see above — so this is not the mode that costs
+you VRAM; the comparison is.
 
 **It also multiplies what a worker occupies.** One thread per checkpoint means
 one environment per checkpoint, so a two-checkpoint comparison puts two

@@ -168,7 +168,38 @@ a sampler takes `range` + `samples` + `distribution`.
 | `seed_base` | no | `0` | First seed value; seeds run `seed_base … seed_base + seeds - 1`. Part of `plan_id`. |
 | `tier` | no | `full` | Which tier of the catalog to run. |
 | `scenario_sets` | no | `None` | Restrict the run to named sets. `None` means all of them. |
-| `execution_mode` | no | `serial` | `serial` runs every task for checkpoint A, then for checkpoint B — one policy resident at a time. `concurrent` runs them together, one thread per checkpoint. **This is about checkpoints within a worker, not about whether workers are parallel.** Workers always are. |
+| `execution_mode` | no | `serial` | **Within one task**, `serial` runs every seed for checkpoint A, then for checkpoint B, then moves to the next task. `concurrent` runs the checkpoints together, one thread per checkpoint. **This is about checkpoints within a worker, not about whether workers are parallel.** See below. |
+
+### What `serial` actually orders
+
+The loop is task-outer, checkpoint-inner, so a three-checkpoint run reads
+`pi0 pi05 starvla pi0 pi05 starvla …` — one block per task, measured at 30
+blocks across 30 tasks. No two checkpoints ever step at the same instant
+(0 overlapping invocations in 124), which is the guarantee `serial` makes.
+
+An earlier version of this table said it "runs every task for checkpoint A,
+then for checkpoint B — one policy resident at a time". Both halves were
+wrong. Checkpoint is the inner loop, not the outer one; and because the
+round-robin returns to each checkpoint every task, **every model server stays
+up for the whole run**. Nothing is unloaded between blocks, and a reader
+planning GPU memory on the promise of one resident policy would under-provision
+by the size of the other servers.
+
+The ordering is worth keeping deliberately rather than treating as an
+implementation detail: interleaving the checkpoints per task means any drift in
+machine state — thermal, cache, a noisy neighbour — lands on all arms alike.
+Running every task for A and then every task for B would confound the
+checkpoint with the hour it ran in.
+
+**Workers are a separate question, and whether they run in parallel is the
+backend's answer, not the catalog's.** The same table previously asserted
+workers "always are" parallel. They are independent units, which is what makes
+parallelism *possible* — but `local` runs them one after another in a single
+process, measured here as two workers occupying 0→4788s and 4789→7291s with no
+overlap. `compose` and `k8s` give each worker its own container and do run them
+concurrently. That difference is placement, so it moves the wall clock and not
+`plan_id` — which is why the makespan line reports work and wall clock as two
+numbers rather than one.
 
 ### `checkpoints[]`
 

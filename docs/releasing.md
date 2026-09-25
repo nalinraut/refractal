@@ -45,10 +45,10 @@ deriving the expected package list rather than hardcoding it.
 ```console
 $ python scripts/verify_wheel.py dist/refractal-0.1.0a1-py3-none-any.whl
   refractal-0.1.0a1-py3-none-any.whl
-  source has 6: ['build', 'compare', 'execute', 'render', 'resolve', 'schema']
-  wheel has  6: ['build', 'compare', 'execute', 'render', 'resolve', 'schema']
+  source has 7: ['build', 'compare', 'execute', 'perturbations', 'render', 'resolve', 'schema']
+  wheel has  7: ['build', 'compare', 'execute', 'perturbations', 'render', 'resolve', 'schema']
 
-  Wheel matches the source tree (6 subpackages).
+  Wheel matches the source tree (7 subpackages).
 ```
 
 Exit 1 names what is missing or extra. Missing usually means an unanchored
