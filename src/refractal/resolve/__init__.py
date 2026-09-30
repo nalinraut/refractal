@@ -248,6 +248,7 @@ def resolve(
                 engine=scene.engine,
                 external=scene.external,
                 resource_shape=demand.shape,
+                metrics=list(scene.metrics),
                 scenarios=kept_by_scene[scene.id],
                 workers=workers,
                 episode_count=len(episodes),
