@@ -110,6 +110,29 @@ class PlannedEpisode(Strict):
     #: it -- so the instruction *is* the selector. Sending a Refractal task id
     #: instead matches nothing, which runs zero episodes.
     instruction: str = Field(min_length=1)
+    #: How the provider identifies this task, copied in for the same reason
+    #: ``max_steps`` and ``instruction`` are: already inside ``task_hash``, so a
+    #: restatement rather than a new degree of freedom, and a backend has to act
+    #: on it without reaching back into a catalog `refractal plan` compiled away.
+    #:
+    #: Added for metric extractors. A metric is a way of reading state, and what
+    #: state exists is a property of the scene, so extractors are declared on the
+    #: scene. That is right until two tasks on one map have different goals and a
+    #: metric wants "distance to THIS task's goal".
+    #:
+    #: Without this field the only per-task things an extractor could see were
+    #: ``instruction`` and ``task_id``. Parsing a goal out of a language string is
+    #: vla-eval's selector coupling in a new place, and ``task_id`` is a label
+    #: this project refuses to make load-bearing anywhere else. Neither is a
+    #: channel worth building on.
+    #:
+    #: With it, one extractor declared on the scene reads its parameters from the
+    #: task it is running, and scene-scoped extractors stay sufficient.
+    #:
+    #: Defaults to empty, so every plan written before this field existed still
+    #: reads, and ``plan_id`` does not move: identity comes from
+    #: ``experiment_identity`` over the catalog, never from plan.json's shape.
+    provider_ref: dict[str, Any] = Field(default_factory=dict)
 
 
 class PlannedWorker(Strict):
