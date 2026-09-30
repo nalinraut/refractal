@@ -1160,3 +1160,73 @@ class TestDegenerateArmsAreBlocked(unittest.TestCase):
             build_units(rows, checkpoints=[A, B]), [A, B], resamples=100, seed=1
         )
         self.assertEqual(verdict.blocking, [])
+
+
+class TestOneSeedPerScenario(unittest.TestCase):
+    """A replicate-free design is not evidence that two checkpoints are one.
+
+    Both produce zero scenario-level variance, and the guard used to report
+    the second. Found by running it: two MetaDrive IDM variants over 20
+    single-seed scenarios, 18/20 against 20/20 with two crashes against none,
+    blocked with "two checkpoints that are the same thing look exactly like
+    this" and a suggestion to check server assignment. There was no server.
+
+    One symptom, two causes, reported as the one the guard was written for.
+    """
+
+    def _rows(self, *, seeds: int, identical: bool):
+        rows = []
+        for i in range(20):
+            for checkpoint in (A, B):
+                for seed in range(seeds):
+                    tag = f"{i}|{seed}" if identical else f"{checkpoint}|{i}|{seed}"
+                    rows.append({
+                        "scene_id": "s", "scene_hash": "h", "task_id": "t",
+                        "task_hash": "th", "scenario_hash": f"s{i}",
+                        "checkpoint_id": checkpoint, "seed": seed, "session_id": "x",
+                        "harness_version": "v", "harness_surface": "v",
+                        "is_infra_failure": False, "success": hash(tag) % 3 > 0,
+                    })
+        return rows
+
+    def _verdict(self, **kw):
+        return evaluate(
+            build_units(self._rows(**kw), checkpoints=[A, B]), [A, B],
+            resamples=200, seed=1,
+        )
+
+    def test_one_seed_and_different_arms_is_not_blocked(self):
+        """The case that was wrong. A real comparison must not be refused."""
+        verdict = self._verdict(seeds=1, identical=False)
+        self.assertEqual(verdict.blocking, [],
+                         "a legitimate single-seed comparison must proceed")
+        self.assertEqual(verdict.exit_code, 0)
+
+    def test_the_declined_check_is_named(self):
+        """Not silently skipped. A check that quietly does not run is
+        indistinguishable from one that ran and found nothing."""
+        notes = " ".join(self._verdict(seeds=1, identical=False).notes)
+        self.assertIn("identical-checkpoints check did not run", notes)
+        self.assertIn("one seed", notes, "says WHY it could not run")
+        self.assertIn("seeds: 2", notes, "and what to do about it")
+
+    def test_one_seed_and_identical_arms_is_also_not_blocked(self):
+        """Honest rather than convenient.
+
+        With one seed the guard genuinely cannot tell, so it must not claim to
+        have cleared them either. The note is what carries that, and
+        check_server_assignment is the guard that does not depend on
+        replicates.
+        """
+        verdict = self._verdict(seeds=1, identical=True)
+        self.assertEqual(verdict.blocking, [])
+        self.assertIn("identical-checkpoints check did not run",
+                      " ".join(verdict.notes))
+
+    def test_two_seeds_restores_the_guard(self):
+        """The fix must not disable the check it was narrowing."""
+        verdict = self._verdict(seeds=2, identical=True)
+        self.assertTrue(verdict.blocking, "with replicates it must still fire")
+        self.assertIn("no scenario-level variation", verdict.blocking[0])
+        self.assertEqual(verdict.exit_code, 2)
+        self.assertNotIn("did not run", " ".join(verdict.notes))

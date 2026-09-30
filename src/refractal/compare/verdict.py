@@ -236,6 +236,20 @@ def evaluate(
     identical = _checkpoints_look_identical(eligibility, checkpoints)
     if identical:
         verdict.blocking.append(identical)
+    elif len(checkpoints) >= 2 and eligibility.units and all(
+        len(unit.outcomes.get(checkpoints[0], {})) <= 1 for unit in eligibility.units
+    ):
+        # Declined, not passed. A check that quietly does not run is
+        # indistinguishable from one that ran and found nothing, and this one
+        # guards a failure whose whole character is looking clean.
+        verdict.notes.append(
+            "the identical-checkpoints check did not run: every scenario has one "
+            "seed, so there is no within-scenario variance to estimate a design "
+            "effect from and a reading of zero would say nothing about whether "
+            "the checkpoints differ. Re-run with seeds: 2 or more to enable it. "
+            "The comparison below is unaffected, since McNemar needs no "
+            "replicates."
+        )
 
     if eligibility.duplicate_rows:
         sample = eligibility.duplicate_rows[0]
@@ -447,6 +461,34 @@ def _checkpoints_look_identical(eligibility: Eligibility, checkpoints: Sequence[
     """
     if len(checkpoints) < 2 or len(eligibility.units) < 10:
         return None
+
+    # A replicate-free design produces the same symptom as identical
+    # checkpoints, and this guard used to report the second with confidence.
+    #
+    # Found by running it: two IDM variants over 20 single-seed scenarios,
+    # 18/20 against 20/20 with two crashes against none -- genuinely different
+    # -- blocked with "two checkpoints that are the same thing look exactly
+    # like this" and a suggestion to check server assignment. There is no
+    # server in that adapter. Re-run at three seeds, same policies, clean
+    # verdict.
+    #
+    # With one seed per scenario there is no within-scenario variance to
+    # estimate a design effect FROM, so a reading of zero says nothing about
+    # whether the checkpoints differ. Declining to judge is the honest
+    # response: the comparison itself is sound, McNemar needs no replicates,
+    # and the reliable identity guard is `check_server_assignment` in the
+    # bridge, which runs before the run and does not depend on this.
+    #
+    # The general shape, and this project has now hit it twice: one symptom,
+    # more than one cause, reported as the cause it was written for. The
+    # mirror of "breaking a check changes nothing" -- there the ambiguity is
+    # in a silence, here it is in a firing.
+    seed_counts = {
+        len(unit.outcomes.get(checkpoints[0], {})) for unit in eligibility.units
+    }
+    if seed_counts <= {1}:
+        return None
+
     from .variance import measure_variance
 
     report = measure_variance(eligibility.units, checkpoints[0], checkpoints[1])
