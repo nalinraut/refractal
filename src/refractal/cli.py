@@ -228,8 +228,54 @@ def cmd_run(args: argparse.Namespace) -> int:
         f"  session {summary.session_id[:8]}  "
         f"{summary.written} episode(s) written, {summary.skipped} already done"
     )
+    if _refuse_silent_extractors(whole_plan, args.results):
+        return 1
     print(f"  next:  refractal compare {args.results} {plan.plan_id}")
     return 0
+
+
+def _refuse_silent_extractors(plan, results_uri: str) -> int:
+    """A declared extractor that produced nothing on any episode of this run.
+
+    SESSION scope, and a configuration fault: the catalog asked for a
+    measurement and nothing arrived. Same category as the server preflight, so
+    it fails here, while the operator is watching, rather than next week when
+    somebody reads the results.
+
+    Distinct from `compare`'s coverage check, which asks whether the episodes
+    being POOLED were measured alike and needs only rows. This one needs the
+    DECLARATION, which is why neither can be written in terms of the other:
+    two enforcement points of one rule would make each untestable.
+
+    Reads the artifact rather than a counter kept while writing. A tally
+    produced by the same path that would have failed proves nothing, which is
+    why `verify_written` reads part files too.
+    """
+    declared = [m for scene in plan.scenes for m in scene.metrics]
+    if not declared:
+        return 0
+    from .execute import read_episodes
+    from .execute.metrics import check_extractors_ran
+
+    rows = read_episodes(results_uri, plan.plan_id).to_pylist()
+    if not rows:
+        return 0
+    silent = check_extractors_ran(declared, rows)
+    if not silent:
+        return 0
+    print(
+        f"error: {len(silent)} declared extractor(s) produced nothing on any of "
+        f"{len(rows)} episode(s):",
+        file=sys.stderr,
+    )
+    for name in silent:
+        print(f"  {name}", file=sys.stderr)
+    print(
+        "  A success rule thresholding one of their metrics fails every "
+        "episode, and the run reads as a policy that never succeeds.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _run_compose(args: argparse.Namespace, plan) -> int:
@@ -382,6 +428,28 @@ def cmd_compare(args: argparse.Namespace) -> int:
     from .execute import ResultWriter, read_episodes
 
     rows = read_episodes(args.results, args.plan_id).to_pylist()
+
+    # POOL scope: were the episodes about to be compared measured alike.
+    #
+    # Not the same question `run` asks. That one is session-scoped, needs the
+    # catalog's declaration, and catches a configuration fault while the
+    # operator is watching. This needs only rows, and catches data that spans
+    # a resumed run, several sessions, or a session predating an extractor.
+    #
+    # Different inputs on purpose, so neither can be written in terms of the
+    # other. Two enforcement points of one rule make each copy untestable:
+    # break either and the other keeps passing.
+    #
+    # Reported rather than refused. A metric measured unevenly may be
+    # observational and harmless; `compare` cannot tell, because the success
+    # rule lives in task_hash and the plan, never in a row. Printing it lets a
+    # reader decide in a second, where refusing would block comparisons that
+    # are fine.
+    from .compare.coverage import describe, uneven_metric_coverage
+
+    uneven = uneven_metric_coverage(rows)
+    if uneven:
+        print(describe(uneven), file=sys.stderr)
 
     promotion = None
     if args.promote_from:
