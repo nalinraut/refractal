@@ -236,6 +236,7 @@ def expand_episodes(
                             max_steps=task.max_steps,
                             instruction=task.instruction,
                             provider_ref=dict(task.provider_ref),
+                            success=task.success,
                             scenario_hash=scenario.scenario_hash,
                             base_scenario_hash=scenario.base_scenario_hash,
                             perturbations=list(scenario.perturbations),

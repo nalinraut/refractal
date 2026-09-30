@@ -38,7 +38,14 @@ from typing import Any, Literal
 from pydantic import Field
 
 from .errors import CatalogError, RefractalError
-from .models import Checkpoint, ExternalScene, ResourceShape, Strict
+from .models import (
+    Checkpoint,
+    ExternalScene,
+    MetricExtractor,
+    ResourceShape,
+    Strict,
+    SuccessRule,
+)
 
 #: Bump by hand, and only when the format changes in a way older readers cannot
 #: survive. See the module docstring for why this is not derived.
@@ -52,7 +59,13 @@ from .models import Checkpoint, ExternalScene, ResourceShape, Strict
 #: ``run`` reads the plan and not the catalog -- a worker in a container has the
 #: plan mounted and nothing else, and a spec it cannot see is a spec that cannot
 #: fire.
-PLAN_SCHEMA = 3
+#:
+#: 4 adds ``provider_ref`` and ``success`` to every episode and ``metrics`` to
+#: every scene. Same argument as 3: a worker reads the plan and not the catalog,
+#: so an extractor it cannot see cannot run and a rule it cannot see cannot
+#: decide. Every field is additive with a default, so a plan written at 3 still
+#: reads -- the bump says the SHAPE moved, which is what the number is for.
+PLAN_SCHEMA = 4
 
 
 class PlanSchemaError(RefractalError):
@@ -133,6 +146,16 @@ class PlannedEpisode(Strict):
     #: reads, and ``plan_id`` does not move: identity comes from
     #: ``experiment_identity`` over the catalog, never from plan.json's shape.
     provider_ref: dict[str, Any] = Field(default_factory=dict)
+    #: The rule turning this episode's metrics into its verdict, copied from the
+    #: task. Already inside ``task_hash``, so a restatement like ``max_steps``.
+    #:
+    #: On the EPISODE rather than the scene because it belongs to the task: two
+    #: tasks on one scene may decide success differently. The extractors sit on
+    #: the scene, where the state is; the rule sits here, where the goal is.
+    #:
+    #: ``None`` means the provider's own boolean stands, which is every episode
+    #: recorded to date.
+    success: SuccessRule | None = None
 
 
 class PlannedWorker(Strict):
@@ -168,6 +191,13 @@ class PlannedScene(Strict):
     #: executable form.
     external: ExternalScene | None = None
     resource_shape: ResourceShape
+    #: The extractors to run while an episode of this scene is stepping.
+    #:
+    #: Carried for the same reason ``resource_shape`` is, and neither is hashed:
+    #: the plan holds what a backend needs to ACT, which is a larger set than
+    #: what identifies the experiment. `refractal run` needs nothing but
+    #: plan.json, and an extractor it could not see would make that false.
+    metrics: list[MetricExtractor] = Field(default_factory=list)
     #: **The expanded list, not the generator spec.** A generator whose
     #: implementation drifts would otherwise make the provenance a lie.
     scenarios: list[PlannedScenario]
@@ -181,7 +211,7 @@ class Plan(Strict):
     #: is a deliberate edit here as well as to ``PLAN_SCHEMA``. ``read_plan``
     #: enforces the same range with a message; this is the backstop for a Plan
     #: built by any other route.
-    plan_schema: Literal[1, 2, 3] = PLAN_SCHEMA
+    plan_schema: Literal[1, 2, 3, 4] = PLAN_SCHEMA
     plan_id: str
     catalog_hash: str
     refractal_version: str
