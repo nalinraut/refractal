@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from ..schema.plan import Plan, PlannedEpisode, PlannedScene, PlannedWorker
 from .fake import FakeProvider
+from .metrics import Measured, extract, verdict
 from .harness import LOCAL, describe_installed_harness
 from .physics import ABSENT as PHYSICS_ABSENT
 from .results import ResultWriter
@@ -34,6 +35,7 @@ def _row(
     scene: PlannedScene,
     worker: PlannedWorker,
     outcome: dict,
+    measured: "Measured",
     *,
     session_id: str,
     execution_mode: str,
@@ -72,7 +74,20 @@ def _row(
         "perturbation_count": 0,
         "physics_version": PHYSICS_ABSENT,
         "physics_surface": PHYSICS_ABSENT,
-        "success": outcome["success"],
+        # The declared rule decides; the provider's boolean is the fallback for
+        # an episode with no rule, which is every episode recorded before this
+        # existed.
+        #
+        # Decided HERE, at write time, never in `compare`. The rule is inside
+        # task_hash, so editing a threshold makes a different experiment, and
+        # deciding at read time would let that edit silently re-score episodes
+        # already recorded.
+        "success": verdict(episode.success, measured, fallback=outcome["success"]),
+        # None rather than {} when nothing was measured: an empty map claims an
+        # extractor ran and found nothing, which is a different fact from no
+        # extractor having been declared.
+        "metrics": measured.values or None,
+        "metrics_from": measured.ran or None,
         "phase_outcomes": outcome["phase_outcomes"],
         "terminal_phase": outcome["terminal_phase"],
         "failure_reason": outcome["failure_reason"],
@@ -127,12 +142,25 @@ def run_local(
                     skipped += 1
                     continue
                 outcome = provider.run(episode)
+                # The synthetic backend simulates outcomes rather than
+                # physics, so the outcome dict IS its state. An extractor
+                # written for `--backend local` reads from it; one written for
+                # a real simulator reads from that. This module never inspects
+                # either, which is what keeps the contract the adapter's.
+                measured = extract(
+                    scene.metrics,
+                    outcome,
+                    task_id=episode.task_id,
+                    instruction=episode.instruction,
+                    provider_ref=episode.provider_ref,
+                )
                 by_checkpoint.setdefault(episode.checkpoint_id, []).append(
                     _row(
                         episode,
                         scene,
                         worker,
                         outcome,
+                        measured,
                         session_id=session_id,
                         execution_mode=plan.execution_mode,
                         started_at=cursor,
