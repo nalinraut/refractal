@@ -336,6 +336,23 @@ EPISODES_SCHEMA = pa.schema(
         # the same file and may declare different phases; a struct has one
         # schema per file and would refuse the second task.
         pa.field("phase_outcomes", pa.map_(pa.string(), pa.bool_())),
+        # How the episode ended, in the adapter's own vocabulary.
+        #
+        # **The set is open and Refractal never declares it.** An adapter
+        # supplies whatever its simulator terminates with, and no code here
+        # enumerates, validates or maps those strings. That is deliberate:
+        # any list written here would be one simulator's, and the next
+        # adapter would either be constrained by it or quietly ignore it.
+        #
+        # One string, which is the whole constraint. A simulator that can end
+        # an episode two ways at once has to decide which one this is, and
+        # deciding by an invented priority is how a guess becomes a fact. An
+        # adapter meeting that case should refuse rather than pick.
+        #
+        # Not a substitute for `success`, and not a rate. It is the reason,
+        # where `success` is the verdict: "failed by crashing" and "failed by
+        # running out of time" are different findings that a boolean cannot
+        # separate, and separating them is most of why this column exists.
         pa.field("terminal_phase", pa.string()),
         # What was measured, as opposed to what was run.
         #

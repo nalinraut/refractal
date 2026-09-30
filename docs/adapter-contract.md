@@ -107,3 +107,39 @@ $ refractal run plan.json -o results --backend vla-eval --server baseline=ws://l
 If episodes run but every one fails, check the observation keys first and the
 scenario parameter names second. Those are the two failures that produce a
 complete run and a meaningless result.
+
+## `terminal_phase` and `phase_outcomes`
+
+Two columns an adapter fills that Refractal never interprets.
+
+**`terminal_phase`** is how the episode ended, as one string, in the adapter's
+own vocabulary. **The set is open and Refractal declares none of it.** Nothing
+here enumerates, validates or maps these strings, because any list written into
+the core would be one simulator's and the next adapter would either be
+constrained by it or quietly ignore it.
+
+One string is the whole constraint, and it has a consequence worth stating: a
+simulator that can end an episode two ways at once has to decide which one this
+is. **Refuse rather than pick.** A priority order invented to resolve a case
+nobody has seen is a guess that reads as a fact ever after, and if the refusal
+never fires nothing was lost.
+
+It is not a substitute for `success` and not a rate. It is the *reason* where
+`success` is the verdict. "Failed by crashing" and "failed by running out of
+time" are different findings, and a boolean cannot separate them.
+
+**`phase_outcomes`** is `map<string, bool>`: named assertions evaluated *while
+the episode runs*. Whether a safety margin held, whether a sub-goal was
+reached, whether a limit was exceeded.
+
+The argument for evaluating in-loop rather than reconstructing afterwards is
+cost and possibility, not taste. A contact check against live simulator state
+is nearly free where the state already exists, and expensive or impossible from
+a recorded trajectory: safety is usually a property of the *relationship*
+between the agent and the scene, and an ego trajectory alone cannot express it.
+Two identical paths can be safe or catastrophic depending on what else was
+there.
+
+Both columns were declared long before anything filled them. The first adapter
+to populate either was a driving one, which is the shape of evidence that they
+are general rather than manipulation-specific.
