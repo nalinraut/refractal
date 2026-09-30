@@ -126,10 +126,10 @@ def task_identity(task: Task, content: Mapping[str, Any] | None = None) -> dict[
     them: a predicate over observations, with arguments.
 
     They are empty for a task whose goal is opaque to all three.
-    ``from_benchmark`` is a passthrough -- the benchmark decides whether its own
+    ``from_provider`` is a passthrough -- the provider decides whether its own
     task succeeded -- so ``predicate`` is a constant, ``predicate_args`` is
     ``{}``, and the only thing separating two goals is ``instruction``: a
-    human-readable string a benchmark release could keep while moving the goal
+    human-readable string a provider release could keep while moving the goal
     region underneath it.
 
     So ``build`` supplies what only the provider can answer -- for LIBERO, the

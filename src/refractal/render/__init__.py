@@ -102,15 +102,15 @@ class ComposeSettings:
         "an engine decides the image because the image exists to provide the
         engine" -- described an image that does not exist.
         `refractal-libero:local` is 8.94 GB of MuJoCo AND LIBERO AND the
-        harness: named for the engine, carrying the benchmark. That holds
-        while one engine means one benchmark, and breaks the moment a catalog
+        harness: named for the engine, carrying the provider. That holds
+        while one engine means one provider, and breaks the moment a catalog
         wants LIBERO and RoboCasa in one comparison, since both are `mujoco`.
 
         What belongs in the catalog is the REQUIREMENT, not the image, and it
         is already there: an external scene declares its provider, which is
         exactly "what this scene needs", is already part of identity, and
         already survives the compile into plan.json -- its own docstring says
-        it is carried "so a backend can name the benchmark that owns this
+        it is carried "so a backend can name the provider that owns this
         scene without the catalog".
 
         So the provider is the key when there is one, and the engine is the
@@ -121,7 +121,7 @@ class ComposeSettings:
         ``vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark``. Two keys
         matching one provider is refused rather than resolved by declaration
         order -- picking one silently is how a scene ends up in the wrong
-        image, and the wrong image is a different benchmark.
+        image, and the wrong image is a different provider.
         """
         images = {**DEFAULT_IMAGES, **self.images}
         if provider:
@@ -150,7 +150,7 @@ class ComposeSettings:
                 f"no image for engine {engine!r}"
                 + (f" or provider {provider!r}" if provider else "")
                 + f". Known: {sorted(images)}. Key images by the provider when "
-                "two benchmarks share an engine, or by the engine otherwise."
+                "two providers share an engine, or by the engine otherwise."
             )
         return image
 
@@ -216,7 +216,7 @@ def _check_runnable(plan: Plan) -> None:
 
     The cause is always the same: the harness runs
     ``ep in range(episodes_per_task)`` and hands ``episode_idx = ep`` to the
-    benchmark, so a worker holding a later slice of a scenario range runs the
+    provider, so a worker holding a later slice of a scenario range runs the
     early indices while every row claims the late ones. One worker per scene
     fixes it, which is what ``partition_unit: task`` expresses.
     """

@@ -157,7 +157,7 @@ def budget_model_servers(
     """Place one model server per checkpoint, first-fit, before anything else.
 
     Servers are reserved first because they are the inflexible consumer: a
-    benchmark worker can be dropped or deferred, a policy cannot -- with no
+    simulation worker can be dropped or deferred, a policy cannot -- with no
     server there is nothing to evaluate. Reserving after would let workers claim
     memory the run cannot start without.
     """

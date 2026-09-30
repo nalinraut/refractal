@@ -596,7 +596,7 @@ class TestExternallyDefinedScenes(unittest.TestCase):
             self._catalog(tmp, root)
             with self.assertRaises(BuildError) as ctx:
                 build(root, hardware_profile=HARDWARE)
-            self.assertIn("where the benchmark is installed", str(ctx.exception))
+            self.assertIn("where the provider is installed", str(ctx.exception))
 
     def test_a_probe_that_returns_a_digest_instead_of_facts_is_refused(self):
         """Hashing happens in one place; a probe that hashes is a second one."""

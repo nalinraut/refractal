@@ -103,7 +103,7 @@ class SceneEntry(Strict):
     scene_hash: str
     model_hash: str
     engine_version: str
-    #: True when the geometry lives in a wrapped benchmark rather than this
+    #: True when the geometry lives in a wrapped provider rather than this
     #: catalog, so ``resolve`` knows the hash cannot be recomputed locally.
     external: bool = False
     #: For external scenes: the catalog-side identity this hash was recorded
@@ -143,7 +143,7 @@ class TaskEntry(Strict):
     The mirror of ``SceneEntry`` for goals rather than geometry. ``task_hash``
     covers instruction, predicate, arguments, step limit and phases -- complete
     for a task whose goal those fields *define*, and empty for one using
-    ``from_benchmark``, where the benchmark owns the definition.
+    ``from_provider``, where the provider owns the definition.
 
     For LIBERO that means the BDDL digest and the init-state array digest. The
     init states live here rather than on the scene because ``get_task_init_states``

@@ -519,7 +519,7 @@ class TestTheExecutingClassIsProvenance(LoopCase):
     def test_it_is_written_per_row(self):
         plan = make_plan(scenarios=2, checkpoints=("pi0",))
         self.run_loop(plan, FakeHarness())
-        classes = {r["benchmark_class"] for r in self.rows(plan)}
+        classes = {r["provider_class"] for r in self.rows(plan)}
         self.assertEqual(len(classes), 1)
         self.assertTrue(next(iter(classes)), "the provider must be recorded")
 
@@ -531,7 +531,7 @@ class TestTheExecutingClassIsProvenance(LoopCase):
         for row in self.rows(plan):
             for identity in ("episode_id", "scenario_hash", "base_scenario_hash",
                              "scene_hash", "task_hash"):
-                self.assertNotIn(row["benchmark_class"], row[identity])
+                self.assertNotIn(row["provider_class"], row[identity])
 
 
 class TestTheExecutingClassComesFromTheRun(LoopCase):
@@ -556,7 +556,7 @@ class TestTheExecutingClassComesFromTheRun(LoopCase):
         for config in harness.configs:
             self.assertNotEqual(config["benchmarks"][0]["benchmark"], self.OVERRIDE)
         for row in self.rows(plan):
-            self.assertNotEqual(row["benchmark_class"], self.OVERRIDE)
+            self.assertNotEqual(row["provider_class"], self.OVERRIDE)
 
     def test_a_perturbed_plan_gets_the_override_and_records_it(self):
         plan = TestTheWholeRouteEndToEnd._perturbed_plan(self, at_step=5)
@@ -565,7 +565,7 @@ class TestTheExecutingClassComesFromTheRun(LoopCase):
         for config in harness.configs:
             self.assertEqual(config["benchmarks"][0]["benchmark"], self.OVERRIDE)
         for row in self.rows(plan):
-            self.assertEqual(row["benchmark_class"], self.OVERRIDE,
+            self.assertEqual(row["provider_class"], self.OVERRIDE,
                              "the row records what actually ran")
 
     def test_it_reaches_no_identity(self):

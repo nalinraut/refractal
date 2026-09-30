@@ -244,7 +244,15 @@ EPISODES_SCHEMA = pa.schema(
         # writes 0 for an unperturbed episode rather than leaving it unset, so a
         # null is always about the schema and never about the episode.
         pa.field("perturbation_count", pa.int32()),
-        # Which benchmark class actually ran this episode.
+        # Which provider class actually ran this episode.
+        #
+        # Named `benchmark_class` until 0.1.0a2. `Benchmark` is vla-eval's name
+        # for its own interface and arrived with the bridge that implements it;
+        # Refractal's vocabulary is scene, task, scenario, seed, episode,
+        # checkpoint, and none of those says benchmark. Renamed while the
+        # package is at alpha and the schema is expected to move, because after
+        # 0.1.0 it is a far more awkward change. `read_episodes` still reads
+        # files written under the old name.
         #
         # Provenance, never identity, and that is a measured claim rather than a
         # preference: the same unperturbed episode through LIBEROBenchmark and
@@ -262,7 +270,7 @@ EPISODES_SCHEMA = pa.schema(
         # Recorded anyway, because "it does not change identity" is not the same
         # as "nobody needs to know", and the claim it rests on is checked by
         # refractal-libero's verify_libero_claims.py rather than assumed.
-        pa.field("benchmark_class", pa.string()),
+        pa.field("provider_class", pa.string()),
         pa.field("scene_id", pa.string(), nullable=False),
         pa.field("scene_hash", pa.string(), nullable=False),
         pa.field("task_id", pa.string(), nullable=False),
@@ -871,8 +879,33 @@ def read_episodes(results_uri: str, plan_id: str) -> "pa.Table":
     tables = []
     for path in paths:
         with fs.open(path, "rb") as handle:
-            tables.append(pq.read_table(handle, use_threads=READ_THREADS))
+            tables.append(_renamed(pq.read_table(handle, use_threads=READ_THREADS)))
     return pa.concat_tables(tables)
+
+
+#: Columns renamed since a version that has written results, old name to new.
+#: Applied on read so a directory can hold part files from either side of the
+#: change and still concatenate: `pa.concat_tables` refuses on a schema
+#: mismatch, so without this a rename splits a comparison in half.
+#:
+#: This is not a licence to rename freely. It exists because the package is at
+#: alpha and `benchmark_class` was one backend's vocabulary leaking into the
+#: general schema; after 0.1.0 a rename should be a schema version, not an
+#: alias. Entries here are a cost, so the list should shrink rather than grow.
+_RENAMED_ON_READ = {"benchmark_class": "provider_class"}
+
+
+def _renamed(table: "pa.Table") -> "pa.Table":
+    """Bring an older part file's column names up to date.
+
+    Name-only. The type and the values are untouched, so a row written under
+    the old name reads identically to one written under the new one and the
+    two concatenate.
+    """
+    names = table.column_names
+    if not any(old in names for old in _RENAMED_ON_READ):
+        return table
+    return table.rename_columns([_RENAMED_ON_READ.get(n, n) for n in names])
 
 
 __all__ = [

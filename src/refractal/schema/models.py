@@ -153,7 +153,7 @@ class ResourceShape(Strict):
     #: it is wrong in the direction it points -- a derivation would have to
     #: invert, and a rule that inverts on a sample of two was not nearly right.
     #:
-    #: It is a property of the engine-plus-BENCHMARK pair, not of the engine
+    #: It is a property of the engine-plus-PROVIDER pair, not of the engine
     #: alone: a different driver over classic MuJoCo could answer ``scenario``.
     #: Which is why it lives on ``ResourceShape``, already keyed by
     #: ``(scene, engine, hardware_profile)``.
@@ -190,9 +190,9 @@ class ResourceShape(Strict):
 
 
 class ExternalScene(Strict):
-    """A scene defined by someone else's benchmark, not by a file in this catalog.
+    """A scene defined by someone else's code, not by a file in this catalog.
 
-    Wrapping a third-party benchmark means the geometry lives inside an installed
+    Wrapping a third-party provider means the geometry lives inside an installed
     package -- a LIBERO scene is a BDDL file inside `libero`, not an MJCF under
     ``catalog/assets``. There is nothing catalog-local to hash, and inventing a
     placeholder ``model:`` path would put a lie in the one artifact whose job is
@@ -202,7 +202,7 @@ class ExternalScene(Strict):
     supplies its hash into the lock.
     """
 
-    #: The benchmark class that defines this scene.
+    #: The provider class that defines this scene.
     provider: ImportString
     #: How that provider identifies it, e.g. ``{suite: libero_spatial, task_id: 3}``.
     #: Part of the scene's catalog-side identity: changing it means a different
@@ -216,7 +216,7 @@ class ExternalScene(Strict):
     #: Separate from ``ref`` because one field cannot do both jobs. ``ref`` held
     #: both at first, and a backend passed the whole thing to the provider --
     #: which raises, because ``task_id`` identifies a LIBERO task and is not a
-    #: constructor argument of the benchmark that owns it.
+    #: constructor argument of the provider that owns it.
     #:
     #: Both are hashed into the scene's identity, and for the same reason: these
     #: change what the policy observes. ``send_state: false`` against a checkpoint
@@ -235,7 +235,7 @@ class ExternalScene(Strict):
         """A key in both must mean the same thing in both.
 
         Some keys legitimately appear twice: LIBERO's ``suite`` both identifies
-        the scene and is a constructor argument of the benchmark that owns it. So
+        the scene and is a constructor argument of the provider that owns it. So
         the split cannot be "no key appears in both" -- it has to be "a key in
         both agrees".
 
@@ -306,7 +306,7 @@ class Scene(Strict):
         if (self.model is None) == (self.external is None):
             raise ValueError(
                 f"scene {self.id!r} must declare exactly one of 'model' (a file in this "
-                "catalog) or 'external' (a scene defined by a wrapped benchmark); "
+                "catalog) or 'external' (a scene defined by a wrapped provider); "
                 + ("it declares both" if self.model else "it declares neither")
             )
         seen = set()

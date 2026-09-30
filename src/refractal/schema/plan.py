@@ -132,7 +132,7 @@ class PlannedScene(Strict):
     scene_hash: str
     engine: str
     #: Carried through from the catalog when the scene is externally defined, so a
-    #: backend can name the benchmark that owns this scene without the catalog.
+    #: backend can name the provider that owns this scene without the catalog.
     #:
     #: Same reason as ``PlannedEpisode.max_steps``, and the same root cause: the
     #: plan was shaped by the local backend, whose executor needs nothing but

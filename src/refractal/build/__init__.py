@@ -88,7 +88,7 @@ class EngineProbe(Protocol):
 
 
 class ExternalSceneProbe(Protocol):
-    """Supplies the facts that define a scene living inside a wrapped benchmark.
+    """Supplies the facts that define a scene living inside a wrapped provider.
 
     Returns a **document, not a digest**. Hashing is Refractal's job and happens
     in exactly one place: a probe that hashed for itself would be a second
@@ -220,14 +220,14 @@ def build(
             scene = scene.model_copy(update={"engine_version": version})
 
         if scene.is_external:
-            # The geometry lives in a wrapped benchmark. Only a probe that can
+            # The geometry lives in a wrapped provider. Only a probe that can
             # import the provider knows what it is; without one there is nothing
             # honest to record.
             if probe is None or not hasattr(probe, "external_scene_facts"):
                 raise BuildError(
                     f"scene {scene.id!r} is defined by {scene.external.provider!r}, so its "
                     "facts must come from a probe that can import that provider. Run "
-                    "'refractal build' where the benchmark is installed."
+                    "'refractal build' where the provider is installed."
                 )
             facts = probe.external_scene_facts(scene)
             if not isinstance(facts, dict) or not facts:
@@ -240,7 +240,7 @@ def build(
             # The probe's facts AND the catalog's own assertions. The facts alone
             # were the first version, and they are not enough: they describe what
             # LIBERO contains, not how this catalog asks for it. `external.params`
-            # carries the benchmark's constructor arguments -- which cameras are
+            # carries the provider's constructor arguments -- which cameras are
             # sent, whether proprioception is sent, which of two quaternion
             # conventions the state uses -- and those decide what the policy
             # observes.
@@ -299,7 +299,7 @@ def build(
     #
     # `task_hash` covers instruction, predicate, arguments, step limit and
     # phases -- complete for a task those fields DEFINE, and empty for one using
-    # `from_benchmark`, where the benchmark owns the definition. For a LIBERO
+    # `from_provider`, where the provider owns the definition. For a LIBERO
     # task that leaves `instruction` as the only discriminator: a string a
     # release could keep while moving the goal region underneath it.
     #

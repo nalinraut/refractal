@@ -359,7 +359,7 @@ def refuse_unsupported_perturbations(catalog, lock=None) -> None:
                     f"scenario_set {scenario_set.id!r} scales the torque limit of "
                     f"{spec.target!r} on scene {scene_id!r}, but nothing has recorded "
                     "which of that scene's actuators have a torque limit. Run "
-                    "'refractal build' where the benchmark is importable. Refused "
+                    "'refractal build' where the provider is importable. Refused "
                     "rather than attempted: an actuator with no limit accepts the "
                     "call, changes nothing, and the run completes looking clean.",
                     file="scenarios.yaml",

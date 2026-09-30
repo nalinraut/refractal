@@ -250,7 +250,7 @@ def _row(
     harness_surface: str,
     physics_version: str,
     physics_surface: str,
-    benchmark_class: str | None = None,
+    provider_class: str | None = None,
     receipt: Any = None,
     episode_perturbations: list | None = None,
     server_url: str,
@@ -301,7 +301,7 @@ def _row(
         # when the episode ended before its trigger. Whether it actually fired
         # is the receipt's job, and `compare` decides between them -- an episode
         # that outran its trigger is not a point on its level's curve.
-        "benchmark_class": benchmark_class,
+        "provider_class": provider_class,
         "perturbation_count": len(episode_perturbations or ()),
         "perturbation_level": _declared_level(episode_perturbations),
         "perturbation_exposure": _measured_exposure(receipt),
@@ -455,7 +455,7 @@ def _run_group(
             scene,
             worker_id,
             receipt=(collected[index] if collected else None),
-            benchmark_class=config["benchmarks"][0]["benchmark"],
+            provider_class=config["benchmarks"][0]["benchmark"],
             episode_perturbations=_specs_for(outcome),
             session_id=session_id,
             execution_mode=execution_mode,
