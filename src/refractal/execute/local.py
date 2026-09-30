@@ -1,4 +1,4 @@
-"""The ``local`` backend: runs a plan in-process against a fake benchmark.
+"""The ``local`` backend: runs a plan in-process against a fake provider.
 
 No Docker, no simulator, no model server. It exercises the real writer, the real
 schema, the real partition layout and the real resume path -- everything except
@@ -11,7 +11,7 @@ import datetime as dt
 from dataclasses import dataclass
 
 from ..schema.plan import Plan, PlannedEpisode, PlannedScene, PlannedWorker
-from .fake import FakeBenchmark
+from .fake import FakeProvider
 from .harness import LOCAL, describe_installed_harness
 from .physics import ABSENT as PHYSICS_ABSENT
 from .results import ResultWriter
@@ -90,7 +90,7 @@ def run_local(
     results_uri: str,
     *,
     catalog_root: str | None = None,
-    benchmark: FakeBenchmark | None = None,
+    provider: FakeProvider | None = None,
     session_id: str,
     started_at: dt.datetime | None = None,
     resume: bool = True,
@@ -102,7 +102,7 @@ def run_local(
     reproducibility, and the resume path is precisely the thing that has to be
     proven rather than assumed.
     """
-    benchmark = benchmark or FakeBenchmark()
+    provider = provider or FakeProvider()
     started_at = started_at or dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
     writer = ResultWriter(results_uri, plan.plan_id)
 
@@ -126,7 +126,7 @@ def run_local(
                 if episode.episode_id in already:
                     skipped += 1
                     continue
-                outcome = benchmark.run(episode)
+                outcome = provider.run(episode)
                 by_checkpoint.setdefault(episode.checkpoint_id, []).append(
                     _row(
                         episode,

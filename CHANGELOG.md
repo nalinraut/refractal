@@ -6,6 +6,26 @@ This is not the commit history. The history records why a decision was made;
 this records what a user gets in a version they can install. Different
 audiences, and the history is the better read for the first question.
 
+## Unreleased
+
+### Changed
+
+- `benchmark` was vla-eval's word for its own interface and had spread into
+  language with nothing to do with that backend. Refractal's vocabulary is
+  scene, task, scenario, seed, episode, checkpoint.
+  - `refractal run --benchmark` is now `--provider`. The old spelling is still
+    accepted and no longer shown in `--help`.
+  - The `benchmark_class` results column is now `provider_class`. Files written
+    under the old name still read: the rename is applied on read, so a results
+    directory can hold part files from either side of the change.
+  - `refractal.predicates:from_benchmark` is now `from_provider`.
+    **`from_benchmark` remains as an alias and existing catalogs should keep
+    using it**: `predicate` is inside `task_hash`, so changing the string in a
+    catalog changes the experiment and orphans results already recorded.
+  - `FakeProvider`, formerly `FakeBenchmark`, and no longer exported from
+    `refractal.execute`. It is the local backend's default and a test fixture,
+    not API. Import it from `refractal.execute.fake` if you need it.
+
 ## 0.1.0a1 (2026-09-25)
 
 First alpha. Every stage is implemented and tested against real model servers

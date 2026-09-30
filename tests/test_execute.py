@@ -5,11 +5,13 @@ from pathlib import Path
 
 from refractal.execute import (
     EPISODES_SCHEMA,
-    FakeBenchmark,
     OutputMissingError,
     read_episodes,
     run_local,
 )
+# From the module, not the package root: FakeProvider is a test fixture and the
+# local backend's default, not API this package owes anyone.
+from refractal.execute.fake import FakeProvider
 from refractal.execute.results import comparison_prefix
 from refractal.resolve import resolve
 
@@ -411,7 +413,7 @@ class TestFailureSemantics(ExecuteCase):
     def test_failure_reason_is_null_exactly_when_successful(self):
         # The API reference says null means a policy failure -- but null is also
         # what a success writes, so the two would be indistinguishable.
-        self.run_once(benchmark=FakeBenchmark(success_rate=0.5))
+        self.run_once(provider=FakeProvider(success_rate=0.5))
         for row in read_episodes(self.results, self.plan.plan_id).to_pylist():
             if row["success"]:
                 self.assertIsNone(row["failure_reason"])
@@ -419,7 +421,7 @@ class TestFailureSemantics(ExecuteCase):
                 self.assertIsNotNone(row["failure_reason"])
 
     def test_infra_failure_is_its_own_column(self):
-        self.run_once(benchmark=FakeBenchmark(success_rate=0.7, infra_failure_rate=0.2))
+        self.run_once(provider=FakeProvider(success_rate=0.7, infra_failure_rate=0.2))
         rows = read_episodes(self.results, self.plan.plan_id).to_pylist()
         infra = [r for r in rows if r["is_infra_failure"]]
         self.assertTrue(infra, "expected some injected infra failures")
@@ -508,14 +510,14 @@ class TestKnownGroundTruth(ExecuteCase):
         `compare` can only be trusted if it is checked against data whose answer
         is known in advance, and this is the only source where that is possible.
         """
-        benchmark = FakeBenchmark(
+        provider = FakeProvider(
             success_rate=0.5,
             per_task={
                 ("ckpt-46", "vial-slot-4"): 0.30,
                 ("ckpt-47", "vial-slot-4"): 0.90,
             },
         )
-        self.run_once(benchmark=benchmark)
+        self.run_once(provider=provider)
         rows = read_episodes(self.results, self.plan.plan_id).to_pylist()
 
         def rate(checkpoint, task):
@@ -600,7 +602,7 @@ class TestAWorkerThatWritesNothingIsCaught(ExecuteCase):
         """episode_id comes from the plan; a writer must not invent one.
 
         Matters because the bridge is the first place ids are derived from a
-        benchmark we did not write. An id not in the plan means the scene, task,
+        provider we did not write. An id not in the plan means the scene, task,
         scenario, seed or checkpoint did not survive the round trip.
         """
         import refractal.execute.local as local_mod

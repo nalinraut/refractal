@@ -194,7 +194,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 resume=not args.no_resume,
                 record_video=args.video,
                 frame_every=args.frame_every,
-                benchmark_override=args.benchmark,
+                benchmark_override=args.provider,
                 provenance_plan=whole_plan,
             )
         except BridgeError as exc:
@@ -586,12 +586,23 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--session-id", help="fixed session id, for reproducible tests")
     run_cmd.add_argument("--no-resume", action="store_true",
                          help="re-run episodes that already have results")
+    # `--benchmark` until 0.1.0a2, and the metavar already read PROVIDER: the
+    # rename was half-done, and a flag whose name and metavar disagree is worse
+    # than either name on its own. `Benchmark` is vla-eval's word for its own
+    # interface; nothing in Refractal's vocabulary uses it.
+    #
+    # The old spelling is still accepted and deliberately not documented. Two
+    # separate arguments sharing a `dest` rather than two option strings on
+    # one: argparse prints every option string of an argument, so the pair
+    # form would keep advertising the name being retired. SUPPRESS on its own
+    # argument is what actually hides it.
     run_cmd.add_argument(
-        "--benchmark", metavar="PROVIDER", default=None,
+        "--provider", dest="provider", metavar="PROVIDER", default=None,
         help="class to construct for a PERTURBED episode, e.g. "
              "refractal_libero.perturbed:PerturbedLIBEROBenchmark. Placement, "
              "not identity: it is not in the catalog because declaring it there "
              "would move scene_hash")
+    run_cmd.add_argument("--benchmark", dest="provider", help=argparse.SUPPRESS)
     run_cmd.set_defaults(func=cmd_run)
 
     build_cmd = sub.add_parser(

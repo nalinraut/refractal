@@ -1,4 +1,4 @@
-"""A benchmark that runs no physics.
+"""A provider that runs no physics.
 
 Step 2's whole point: validate the results schema, the writer, resume and the
 partition layout with no simulator, no Docker and no policy in sight. If the
@@ -32,7 +32,7 @@ def _unit(episode_id: str, salt: str) -> float:
 
 
 @dataclass
-class FakeBenchmark:
+class FakeProvider:
     """Configurable synthetic outcomes.
 
     ``success_rate`` may be keyed per ``(checkpoint_id, task_id)`` so a test can
@@ -148,4 +148,4 @@ class FakeBenchmark:
         }
 
 
-__all__ = ["FakeBenchmark"]
+__all__ = ["FakeProvider"]

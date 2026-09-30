@@ -26,7 +26,7 @@ from refractal.compare import (
     mcnemar_unclustered,
     two_proportion_z,
 )
-from refractal.execute import FakeBenchmark
+from refractal.execute.fake import FakeProvider
 from refractal.resolve import resolve
 
 SRC = Path(__file__).resolve().parents[1] / "examples" / "catalog"
@@ -53,14 +53,14 @@ def tearDownModule():
 
 def rows_for(task_id="vial-slot-7", **kwargs):
     """Episode rows straight from the fixture, without the storage round trip."""
-    benchmark = FakeBenchmark(**kwargs)
+    provider = FakeProvider(**kwargs)
     out = []
     for scene in _PLAN.scenes:
         for worker in scene.workers:
             for episode in worker.episodes:
                 if task_id and episode.task_id != task_id:
                     continue
-                outcome = benchmark.run(episode)
+                outcome = provider.run(episode)
                 out.append(
                     {
                         "scene_id": scene.scene_id,

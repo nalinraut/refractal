@@ -2,7 +2,7 @@
 
 Every number in the measurement write-up (development record) -- the false-positive tables,
 the power tables, the case for gating on the bootstrap rather than McNemar -- was
-measured against ``FakeBenchmark``'s ``interaction_spread``. That is a *model* of
+measured against ``FakeProvider``'s ``interaction_spread``. That is a *model* of
 within-scenario correlation, and it was authored to make the fixture able to
 discriminate between the clustered and unclustered tests, then the tests were
 scored against it.
@@ -168,7 +168,7 @@ def measure_variance(units: Sequence[Unit], a: str, b: str) -> VarianceReport:
 def modelled_variance(
     *, scenario_spread: float, interaction_spread: float, base_rate: float = 0.5
 ) -> dict[str, float]:
-    """What ``FakeBenchmark``'s knobs imply, for comparison with a measurement.
+    """What ``FakeProvider``'s knobs imply, for comparison with a measurement.
 
     Exists so a correction to the statistics doc is a comparison rather than a
     replacement. If a real policy's design effect differs from the value its

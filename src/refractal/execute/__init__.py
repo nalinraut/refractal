@@ -3,7 +3,7 @@
 Backends are strictly additive:
 
 ===========  ==========================================================
-``local``    in-process, fake benchmark, no simulator. Also the
+``local``    in-process, fake provider, no simulator. Also the
              permanent test fixture for ``compare``.
 ``compose``  Docker Compose, one host. The default, once it exists.
 ``k8s``      rendered from ``plan.json``, never hand-written. Not v1.
@@ -12,7 +12,6 @@ Backends are strictly additive:
 Nothing in ``schema`` or ``resolve`` may import anything from here.
 """
 
-from .fake import FakeBenchmark
 from .harness import LOCAL, SURFACE, describe_installed_harness, surface_digest
 from .local import LOCAL_HARNESS_VERSION, RunSummary, run_local
 from .results import (
@@ -30,7 +29,6 @@ __all__ = [
     "STEPS_SCHEMA",
     "LOCAL",
     "SURFACE",
-    "FakeBenchmark",
     "OutputMissingError",
     "describe_installed_harness",
     "surface_digest",
