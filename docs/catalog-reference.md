@@ -64,6 +64,7 @@ scenes:
 | `model_hash` | no | `None` | Written by `refractal build`. Never hand-written. |
 | `assets` | no | `[]` | Extra files folded into `scene_hash`. A texture the model references is part of the scene. |
 | `resource_shape` | no | `[]` | One entry per hardware profile. See below. |
+| `metrics` | no | `[]` | What to measure while an episode runs. One entry per extractor. See below. Not hashed by itself: measuring more about a run does not make it a different run. |
 | `description` | no | `""` | Free text. Not hashed. |
 
 ### `scenes[].external`
@@ -110,6 +111,7 @@ decide whether it can refuse at all.
 | `phases` | no | `[]` | Sub-goals, for tasks scored in stages. Each has a `name`. |
 | `max_steps` | no | `400` | The step budget, and **it is identity**: two budgets are two experiments. A failure at the cap is a timeout, not an inability — say which you intended. |
 | `provider_ref` | no | `{}` | How the provider identifies this task, e.g. `{task_id: 3}`. |
+| `success` | no | `None` | Metrics to a verdict. Absent means the provider's own boolean decides, which is right for a wrapped suite and wrong where success is a degree. **Hashed as a unit** into `task_hash`: the thresholds *and* the import strings of the extractors it names. See below. |
 | `description` | no | `""` | Free text. Not hashed. |
 
 ---
@@ -249,3 +251,64 @@ experiment.
 | a scenario's generated values or `perturbations` | `scenario_hash` |
 | `checkpoints`, `seeds`, `seed_base`, `tier`, `execution_mode` | `plan_id` |
 | `resource_shape`, `hardware.yaml`, `results_uri`, the backend | **nothing** — placement, not identity |
+
+### `scenes[].metrics[]` — what to measure
+
+An extractor turns live simulator state into named numbers. They land in the
+`metrics` column of `episodes.parquet` as a `map<string, double>`.
+
+| field | required | default | what it does |
+|---|---|---|---|
+| `extractor` | yes | | Import string of the callable, e.g. `refractal_metadrive.metrics:route`. |
+| `produces` | yes | | The metric names it writes. **Declared, not discovered**: `refractal plan` runs with no simulator and cannot import the extractor to ask, and the refusal below has to be answerable from the catalog alone. `refractal build` checks the declaration where the extractor is importable. |
+| `args` | no | `{}` | Passed to the extractor. Not name-validated, like every other pass-through. |
+
+On the scene because an extractor reads simulator state, and the scene is what
+owns a simulator.
+
+### `tasks[].success` — metrics to a verdict
+
+```yaml
+success:
+  all_of:
+    - {metric: route_completion, at_least: 0.95}
+    - {metric: collisions, at_most: 0}
+```
+
+| field | required | what it does |
+|---|---|---|
+| `all_of` | yes | Every threshold must hold. A conjunction is the whole language. |
+
+Each threshold:
+
+| field | required | what it does |
+|---|---|---|
+| `metric` | yes | A name some extractor on this task's scene `produces`. |
+| `at_least` | one of | Passes when the metric is greater than or equal to this. |
+| `at_most` | one of | Passes when the metric is less than or equal to this. |
+
+**Exactly one bound per entry.** `{at_least: 0.9, at_most: 0.8}` is a range
+that can never hold and there is no reading of it that is not a mistake. A band
+is two entries.
+
+**A missing metric fails.** Absence is not evidence of success.
+
+**Applied where the row is written, never at read time.** Two consequences, and
+the second is the reason:
+
+`compare` is untouched. It reads `success` exactly as before and never sees a
+metric, so McNemar, Holm, the clustered bootstrap and the k-checkpoint outcome
+patterns all work unchanged.
+
+And re-scoring an old run under a new rule is impossible by construction.
+Editing `0.95` to `0.90` moves `task_hash`, so it is a different experiment.
+Computing the verdict at read time would have let that edit silently re-score
+episodes already recorded, which is what the identity model exists to prevent.
+
+**Not the same as `--dichotomy`.** That collapses several *seeds* of one
+scenario into the bit McNemar consumes, and is scenario-level. This collapses
+*metrics* into the verdict for one episode. Two collapses at two levels.
+
+**Refused at plan time**: a `metric` no extractor on the task's scene declares
+in `produces`. Pure function of the catalog, checked at the cheapest point that
+can see it.

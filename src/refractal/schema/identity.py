@@ -108,7 +108,11 @@ def base_scenario_hash(params: Mapping[str, Any]) -> str:
     return scenario_hash(params)
 
 
-def task_identity(task: Task, content: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def task_identity(
+    task: Task,
+    content: Mapping[str, Any] | None = None,
+    metric_sources: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     """Task identity by content.
 
     ``id`` and ``description`` are excluded on purpose: renaming a task or
@@ -152,11 +156,61 @@ def task_identity(task: Task, content: Mapping[str, Any] | None = None) -> dict[
         # Only when non-empty, so every task_hash recorded before this existed
         # stays valid. A task whose goal IS its authored fields is unaffected.
         document["content"] = dict(content)
+    if task.success is not None:
+        # The success rule as a COMPLETE UNIT: the thresholds, and the import
+        # string of the extractor producing each metric it names.
+        #
+        # Not two fields coupled together. A rule that thresholds
+        # `route_completion >= 0.95` is not defined until you know what
+        # computes `route_completion`, the same way a predicate is not defined
+        # without its `predicate_args`. Swapping the extractor while keeping
+        # the threshold changes what passes, so it changes the experiment.
+        #
+        # An extractor the rule does NOT name stays out. That is what keeps
+        # "measuring more things does not make it a different run" true: add an
+        # observational metric and nothing moves.
+        #
+        # This hashes the import STRING. A body edited under the same name
+        # hashes the same, which is the filter-body case exactly, and is
+        # handled the same way: `build` records a source digest of the resolved
+        # callable and verifies it best-effort where it can import it.
+        document["success"] = {
+            "all_of": [
+                {"metric": t.metric, "at_least": t.at_least, "at_most": t.at_most}
+                for t in task.success.all_of
+            ],
+            "metric_sources": {
+                name: (metric_sources or {}).get(name)
+                for name in task.success.metrics_named()
+            },
+        }
     return document
 
 
-def task_hash(task: Task, content: Mapping[str, Any] | None = None) -> str:
-    return hash_obj(task_identity(task, content))
+def task_hash(
+    task: Task,
+    content: Mapping[str, Any] | None = None,
+    metric_sources: Mapping[str, str] | None = None,
+) -> str:
+    return hash_obj(task_identity(task, content, metric_sources))
+
+
+def metric_sources_for(scene: Scene, task: Task) -> dict[str, str]:
+    """Every metric this scene declares, to the extractor that produces it.
+
+    Deliberately NOT narrowed to what the success rule names. ``task_identity``
+    selects those, and selecting in both places means neither selection is
+    load-bearing: a mutation removing this one survived the whole suite,
+    because the other still filtered. Two filters, one tested.
+
+    So this is a plain lookup table and the choice of what enters identity is
+    made once, in the function that builds the document.
+    """
+    return {
+        name: extractor.extractor
+        for extractor in scene.metrics
+        for name in extractor.produces
+    }
 
 
 def _scene_files(catalog_root: Path, scene: Scene) -> list[Path]:
@@ -332,6 +386,12 @@ def experiment_identity(
     it is whether anyone wants tier promotion in practice -- a usage question, not
     a design one.
     """
+    # Materialised: `scenes` is an Iterable and is now consumed twice, once for
+    # the scene list and once to resolve a task's metric sources. A generator
+    # would yield nothing the second time and every success rule would hash
+    # with its inputs missing, silently.
+    _scenes = list(scenes)
+    _by_id = {s.id: s for s in _scenes}
     return {
         "scenes": sorted(
             (
@@ -340,7 +400,7 @@ def experiment_identity(
                     "engine": s.engine,
                     "scene_hash": scene_hashes[s.id],
                 }
-                for s in scenes
+                for s in _scenes
             ),
             key=lambda d: d["id"],
         ),
@@ -360,7 +420,15 @@ def experiment_identity(
                     # Falls back to the authored hash for a task with no
                     # recorded content, which is every task in a catalog that
                     # defines its own goals. Their plan_ids do not move.
-                    "task_hash": (task_hashes or {}).get(t.id) or task_hash(t),
+                    # The scene is in scope here, so the fallback resolves the
+                    # success rule's extractors rather than hashing the rule
+                    # with its inputs missing. `task_hashes` already carries
+                    # them when `resolve` computed it.
+                    "task_hash": (task_hashes or {}).get(t.id)
+                    or task_hash(
+                        t,
+                        metric_sources=metric_sources_for(_by_id[t.scene], t),
+                    ),
                     "scene": t.scene,
                 }
                 for t in tasks
@@ -423,6 +491,7 @@ __all__ = [
     "scene_hash",
     "scene_identity",
     "external_scene_ref_key",
+    "metric_sources_for",
     "task_hash",
     "task_identity",
 ]

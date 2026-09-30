@@ -337,6 +337,33 @@ EPISODES_SCHEMA = pa.schema(
         # schema per file and would refuse the second task.
         pa.field("phase_outcomes", pa.map_(pa.string(), pa.bool_())),
         pa.field("terminal_phase", pa.string()),
+        # What was measured, as opposed to what was run.
+        #
+        # NOT hashed, and the distinction is the whole point: measuring more
+        # things about an episode does not make it a different episode. Adding
+        # an observational metric must not invalidate results already recorded.
+        #
+        # A map rather than columns, for the reason `phase_outcomes` is a map:
+        # the set of names is the adapter's, not the schema's. Route completion
+        # and peak jerk have no business in a manipulation row, and forcing
+        # every domain's names into one schema is how a schema stops being
+        # extensible without a migration.
+        #
+        # double, not a union. A metric is a measured quantity; a categorical
+        # outcome is `terminal_phase` and a named assertion is `phase_outcomes`.
+        # Three types of thing, three places, rather than one column that needs
+        # its type inspected before it can be read.
+        #
+        # Where a success rule NAMES one of these, that metric stops being
+        # observational: the rule is in `task_hash` along with the import
+        # strings of the extractors it names, so the verdict's inputs are
+        # pinned even though the column is not.
+        pa.field("metrics", pa.map_(pa.string(), pa.float64())),
+        # Which extractors ran. A request and its fulfilment, compared: a
+        # declared extractor that produced nothing on every episode is the
+        # silent failure here, and it looks identical to one that ran and found
+        # nothing worth reporting unless the run says which it was.
+        pa.field("metrics_from", pa.list_(pa.string())),
         # Null if and only if `success`. The API reference says "null means a
         # genuine policy failure", but null is also what a success writes, so
         # the two are indistinguishable. A failure always names itself:

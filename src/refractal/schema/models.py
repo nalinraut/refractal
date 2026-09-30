@@ -9,7 +9,7 @@ what :mod:`refractal.schema.loader` hands it.
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -294,6 +294,13 @@ class Scene(Strict):
     model_hash: str | None = None
     assets: list[str] = Field(default_factory=list)
     resource_shape: list[ResourceShape] = Field(default_factory=list)
+    #: What to measure while an episode runs. On the scene because an extractor
+    #: reads simulator state, and the scene is what owns a simulator.
+    #:
+    #: Not hashed by itself: measuring more things about a run does not make it
+    #: a different run. An extractor a success rule NAMES is hashed through
+    #: that rule, where it stops being observational.
+    metrics: list[MetricExtractor] = Field(default_factory=list)
     description: str = ""
 
     @property
@@ -348,6 +355,105 @@ class Phase(Strict):
         return self
 
 
+class MetricExtractor(Strict):
+    """A callable that turns live simulator state into named numbers.
+
+    ``produces`` is declared rather than discovered. ``refractal plan`` runs on
+    a laptop with no simulator, so it cannot import the extractor to ask what it
+    returns, and the one refusal worth having here -- a success rule naming a
+    metric nothing produces -- has to be answerable from the catalog alone.
+
+    The cost is that the declaration can lie. ``refractal build`` checks it
+    where the extractor is importable, the same best-effort way it checks
+    filters and predicates.
+    """
+
+    extractor: ImportString
+    #: Metric names this extractor writes. Checked against the success rule at
+    #: plan time, and against what actually ran at write time.
+    produces: list[str] = Field(min_length=1)
+    args: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check(self) -> "MetricExtractor":
+        validate_import_string(self.extractor)
+        if len(set(self.produces)) != len(self.produces):
+            raise ValueError(f"extractor {self.extractor!r} lists a metric twice")
+        return self
+
+
+class Threshold(Strict):
+    """One comparison against one metric.
+
+    Exactly one bound, because ``{at_least: 0.9, at_most: 0.8}`` is a range that
+    can never hold and there is no reading of it that is not a mistake. Two
+    entries express a band, and they read as what they are.
+    """
+
+    metric: str = Field(min_length=1)
+    at_least: float | None = None
+    at_most: float | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> "Threshold":
+        given = [b for b in (self.at_least, self.at_most) if b is not None]
+        if len(given) != 1:
+            raise ValueError(
+                f"threshold on {self.metric!r} needs exactly one of 'at_least' or "
+                f"'at_most'; got {len(given)}. A band is two entries."
+            )
+        return self
+
+    def holds(self, value: float | None) -> bool:
+        """A missing metric fails. It is not evidence of success."""
+        if value is None:
+            return False
+        if self.at_least is not None:
+            return value >= self.at_least
+        return value <= self.at_most
+
+
+class SuccessRule(Strict):
+    """Metrics to a verdict, declared in the catalog and hashed as a unit.
+
+    Driving succeeds by degree: route completion, collisions, minimum
+    time-to-collision. A boolean from the simulator cannot express it, and
+    re-deriving one downstream would put the definition of success somewhere a
+    reader of the catalog cannot see it.
+
+    **Applied where the row is written, never at read time.** Two consequences,
+    and the second is the reason:
+
+    The statistics are untouched. ``compare`` reads ``success`` exactly as it
+    did; it never sees a metric. Nothing in McNemar, Holm, the clustered
+    bootstrap or the k-checkpoint patterns changes.
+
+    And re-scoring an old run under a new rule is impossible by construction.
+    The rule is in ``task_hash``, so editing a threshold makes a different
+    experiment. If the verdict were computed at read time, an edit would
+    silently re-score episodes already recorded, which is exactly what the
+    identity model exists to prevent.
+
+    **Not the same thing as ``--dichotomy``.** That collapses several SEEDS of
+    one scenario into the bit McNemar consumes, and is scenario-level. This
+    collapses METRICS into the verdict for one episode. Two collapses at two
+    levels, and calling both a dichotomy cost two messages of confusion before
+    anything was written.
+    """
+
+    #: Every threshold must hold. A conjunction is the whole language, on
+    #: purpose: anything more general is an expression compiler nobody asked
+    #: for, and the sophistication belongs in the extractor that produces the
+    #: metric rather than in the rule that thresholds it.
+    all_of: list[Threshold] = Field(min_length=1)
+
+    def metrics_named(self) -> list[str]:
+        return sorted({t.metric for t in self.all_of})
+
+    def holds(self, metrics: Mapping[str, float | None]) -> bool:
+        return all(t.holds(metrics.get(t.metric)) for t in self.all_of)
+
+
 class Task(Strict):
     """What the robot must achieve, and the predicate that decides success.
 
@@ -377,6 +483,17 @@ class Task(Strict):
     #: Identity, via ``task_hash``: two tasks pointing at different provider
     #: tasks are different tasks even if their instructions somehow matched.
     provider_ref: dict[str, Any] = Field(default_factory=dict)
+    #: Metrics to a verdict. Absent means the provider's own boolean decides,
+    #: which is right for a wrapped suite that owns its definition of success
+    #: and wrong for a domain where success is a degree.
+    #:
+    #: In ``task_hash`` AS A UNIT: the thresholds and the import strings of the
+    #: extractors it names. Not a coupling between two fields, but the rule's
+    #: definition being complete -- the same reason ``predicate_args`` is hashed
+    #: with the predicate it parameterises. An extractor the rule does not name
+    #: is observational and moves nothing, which is what lets you add a metric
+    #: without invalidating results.
+    success: SuccessRule | None = None
     description: str = ""
 
     @model_validator(mode="after")

@@ -28,6 +28,7 @@ from ..perturbations import (
     invertible,
 )
 from ..schema.identity import (
+    metric_sources_for,
     episode_id,
     base_scenario_hash,
     scenario_hash,
@@ -387,6 +388,45 @@ def refuse_unsupported_perturbations(catalog, lock=None) -> None:
                 )
 
 
+def refuse_unproduced_metrics(catalog: Catalog) -> None:
+    """A success rule may only threshold a metric something declares it writes.
+
+    Pure function of the catalog, so it is checked at the cheapest point that
+    can see it, the same as the capability refusals. No simulator, no import,
+    no run.
+
+    The failure this prevents is quiet rather than loud. A threshold on a
+    metric nothing produces reads as `None` at write time, `Threshold.holds`
+    treats a missing metric as failing, and every episode of the task fails
+    for a reason that looks exactly like the policy being bad. Discovered
+    after the run, at the cost of the run.
+
+    Checked against the DECLARED `produces`, which is a claim the catalog makes
+    and not a measurement. `refractal build` verifies that claim where the
+    extractor is importable; here there is nothing to import.
+    """
+    for task in catalog.tasks:
+        if task.success is None:
+            continue
+        scene = catalog.scene(task.scene)
+        produced = {
+            name: extractor.extractor
+            for extractor in scene.metrics
+            for name in extractor.produces
+        }
+        missing = [m for m in task.success.metrics_named() if m not in produced]
+        if not missing:
+            continue
+        known = ", ".join(sorted(produced)) or "none"
+        raise CatalogError(
+            f"task {task.id!r} decides success on {', '.join(repr(m) for m in missing)}, "
+            f"which no extractor on scene {scene.id!r} declares it produces. "
+            f"Declared there: {known}. A threshold on a metric nothing writes "
+            "fails every episode, and it fails looking exactly like a bad policy.",
+            file="tasks.yaml",
+        )
+
+
 def task_hashes_for(catalog: Catalog, lock=None) -> dict[str, str]:
     """Task hashes, taking provider-supplied content from the lock when present.
 
@@ -406,7 +446,9 @@ def task_hashes_for(catalog: Catalog, lock=None) -> dict[str, str]:
     for task in catalog.tasks:
         entry = lock.task_entry(task.id) if lock is not None else None
         if entry is None:
-            hashes[task.id] = task_hash(task)
+            hashes[task.id] = task_hash(
+                task, metric_sources=metric_sources_for(catalog.scene(task.scene), task)
+            )
             continue
         if entry.authored_key is not None and entry.authored_key != hash_obj(
             task_identity(task)

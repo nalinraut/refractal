@@ -30,6 +30,7 @@ from .expand import (
     find_type_only_collisions,
     generate_scenarios,
     subsample,
+    refuse_unproduced_metrics,
     refuse_unsupported_perturbations,
     task_hashes_for,
 )
@@ -184,6 +185,7 @@ def resolve(
     # can see it. A spec naming something the scene cannot do is a mistake in
     # the catalog, and finding out mid-episode costs the episodes already run.
     refuse_unsupported_perturbations(catalog, lock)
+    refuse_unproduced_metrics(catalog)
 
     if not demands:
         raise CatalogError("this catalog expands to zero episodes; nothing to plan")
