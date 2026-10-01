@@ -1,6 +1,6 @@
 [project]
 name = "refractal"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Scene-coherent placement and paired comparison for policy evaluation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,6 +49,18 @@ compare = ["pyarrow>=15.0", "fsspec>=2024.2.0"]
 # MRO) and 0865d42 (the shard collision). Before it, getting those meant a git
 # ref, which cannot appear in metadata uploaded to PyPI; now it is an ordinary
 # specifier and the Dockerfile does not need to pin a commit.
+#
+# Deliberately NOT raised to 0.8.0. This is a capability floor -- the oldest
+# release carrying what Refractal needs -- and 0.7.0 and 0.8.0 add nothing it
+# requires. Raising it would exclude working installs to record a fact that
+# belongs in a changelog. Verified against 0.6.0 and 0.8.0 on 2026-10-01: all
+# six claims in scripts/verify_harness_claims.py hold on both, and the full
+# suite passes on both.
+#
+# The surface digest DOES differ between them (8ab641f1 -> 7b1d850b): 0.8.0
+# changed orchestrator.py, recording.py and the three runners. That is the gate
+# working, not a break -- `compare` refuses to pool episodes produced under
+# different surfaces unless --allow-harness-mismatch is passed.
 vla-eval = ["vla-eval>=0.6.0", "fsspec>=2024.2.0", "pyarrow>=15.0"]
 # Frame recording, and optional on purpose. `run --video` encodes one WebP
 # sprite strip per episode; a run without it needs none of this, and the import

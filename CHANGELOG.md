@@ -6,7 +6,34 @@ This is not the commit history. The history records why a decision was made;
 this records what a user gets in a version they can install. Different
 audiences, and the history is the better read for the first question.
 
-## Unreleased
+## 0.1.0a2 (2026-10-01)
+
+Still alpha, and the `a` is doing its job: the identity-bearing fields moved
+again this month. `task_hash` now covers a success rule and the extractors that
+feed it, so a task declaring one hashes differently than it did under 0.1.0a1.
+Results from the two are different experiments and `compare` will say so.
+
+### Added
+
+- **Metrics.** A scene can declare extractors that turn live simulator state
+  into named numbers, which land in the `metrics` column of `episodes.parquet`
+  as `map<string, double>`. The names are declared in the catalog rather than
+  discovered, because `refractal plan` runs with no simulator and cannot import
+  an extractor to ask it.
+- **A success rule in the catalog.** A task can declare `success` as a
+  conjunction of thresholds over those metrics, and the verdict is computed
+  when the row is written. Two consequences worth stating: a missing metric
+  fails the threshold rather than passing it, and re-scoring an existing result
+  under a different threshold is impossible by construction rather than
+  discouraged -- the rule is inside `task_hash`, so changing it makes a
+  different experiment.
+- Where no rule is declared, nothing changes: the provider's own boolean still
+  decides, which is how every wrapped suite keeps owning its definition of
+  success.
+- **Two refusals, at different scopes.** One reads only the rows and refuses a
+  pool whose episodes disagree about which extractors ran; the other reads only
+  the declaration and refuses a session naming a metric no extractor produces.
+  Neither is written in terms of the other, so neither can mask the other.
 
 ### Changed
 
@@ -25,6 +52,29 @@ audiences, and the history is the better read for the first question.
   - `FakeProvider`, formerly `FakeBenchmark`, and no longer exported from
     `refractal.execute`. It is the local backend's default and a test fixture,
     not API. Import it from `refractal.execute.fake` if you need it.
+
+- The vla-eval pin stays at `>=0.6.0`. It is a capability floor -- the oldest
+  release carrying the two upstream fixes Refractal needs -- and 0.7.0 and
+  0.8.0 add nothing it requires, so raising it would exclude working installs.
+  Both were verified on 2026-10-01: all six claims in
+  `scripts/verify_harness_claims.py` hold against each, and the suite passes on
+  each.
+- **If you have results from more than one harness version, `compare` will now
+  block.** vla-eval 0.8.0 changed `orchestrator.py`, `recording.py` and the
+  three runners, which moves the surface digest (`8ab641f1` -> `7b1d850b`).
+  That is the gate doing its job rather than a regression: two harness versions
+  may not be measuring the same thing. Pass `--allow-harness-mismatch` once you
+  have decided they are.
+
+### Fixed
+
+- `getting-started.md` showed `plan_schema 1` and `README.md` showed
+  `plan_schema 3`; the code emits `4`. It is the first number a new user sees.
+- The only worked example for `metrics[].extractor` named a package that is not
+  published. Copying it produced `ModuleNotFoundError` from the documentation.
+- `Scenario.perturbations` claimed sustained perturbations were unimplemented.
+  `until_step` has worked since perturbations landed; it is refused only for
+  effects with no registered inverse.
 
 ## 0.1.0a1 (2026-09-25)
 
