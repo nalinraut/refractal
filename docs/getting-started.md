@@ -32,7 +32,7 @@ $ refractal plan catalog --hardware laptop -o plan.json
   that is an upper bound: every episode is costed at its full step limit,
   and episodes that succeed finish sooner.
   tier=full  seeds=[0, 1, 2]  checkpoints=['baseline', 'candidate']  mode=serial
-  wrote plan.json  (plan_schema 1, plan_id sha256:82b73f180a7a...)
+  wrote plan.json  (plan_schema 4, plan_id sha256:82b73f180a7a...)
 ```
 
 `plan` is the compiler. It expands two scenario sets into 30 distinct scenarios,

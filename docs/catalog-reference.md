@@ -259,7 +259,7 @@ An extractor turns live simulator state into named numbers. They land in the
 
 | field | required | default | what it does |
 |---|---|---|---|
-| `extractor` | yes | | Import string of the callable, e.g. `refractal_metadrive.metrics:route`. |
+| `extractor` | yes | | Import string of the callable, e.g. `your_adapter.metrics:route_completion`. **Refractal ships none**: an extractor reads live simulator state, so it belongs in the adapter that owns the simulator. |
 | `produces` | yes | | The metric names it writes. **Declared, not discovered**: `refractal plan` runs with no simulator and cannot import the extractor to ask, and the refusal below has to be answerable from the catalog alone. `refractal build` checks the declaration where the extractor is importable. |
 | `args` | no | `{}` | Passed to the extractor. Not name-validated, like every other pass-through. |
 

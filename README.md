@@ -36,7 +36,7 @@ $ refractal plan catalog --hardware laptop -o plan.json
   360 episodes across 1 scene(s), 2 worker(s), at most 37 min
   that is an upper bound: every episode is costed at its full step limit,
   and episodes that succeed finish sooner.
-  wrote plan.json  (plan_schema 3, plan_id sha256:82b73f180a7a...)
+  wrote plan.json  (plan_schema 4, plan_id sha256:82b73f180a7a...)
 
 $ refractal run plan.json -o results --catalog catalog
 $ refractal compare results $(python -c "import json;print(json.load(open('plan.json'))['plan_id'])")
