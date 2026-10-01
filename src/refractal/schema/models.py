@@ -618,8 +618,12 @@ class PerturbationSpec(Strict):
     perturbations would change the shape of the hashed document and invalidate
     every scenario_hash ever recorded.
 
-    ``at_step`` only, for now. Sustained perturbations (``until_step``) are a
-    later column, not a restructure.
+    ``until_step`` is supported, but not by every effect: sustaining one means
+    ending it, so it is accepted only where the effect registered an inverse.
+    ``apply_force`` has none and legitimately cannot -- undoing an assignment
+    would clobber whatever was written since -- so it is refused when sustained
+    and fine at a single step. The check lives where sustaining happens, not at
+    registration, which cannot know whether a given spec will carry one.
 
     No longer refused. It was, from the moment the identity was settled until
     the moment a receipt could reach the row -- because a spec accepted by the
