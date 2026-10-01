@@ -28,6 +28,7 @@ convention is the point -- it makes "this is yours to write" visible in the
 example itself rather than in a sentence beside it.
 """
 
+import argparse
 import pathlib
 import re
 import unittest
@@ -41,8 +42,32 @@ DOCS = sorted((ROOT / "docs").rglob("*.md")) + [ROOT / "README.md"]
 PLACEHOLDER = ("your_", "some_package", "my_")
 
 
+def _where(path):
+    """Repo-relative when it is a file, verbatim when it is ``--help``."""
+    try:
+        return path.relative_to(ROOT)
+    except ValueError:
+        return path
+
+
 def _texts():
-    return [(p, p.read_text()) for p in DOCS]
+    """Every surface that documents an import string -- including ``--help``.
+
+    ``--help`` is read more often than the docs directory and was not covered
+    by the first version of this test, which is how the same unpublished
+    package survived in the help text of the very flag being documented while
+    the markdown copy was being fixed.
+    """
+    texts = [(p, p.read_text()) for p in DOCS]
+    parser = build_parser()
+    chunks = []
+    for action in parser._actions:
+        for name in getattr(action, "choices", None) or {}:
+            for act in action.choices[name]._actions:
+                if act.help and act.help is not argparse.SUPPRESS:
+                    chunks.append(act.help)
+    texts.append((pathlib.Path("cli --help"), "\n".join(chunks)))
+    return texts
 
 
 class DocsMatchCode(unittest.TestCase):
@@ -52,7 +77,7 @@ class DocsMatchCode(unittest.TestCase):
             for m in re.finditer(r"plan_schema[` ]+(\d+)", text):
                 if int(m.group(1)) != PLAN_SCHEMA:
                     line = text[: m.start()].count("\n") + 1
-                    wrong.append(f"{path.relative_to(ROOT)}:{line} says "
+                    wrong.append(f"{_where(path)}:{line} says "
                                  f"plan_schema {m.group(1)}, code emits {PLAN_SCHEMA}")
         self.assertEqual(wrong, [], "\n".join(wrong))
 
@@ -61,7 +86,11 @@ class DocsMatchCode(unittest.TestCase):
 
         broken = []
         for path, text in _texts():
-            for m in re.finditer(r"`([a-z_][a-z0-9_.]*):([A-Za-z_][A-Za-z0-9_]*)`", text):
+            # NOT only inline-backticked. The first version of this test matched
+            # ``\`mod:Name\``` only, and the very next commit put an unpublished
+            # package inside a fenced command block where nothing looked at it.
+            # A reader copies from code blocks more readily than from prose.
+            for m in re.finditer(r"\b([a-z_][a-z0-9_.]*):([A-Za-z_][A-Za-z0-9_]*)\b", text):
                 mod, name = m.group(1), m.group(2)
                 if mod.startswith(PLACEHOLDER):
                     continue
@@ -71,11 +100,11 @@ class DocsMatchCode(unittest.TestCase):
                 try:
                     obj = importlib.import_module(mod)
                 except Exception as exc:
-                    broken.append(f"{path.relative_to(ROOT)}:{line} {mod}:{name} "
+                    broken.append(f"{_where(path)}:{line} {mod}:{name} "
                                   f"-> {type(exc).__name__}")
                     continue
                 if not hasattr(obj, name):
-                    broken.append(f"{path.relative_to(ROOT)}:{line} {mod} has no {name}")
+                    broken.append(f"{_where(path)}:{line} {mod} has no {name}")
         self.assertEqual(broken, [], "\n".join(broken))
 
     def test_every_documented_flag_exists(self):
@@ -95,7 +124,7 @@ class DocsMatchCode(unittest.TestCase):
                     continue
                 for flag in re.findall(r"(--[a-z][a-z0-9\-]+)", line):
                     if flag not in real:
-                        unknown.append(f"{path.relative_to(ROOT)}:{i} {flag}")
+                        unknown.append(f"{_where(path)}:{i} {flag}")
         self.assertEqual(unknown, [], "\n".join(unknown))
 
 

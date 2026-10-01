@@ -84,6 +84,43 @@ Sustained perturbations **are** supported: see
 [`until_step`](declaring.md#sustained-perturbations). Not every effect can carry
 one, and the page says which and why.
 
+## Running one
+
+Perturbations are declared in the catalog and run by one extra flag:
+
+```
+$ refractal run plan.json -o results \
+    --backend vla-eval \
+    --provider your_adapter.perturbed:PerturbedBenchmark
+```
+
+`--provider` names the class the harness constructs **for perturbed episodes
+only**. It is yours to write — see [Adapters](adapters.md) — and Refractal
+ships none, for the same reason it ships no metric extractor: the class drives
+a simulator, and Refractal does not have one. Running a perturbed episode needs a benchmark that can execute a
+timeline — apply an effect at a step, undo it at another — and a stock
+benchmark cannot. Groups with nothing perturbed keep using the class the scene
+declares, in the same run.
+
+**It is placement, not identity.** The class is not in the catalog on purpose:
+the catalog is hashed, so declaring it there would move `scene_hash` and strand
+every result already recorded as a sweep's baseline. Which class ran is
+recorded on the row, in `provider_class`.
+
+Forgetting the flag is loud, not silent. When any episode in a group is
+perturbed, the bridge passes `perturbations` to the benchmark constructor; a
+class without that parameter fails to construct rather than quietly running the
+episode unperturbed. The spec cannot be accepted by the schema and dropped by
+the backend, which is the failure the whole design is built around.
+
+For a class that *does* accept it, the receipt is the second line of defence:
+`perturbations_fired` records one entry per declared perturbation, fired or
+not, so an episode that recorded nothing is visible in the results rather than
+indistinguishable from a clean run.
+
+The local backend does not take `--provider`. It drives an adapter directly and
+never constructs a benchmark.
+
 ## Where to go next
 
 | | |

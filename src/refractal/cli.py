@@ -667,7 +667,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument(
         "--provider", dest="provider", metavar="PROVIDER", default=None,
         help="class to construct for a PERTURBED episode, e.g. "
-             "refractal_libero.perturbed:PerturbedLIBEROBenchmark. Placement, "
+             "your_adapter.perturbed:PerturbedBenchmark. Placement, "
              "not identity: it is not in the catalog because declaring it there "
              "would move scene_hash")
     run_cmd.add_argument("--benchmark", dest="provider", help=argparse.SUPPRESS)
@@ -684,7 +684,7 @@ def build_parser() -> argparse.ArgumentParser:
     build_cmd.add_argument(
         "--probe", metavar="module:Class",
         help="probe supplying facts only an installed engine can answer, e.g. "
-             "refractal_libero.probe:LiberoProbe. Required for externally-defined "
+             "your_adapter.probe:YourProbe. Required for externally-defined "
              "scenes, whose geometry lives in someone else's package")
     build_cmd.set_defaults(func=cmd_build)
 
