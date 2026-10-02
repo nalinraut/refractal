@@ -101,6 +101,53 @@ not enough: a release could keep the string and move the goal. Give the task a
 The scene's `ref` says which model; the task's `provider_ref` says which goal
 within it.
 
+### When you declare the rule
+
+The other half. If the simulator reports numbers rather than a verdict — a
+driving run has route completion and a collision count, not a pass — measure
+them on the scene and threshold them on the task:
+
+```yaml
+# scenes.yaml
+    metrics:
+      - extractor: your_adapter.metrics:route
+        produces: [route_completion]
+      - extractor: your_adapter.metrics:safety
+        produces: [collisions, min_ttc]
+```
+
+```yaml
+# tasks.yaml
+    success:
+      all_of:
+        - {metric: route_completion, at_least: 0.95}
+        - {metric: collisions, at_most: 0}
+```
+
+Extractors go on the **scene** because they read simulator state and the scene
+is what owns a simulator. The rule goes on the **task** because it is what the
+task is asking for. One scene's measurements serve every task on it, each
+thresholding them differently.
+
+`produces` is declared rather than discovered, because `refractal plan` runs
+with no simulator and cannot import an extractor to ask it what it writes.
+
+Three things worth knowing before you choose a threshold:
+
+- **A missing metric fails.** Absence is not evidence of success.
+- **Exactly one bound per entry.** A band is two entries.
+- **The rule is inside `task_hash`.** Changing a threshold makes a different
+  experiment rather than re-scoring this one, and `compare` will refuse to pool
+  the two. That is the point: the verdict is computed where the row is written,
+  so there is no way to re-score a finished run into a better one.
+
+Measuring is free. Adding an extractor and not naming it in any rule changes
+no verdict and no hash: the numbers land in the `metrics` column and nothing
+reads them. Thresholding is the part that defines the experiment.
+
+See [catalog reference](catalog-reference.md#taskssuccess-metrics-to-a-verdict)
+for the full field list.
+
 ## Deciding what is a scenario
 
 **A scenario is what varies between episodes on one scene.** Scenario sets are

@@ -69,6 +69,7 @@ alone, rather than quietly falling back to it.
 | `--expect-from DIR` | prior results to learn an expected duration from |
 | `--expect-plan ID` | the `plan_id` of those results, if not this plan |
 | `--pack-below-startup-sec N` | pack starved scenes sequentially when scene construction costs more than the parallelism saves; default 30 |
+| `-v`, `--verbose` | add one line per worker under each scene: its cpuset, episode count, duration bound and envs per process |
 
 `refractal init .` takes `--force` to overwrite files that are already there.
 

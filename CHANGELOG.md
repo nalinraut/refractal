@@ -66,6 +66,21 @@ Results from the two are different experiments and `compare` will say so.
   may not be measuring the same thing. Pass `--allow-harness-mismatch` once you
   have decided they are.
 
+### Documentation
+
+- **How to run a perturbation.** Four documents described the feature and none
+  contained a command. `--provider` — the only way to run one — was named in
+  no document at all. [Perturbations](perturbations/index.md) now shows the
+  invocation, why the class is a flag rather than a hashed catalog field, and
+  what happens if you omit it.
+- **Declaring your own success rule**, in `writing-a-catalog.md`, beside the
+  section on letting a wrapped suite decide. They are two halves of one choice
+  and only one was written.
+- **Where the `success` bit came from**, in `reading-a-comparison.md`. The
+  statistics are identical whether a provider reported the verdict or a
+  catalog rule computed it, which is exactly why the page should say which.
+- `refractal plan -v` is documented.
+
 ### Fixed
 
 - `getting-started.md` showed `plan_schema 1` and `README.md` showed

@@ -128,5 +128,54 @@ class DocsMatchCode(unittest.TestCase):
         self.assertEqual(unknown, [], "\n".join(unknown))
 
 
+class DocLinksResolve(unittest.TestCase):
+    """Intra-doc links point at files and headings that exist.
+
+    A wrong anchor is invisible: mkdocs --strict does not resolve them, the
+    page renders, and the link lands at the top of the right document, which
+    looks almost correct. This was written straight after guessing
+    ``#tasksuccess--metrics-to-a-verdict`` for a heading whose real slug is
+    ``taskssuccess-metrics-to-a-verdict``.
+
+    The slug rule is reimplemented rather than imported: ``markdown`` is a
+    mkdocs dependency and the unit-test job does not install it, so importing
+    it would make this skip silently in exactly the place it should run. The
+    local version was checked against ``markdown.extensions.toc.slugify`` over
+    all 157 headings in docs/ with no disagreement.
+    """
+
+    @staticmethod
+    def _slug(text):
+        import unicodedata
+        t = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+        t = re.sub(r"[^\w\s-]", "", t).strip().lower()
+        return re.sub(r"[-\s]+", "-", t)
+
+    def test_every_link_and_anchor_resolves(self):
+        docs = sorted((ROOT / "docs").rglob("*.md"))
+        slugs = {
+            p.resolve(): {
+                self._slug(re.sub(r"[`*_]", "", m.group(1)).strip())
+                for m in re.finditer(r"^#{1,6}\s+(.*)$", p.read_text(), re.M)
+            }
+            for p in docs
+        }
+        bad = []
+        for p in docs:
+            for m in re.finditer(r"\]\(([^)\s]+?)\)", p.read_text()):
+                target = m.group(1)
+                if target.startswith(("http", "mailto", "#!")):
+                    continue
+                file_part, _, anchor = target.partition("#")
+                dest = (p.parent / file_part).resolve() if file_part else p.resolve()
+                rel = p.relative_to(ROOT)
+                if file_part and not dest.exists():
+                    bad.append(f"{rel}: links to missing file {file_part}")
+                    continue
+                if anchor and dest in slugs and anchor not in slugs[dest]:
+                    bad.append(f"{rel}: #{anchor} is not a heading in {dest.name}")
+        self.assertEqual(bad, [], "\n".join(bad))
+
+
 if __name__ == "__main__":
     unittest.main()

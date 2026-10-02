@@ -36,6 +36,26 @@ died, or a resume never finished. Compare it against `total_episodes` in
 **The 2×2 is scenarios, not episodes.** Each scenario is reduced to one outcome
 per checkpoint by majority vote across its seeds, then cross-tabulated.
 
+**And an episode is already one bit before that.** `compare` reads
+`success` and never sees a metric, so two collapses have happened by the time
+you are reading a rate: metrics to a verdict per episode, then seeds to one
+outcome per scenario.
+
+Where the first collapse came from is worth knowing, because it decides what a
+rate is a rate *of*:
+
+- **The provider decided.** A wrapped suite reported its own verdict and
+  Refractal recorded it. The rate means what that suite means by success.
+- **The catalog decided.** The task declared a `success` rule and thresholds
+  were applied when the row was written. The rate means what *you* said, and
+  the thresholds are in `task_hash` — so a comparison can never be two
+  different rules, and `compare` would refuse to pool them.
+
+Neither is visible in the output above, which is deliberate: the statistics are
+identical either way. Read the plan to find out which, and note that an episode
+can clear the rule and still have behaved badly on a metric nobody thresholded.
+The `metrics` column keeps those numbers whether or not a rule names them.
+
 The off-diagonal cells are what moved. `7` and `7` here means fourteen scenarios
 flipped, seven each way: a rate that barely moved and a lot of churn underneath.
 
