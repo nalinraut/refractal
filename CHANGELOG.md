@@ -13,6 +13,13 @@ again this month. `task_hash` now covers a success rule and the extractors that
 feed it, so a task declaring one hashes differently than it did under 0.1.0a1.
 Results from the two are different experiments and `compare` will say so.
 
+**Your existing results are not orphaned.** That only applies to a task that
+declares a rule, which nothing could do before this version. A catalog without
+one produces a byte-identical `plan_id` under both — checked, not assumed, by
+planning the same catalog with 0.1.0a1 and 0.1.0a2 installed side by side.
+`plan_schema` does move, 3 to 4, which is the file format rather than the
+experiment's identity.
+
 ### Added
 
 - **Metrics.** A scene can declare extractors that turn live simulator state
