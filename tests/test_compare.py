@@ -26,6 +26,7 @@ from refractal.compare import (
     mcnemar_unclustered,
     two_proportion_z,
 )
+from refractal.compare.variance import VarianceReport
 from refractal.execute.fake import FakeProvider
 from refractal.resolve import resolve
 
@@ -1230,3 +1231,42 @@ class TestOneSeedPerScenario(unittest.TestCase):
         self.assertIn("no scenario-level variation", verdict.blocking[0])
         self.assertEqual(verdict.exit_code, 2)
         self.assertNotIn("did not run", " ".join(verdict.notes))
+
+
+class SeedsThatCarriedNothing(unittest.TestCase):
+    """Unanimous cells under more than one seed are said, not enforced.
+
+    The first MetaDrive comparison ran 60 episodes of which 20 were distinct:
+    the adapter resolved the start state from the scenario's params and never
+    read the episode seed, so each scenario's three seeds were the same episode
+    three times. Nothing failed. `compare` collapses seeds to one outcome per
+    scenario before testing, so a majority vote over identical values is a
+    no-op and the verdict was correct. Only the claim of evidence was wrong,
+    and it survived a release and a demo.
+    """
+
+    def test_it_fires_when_every_cell_is_unanimous(self):
+        c = VarianceReport(units=2, mean_seeds=3.0, observed_var=0.1,
+                       binomial_var=0.0, icc={"a": 1.0}, between_var={"a": 0.1})
+        self.assertTrue(c.seeds_carried_nothing)
+        self.assertIn("bought nothing", " ".join(c.summary_lines()))
+
+    def test_it_is_silent_when_a_single_cell_disagreed(self):
+        c = VarianceReport(units=2, mean_seeds=3.0, observed_var=0.1,
+                       binomial_var=0.004, icc={"a": 0.9}, between_var={"a": 0.1})
+        self.assertFalse(c.seeds_carried_nothing)
+        self.assertNotIn("bought nothing", " ".join(c.summary_lines()))
+
+    def test_one_seed_is_not_a_dead_replication(self):
+        # seeds: 1 is a legitimate declaration, not a degenerate three.
+        c = VarianceReport(units=2, mean_seeds=1.0, observed_var=0.1,
+                       binomial_var=0.0, icc={"a": 1.0}, between_var={"a": 0.1})
+        self.assertFalse(c.seeds_carried_nothing)
+
+    def test_a_checkpoint_at_the_ceiling_is_still_caught(self):
+        # ICC was the obvious check and gets this backwards: a checkpoint that
+        # succeeds everywhere has no within-cell AND no between-scenario
+        # variance, so its ICC is 0.000 while its seeds are just as dead.
+        c = VarianceReport(units=2, mean_seeds=3.0, observed_var=0.0,
+                       binomial_var=0.0, icc={"ceiling": 0.0}, between_var={"ceiling": 0.0})
+        self.assertTrue(c.seeds_carried_nothing)

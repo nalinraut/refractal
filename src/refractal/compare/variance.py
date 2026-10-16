@@ -76,6 +76,43 @@ class VarianceReport:
         # to within noise in every fixture run so far.
         return self.design_effect >= 1.25
 
+    @property
+    def seeds_carried_nothing(self) -> bool:
+        """Every seed in every cell gave the same outcome.
+
+        ``binomial_var`` is what the paired difference's variance WOULD be if
+        seeds within a cell were independent. It is built from p(1-p) per
+        cell, so it reaches exactly zero only when every cell is unanimous --
+        no scenario, under any checkpoint, had two seeds disagree.
+
+        ICC was the obvious candidate and is wrong. It reads 1.000 for a
+        checkpoint whose cells are unanimous and varied between scenarios, but
+        0.000 for one that succeeded everywhere -- no within-cell variance and
+        no between-scenario variance either, so there is nothing to correlate.
+        A checkpoint at a ceiling has exactly as dead a set of seeds and the
+        opposite ICC. Checking it would have flagged one of the two
+        checkpoints in the first MetaDrive run and not the other, which is
+        worse than not checking: it would look like a property of that
+        checkpoint rather than of the run.
+
+        With more than one seed this is a setup fact, not a result, and it has
+        two causes worth telling apart by hand:
+
+        * the run is deterministic end to end -- a closed-form policy on a
+          reproducible simulator -- and should declare ``seeds: 1``
+        * the seed is not reaching the simulator, so the replications are the
+          same episode re-run, paid for and discarded
+
+        Both were true of that run: 60 episodes, 20 distinct. The number was
+        on screen and read as unremarkable.
+
+        Not a refusal. The verdict is unaffected, because seeds collapse to
+        one outcome per scenario before any test and a majority vote over
+        identical values is a no-op. What is affected is the claim of
+        evidence.
+        """
+        return self.mean_seeds > 1 and self.binomial_var == 0
+
     def summary_lines(self) -> list[str]:
         lines = [
             f"design effect on the paired difference: {self.design_effect:.2f} "
@@ -97,6 +134,16 @@ class VarianceReport:
                 "  clustering is not load-bearing for the difference at this design "
                 "effect -- a shared scenario effect cancels in a paired contrast, so a "
                 "high ICC alone does not imply it is."
+            )
+        if self.seeds_carried_nothing:
+            lines.append(
+                f"  every seed in every scenario gave the same outcome, for "
+                f"every checkpoint ({self.mean_seeds:.1f} seeds each). The "
+                f"replications carried no information: either the run is "
+                f"deterministic and should declare seeds: 1, or the seed is not "
+                f"reaching the simulator. The verdict is unaffected -- seeds "
+                f"collapse to one outcome per scenario before testing -- but the "
+                f"extra seeds bought nothing."
             )
         return lines
 

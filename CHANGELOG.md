@@ -6,6 +6,17 @@ This is not the commit history. The history records why a decision was made;
 this records what a user gets in a version they can install. Different
 audiences, and the history is the better read for the first question.
 
+## Unreleased
+
+### Added
+
+- **`compare` says when replication carried no information.** If every
+  scenario's seeds agreed, under every checkpoint, the extra seeds measured
+  nothing: either the run is deterministic and should declare `seeds: 1`, or
+  the seed is not reaching the simulator. Not a refusal — the verdict is
+  unaffected, since seeds collapse to one outcome per scenario before any test
+  — but the claim of evidence is.
+
 ## 0.1.0a2 (2026-10-01)
 
 Still alpha, and the `a` is doing its job: the identity-bearing fields moved
