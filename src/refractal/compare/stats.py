@@ -120,7 +120,8 @@ def mcnemar_unclustered(units: Sequence[Unit], a: str, b: str) -> TestResult:
     only_a = only_b = agree = 0
     for unit in units:
         for seed in unit.seeds_kept:
-            pa, pb = unit.outcomes[a][seed], unit.outcomes[b][seed]
+            pa = unit.outcomes[a][seed].succeeded
+            pb = unit.outcomes[b][seed].succeeded
             if pa and not pb:
                 only_a += 1
             elif pb and not pa:
@@ -143,8 +144,8 @@ def two_proportion_z(units: Sequence[Unit], a: str, b: str) -> TestResult:
     the pairing away discards the information about *which* scenarios changed
     and makes a real difference harder to detect.
     """
-    sa = sum(sum(u.outcomes[a].values()) for u in units)
-    sb = sum(sum(u.outcomes[b].values()) for u in units)
+    sa = sum(o.succeeded for u in units for o in u.outcomes[a].values())
+    sb = sum(o.succeeded for u in units for o in u.outcomes[b].values())
     na = sum(len(u.outcomes[a]) for u in units)
     nb = sum(len(u.outcomes[b]) for u in units)
     if not na or not nb:

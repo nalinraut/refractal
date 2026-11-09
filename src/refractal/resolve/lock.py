@@ -116,6 +116,21 @@ class SceneEntry(Strict):
     #: reason the harness surface records a per-file manifest and not only a
     #: digest: a digest says something changed and leaves you to find out what.
     facts: dict[str, Any] = Field(default_factory=dict)
+    #: Provenance of the distributions this scene's hash was asserted by:
+    #: the provider's package and the engine's. Keyed by distribution name.
+    #:
+    #: **Not hashed, and deliberately.** An editable install does not change
+    #: what the scene IS -- it changes how much of that anyone can check. If it
+    #: were hashed, the same catalog built on a maintainer's editable checkout
+    #: and on a published wheel would produce two scene_hashes and two
+    #: plan_ids, and results that are genuinely comparable would refuse to
+    #: join. The condition belongs in the verdict, not in the identity.
+    #:
+    #: Recorded because the external scene's facts are version labels with no
+    #: digests, so an edited editable checkout produces the hash of the release
+    #: it was checked out from and nothing says so.
+    installed: dict[str, Any] = Field(default_factory=dict)
+
     #: What the scene can have done to it, as opposed to what it is.
     #:
     #: **Deliberately not in the hash.** A perturbation spec naming a target the

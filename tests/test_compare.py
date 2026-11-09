@@ -509,7 +509,7 @@ class TestACeilingIsNamed(unittest.TestCase):
                         "execution_mode": "interleaved",
                         "harness_version": "v", "harness_surface": "d",
                         "success": success, "phase_outcomes": [],
-                        "terminal_phase": None,
+                        "termination_reason": None,
                         "failure_reason": None if success else "policy_failure",
                         "is_infra_failure": False, "steps": 10, "elapsed_sec": 1.0,
                         "started_at": None, "ended_at": None, "artifact_uri": None,
@@ -1175,9 +1175,9 @@ class TestOneSeedPerScenario(unittest.TestCase):
     One symptom, two causes, reported as the one the guard was written for.
     """
 
-    def _rows(self, *, seeds: int, identical: bool):
+    def _rows(self, *, seeds: int, identical: bool, units: int = 20):
         rows = []
-        for i in range(20):
+        for i in range(units):
             for checkpoint in (A, B):
                 for seed in range(seeds):
                     tag = f"{i}|{seed}" if identical else f"{checkpoint}|{i}|{seed}"
@@ -1224,13 +1224,33 @@ class TestOneSeedPerScenario(unittest.TestCase):
         self.assertIn("identical-checkpoints check did not run",
                       " ".join(verdict.notes))
 
+    def test_too_few_scenarios_also_names_the_decline(self):
+        """The other way this check declines, which used to be silent.
+
+        Single-seed designs were reported; a comparison with fewer scenarios
+        than the design effect needs returned None and said nothing, so a
+        verdict read exactly as though the check had run and cleared the arms.
+        Both declines are notes now.
+        """
+        verdict = self._verdict(seeds=3, identical=True, units=4)
+        self.assertEqual(verdict.blocking, [],
+                         "below the threshold it declines rather than judging")
+        notes = " ".join(verdict.notes)
+        self.assertIn("identical-checkpoints check did not run", notes)
+        self.assertIn("scenario(s) is below", notes, "says WHY it could not run")
+
     def test_two_seeds_restores_the_guard(self):
         """The fix must not disable the check it was narrowing."""
         verdict = self._verdict(seeds=2, identical=True)
         self.assertTrue(verdict.blocking, "with replicates it must still fire")
         self.assertIn("no scenario-level variation", verdict.blocking[0])
         self.assertEqual(verdict.exit_code, 2)
-        self.assertNotIn("did not run", " ".join(verdict.notes))
+        # Names the check. Two checks can decline now -- the behavioural
+        # one and the declared-identity one -- and this test is about the
+        # first, so matching the bare phrase would pass or fail on the
+        # other's presence.
+        self.assertNotIn("identical-checkpoints check did not run",
+                         " ".join(verdict.notes))
 
 
 class SeedsThatCarriedNothing(unittest.TestCase):

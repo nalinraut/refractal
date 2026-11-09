@@ -81,6 +81,19 @@ except ImportError as exc:  # pragma: no cover - depends on what is installed
 #: tens to hundreds of rows.
 READ_THREADS = False
 
+#: The revision of EPISODES_SCHEMA a row was written under.
+#:
+#: 1 is implicit and never written: it is every row that predates this
+#: constant, identified by the column's absence rather than its value. Those
+#: rows have a success bit and no step data, and `read_episodes` fills the
+#: distributional columns with nulls rather than guessing -- a null
+#: `step_to_success` means "not recorded", and coercing it to 0 would put a
+#: fabricated instant success into a time-to-success distribution.
+#:
+#: 2 adds outcome, step_to_success, step_budget and schema_version, and
+#: renames terminal_phase to termination_reason.
+EPISODES_SCHEMA_VERSION = 2
+
 EPISODES_SCHEMA = pa.schema(
     [
         pa.field("episode_id", pa.string(), nullable=False),
@@ -353,7 +366,97 @@ EPISODES_SCHEMA = pa.schema(
         # where `success` is the verdict: "failed by crashing" and "failed by
         # running out of time" are different findings that a boolean cannot
         # separate, and separating them is most of why this column exists.
-        pa.field("terminal_phase", pa.string()),
+        # Renamed from `terminal_phase`. The column is "why the episode
+        # ended", and `phase` now means a DAG node, so one word meant two
+        # things in adjacent columns of the same row. Registered in
+        # _RENAMED_ON_READ so part files from either side still concatenate.
+        #
+        # ALWAYS set, including on success: it is the input to the adapter's
+        # termination map, so a null would be an episode whose outcome cannot
+        # be derived. Nullable in the schema only because rows written before
+        # this existed have none.
+        pa.field("termination_reason", pa.string()),
+        # Which of the four the termination map resolved that flag to. What
+        # every statistic reads; `success` and `is_infra_failure` below are
+        # derived from it on write and kept for their existing readers.
+        pa.field("outcome", pa.string()),
+        # The digest of the map that produced `outcome` from
+        # `termination_reason`. Recorded because the map is what makes the two
+        # comparable: the same native flag becomes SUCCESS under one map and
+        # TERMINAL under another, which moves an episode between the
+        # distribution and the ghost penalty. Without it on the row, `compare`
+        # cannot know two arms were read under different maps, and the refusal
+        # for that could not fire on a real result at all.
+        pa.field("termination_map_digest", pa.string()),
+        # The step the predicate was satisfied at. A typed column rather than
+        # a `metrics` entry, because it carries an enforced invariant a map
+        # cannot: non-null exactly when outcome is SUCCESS, and <= step_budget.
+        pa.field("step_to_success", pa.int32()),
+        # The budget this episode actually ran under, recorded rather than
+        # inferred from the plan. Every functional over the resulting
+        # distribution is bounded by the smallest of these, and reading it
+        # from the plan at analysis time would mean trusting that the plan on
+        # disk is the one that ran.
+        pa.field("step_budget", pa.int32()),
+        # Policy inference calls in this episode. `steps / decisions` is the
+        # REALIZED chunk length -- measured, not declared -- and it is what a
+        # declared chunk_length is checked against. An adapter needs to do
+        # nothing but count its own act() calls.
+        #
+        # It also generalises the budget invariant without chunk_length being
+        # declared anywhere. With one step per decision an episode that ran out
+        # its budget stopped at exactly the budget; with k steps per decision it
+        # stops somewhere in [budget, budget + k). Only the strict form is
+        # enforced today, because every adapter in this repo decides once per
+        # step, and the general form should land when a chunking adapter first
+        # appears rather than being written against no example.
+        pa.field("decisions", pa.int32()),
+        # Per phase, per episode. Widens `phase_outcomes`, which is a
+        # map<string,bool> and can say only "did this phase pass".
+        #
+        # `attempted` is the field that matters, and it is why a bool was not
+        # enough. In a CHAINED run a phase after a failure is never reached,
+        # so its absence from the map is the policy's own failure -- and a
+        # marginal rate for phase 4 then mixes "failed phase 4" with "never
+        # got there", which are different facts about different policies.
+        # Conditioning on `attempted` is what separates them.
+        #
+        # `phase_id` rather than position: under a free phase order "phase 2"
+        # is a different phase in each arm, so pairing on position compares
+        # unlike things. Free ordering has since landed -- a phase declares
+        # `after` and the policy picks a legal order -- and this is the field
+        # that made it cost nothing here.
+        pa.field("phase_records", pa.list_(pa.struct([
+            pa.field("phase_id", pa.string(), nullable=False),
+            # A bool, not a count: one attempt per phase per episode. A retry
+            # inside a phase belongs to that phase, and allowing repetition
+            # would cost the conditional product that per-phase rates are
+            # built on -- P(all) = prod P(k | prefix) assumes one attempt
+            # each. Genuine repetition is distinct phases, which is also more
+            # honest: "pick item 3" is not a second attempt at "pick item 1",
+            # because the scene state differs.
+            pa.field("attempted", pa.bool_(), nullable=False),
+            # Two facts, because "did it demonstrate the skill" and "did it
+            # deliver" are different questions and both are legitimate. A
+            # policy can put the item in the bin and later knock it out: the
+            # first question says yes, the second says no, and a single field
+            # has to silently pick one.
+            #
+            # `first_satisfied_step` is when the predicate first held, null if
+            # it never did. `outcome` is evaluated at episode end, or when the
+            # phase was abandoned. Which one a functional reads is an analysis
+            # choice and lands in `analysis_hash` like every other one.
+            pa.field("first_satisfied_step", pa.int32()),
+            pa.field("outcome", pa.string()),
+            pa.field("start_step", pa.int32()),
+            pa.field("end_step", pa.int32()),
+        ]))),
+        # Which revision of this schema wrote the row. Rows without it predate
+        # the distributional columns and load with them null; see
+        # `read_episodes`. The _RENAMED_ON_READ comment anticipated this: a
+        # rename after 0.1.0 should be a schema version rather than an alias,
+        # and this is that version.
+        pa.field("schema_version", pa.int32()),
         # What was measured, as opposed to what was run.
         #
         # NOT hashed, and the distinction is the whole point: measuring more
@@ -923,7 +1026,7 @@ def read_episodes(results_uri: str, plan_id: str) -> "pa.Table":
     tables = []
     for path in paths:
         with fs.open(path, "rb") as handle:
-            tables.append(_renamed(pq.read_table(handle, use_threads=READ_THREADS)))
+            tables.append(_upgraded(pq.read_table(handle, use_threads=READ_THREADS)))
     return pa.concat_tables(tables)
 
 
@@ -936,7 +1039,50 @@ def read_episodes(results_uri: str, plan_id: str) -> "pa.Table":
 #: alpha and `benchmark_class` was one backend's vocabulary leaking into the
 #: general schema; after 0.1.0 a rename should be a schema version, not an
 #: alias. Entries here are a cost, so the list should shrink rather than grow.
-_RENAMED_ON_READ = {"benchmark_class": "provider_class"}
+_RENAMED_ON_READ = {
+    "benchmark_class": "provider_class",
+    # `phase` means a DAG node now, so a column meaning "why it ended" could
+    # not keep the word. Unlike the entry above this one is not vocabulary
+    # leakage being undone -- it is a real rename, landing with
+    # EPISODES_SCHEMA_VERSION so a reader can tell the two eras apart by more
+    # than a column name.
+    "terminal_phase": "termination_reason",
+}
+
+
+def _upgraded(table: "pa.Table") -> "pa.Table":
+    """Bring an older part file up to the current schema, without inventing.
+
+    Names first, then the columns version 2 added. A row written before them
+    gets NULLS, never zeros: a null ``step_to_success`` reads as "not
+    recorded", and a 0 would read as an episode that succeeded on its first
+    step. One is a missing observation, the other is a fabricated one at the
+    extreme of the distribution.
+
+    ``step_budget`` is null too, and deliberately not reconstructed from the
+    plan beside the rows. That plan is almost certainly the one that ran, and
+    "almost certainly" is not a basis for the bound every functional is
+    evaluated under. A distributional comparison against these rows refuses
+    rather than degrades.
+
+    ``schema_version`` is filled with 1 -- the one value that IS derivable,
+    because the column's absence is exactly what identifies the era.
+    """
+    table = _renamed(table)
+    names = set(table.column_names)
+    if "schema_version" in names:
+        return table
+    for field in EPISODES_SCHEMA:
+        if field.name in names:
+            continue
+        fill = (
+            pa.array([1] * table.num_rows, type=field.type)
+            if field.name == "schema_version"
+            else pa.nulls(table.num_rows, type=field.type)
+        )
+        table = table.append_column(field, fill)
+        names.add(field.name)
+    return table.select([f.name for f in EPISODES_SCHEMA])
 
 
 def _renamed(table: "pa.Table") -> "pa.Table":

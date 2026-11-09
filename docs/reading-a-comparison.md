@@ -136,9 +136,32 @@ does not imply clustering matters.
 **`episode(s) were PROMOTED from run …`**: rows from another run were pooled in.
 See `--promote-from`.
 
-## When compare refuses
+## When compare refuses, and when it only says so
 
-Exit 2, with the reason. The common ones:
+**Refuse on a substantive difference. Flag on unverifiability.**
+
+The two are not degrees of the same thing. A substantive difference means the
+arms were measured over different things, so any number comparing them is
+answering a question nobody asked; refusing is the only honest output. An
+unverifiable condition means the arms may well have been measured over the
+same thing and you cannot prove it. Those need opposite treatments, and the
+reason is not caution:
+
+Refusing on unverifiability **fragments the result space and adds no
+information**. An editable install of byte-identical code is the same
+experiment that cannot be proved to be the same experiment. Refuse it and the
+same catalog built from a maintainer's checkout and from a published wheel
+produce two `scene_hash`es and two `plan_id`s, so results that genuinely are
+comparable decline to join -- a cost paid for nothing. Flag it and a reader
+knows exactly what they cannot check.
+
+The converse error is worse and more common: saying nothing. An absent line
+cannot be told apart from a check that ran and found nothing, so silence turns
+unverifiability into apparent verification. Everything in this category is
+stated, including when there is nothing to report -- which is why `declined`
+prints `none` and the installs line prints `not checked`.
+
+### Refused (exit 2)
 
 - **Fewer than two checkpoints** in the results.
 - **Conflicting scene hashes** for one scene id: two different worlds recorded
@@ -149,6 +172,27 @@ Exit 2, with the reason. The common ones:
   checkpoints. Override with `--allow-harness-mismatch` after reading what moved.
 - **Degenerate checkpoints**: the two checkpoints produced byte-identical outcomes,
   usually meaning both were pointed at the same server.
+- **Materially different apparatus rates**: the arms lost different shares of
+  their episodes to infrastructure, so they were compared over different
+  subsets of the scenarios they were assigned.
+- **Different termination maps**: the same native flag becomes SUCCESS under
+  one map and TERMINAL under another, which moves an episode between the
+  distribution and the ghost penalty. No override, for that reason.
+- **Different ghost penalties**: what a never-finishing episode contributed to
+  a restricted mean is a choice, and two arms scored under different choices
+  are not on one scale.
+- **Arms declared identical that produced different numbers**, and arms that
+  produced identical numbers while declaring different parameters.
+
+### Flagged, never refused
+
+- **Editable installs**: an external scene's hash is built from version
+  strings, so edits to those sources move no identity.
+- **Termination maps not recorded**: rows written before the digest column
+  carry no map, and empty is "not recorded" rather than "they agreed".
+- **Installs not checked**: no `build.lock` was read, so whether the arms came
+  from a published release is unknown.
+- **Checks that declined**, each naming why it could not run.
 
 ## Options
 

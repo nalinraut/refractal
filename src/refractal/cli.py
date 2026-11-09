@@ -422,6 +422,26 @@ def cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def _arms_from_plan(results: str, plan_id: str):
+    """Each arm's declaration, for the declared-identity check.
+
+    Read from the plan beside the rows rather than from a column, because an
+    arm's declaration is not a property of any one episode. Returns None when
+    the plan is not in reach -- a results tree someone else wrote, or one
+    comparison's rows copied out of their directory -- and the check then
+    declines and says so, rather than silently passing arms it never saw.
+    """
+    from .execute.results import comparison_prefix
+    from .schema.identity import arm_descriptor
+    from .schema.plan import locate_plan, read_plan
+
+    try:
+        plan = read_plan(locate_plan(comparison_prefix(results, plan_id)))
+    except Exception:
+        return None
+    return {c.id: arm_descriptor(c, with_id=False) for c in plan.checkpoints}
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     """Exit code is the gate. 0 clean, 1 regression, 2 unanswerable."""
     from .compare import build_units, evaluate, render
@@ -504,6 +524,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         resamples=args.resamples,
         correct=not args.no_correction,
         allow_harness_mismatch=args.allow_harness_mismatch,
+        arms=_arms_from_plan(args.results, args.plan_id),
         surface_manifests=ResultWriter(args.results, args.plan_id).read_harness_manifests(),
     )
     if promotion is not None:
@@ -519,7 +540,74 @@ def cmd_compare(args: argparse.Namespace) -> int:
             "contains, which is exact because episode_id does not cover tier."
         )
     print(render(verdict))
+
+    # The distributional reading of the same rows, alongside the gate rather
+    # than instead of it. Gated on the data, not a flag: a pre-v2 results tree
+    # records no step_to_success, and the report says so in `declined` rather
+    # than printing a section of undefined numbers.
+    from .compare.compose import compose_report
+
+    report = compose_report(
+        verdict,
+        eligibility,
+        plan_id=args.plan_id,
+        tier=_tier_of(args.results, args.plan_id),
+        arms=_arms_from_plan(args.results, args.plan_id),
+        context=_arm_context(args.results, args.plan_id, checkpoints),
+        episodes={c: [r for r in rows if r["checkpoint_id"] == c]
+                  for c in checkpoints},
+    )
+    print("\n" + "-" * 66)
+    print("distributional reading\n")
+    print(report.render())
     return verdict.exit_code
+
+
+def _tier_of(results: str, plan_id: str) -> str:
+    """The plan's tier, or a word saying it could not be read.
+
+    Not defaulted to "full": a reader comparing two reports would take the
+    default as a declaration, and a smoke run reported as full is the kind of
+    wrong that survives review.
+    """
+    from .execute.results import comparison_prefix
+    from .schema.plan import locate_plan, read_plan
+
+    try:
+        return read_plan(locate_plan(comparison_prefix(results, plan_id))).tier
+    except Exception:
+        return "unknown"
+
+
+def _arm_context(results: str, plan_id: str, checkpoints: list[str]) -> dict:
+    """Per-arm install provenance, read from the catalog's build.lock.
+
+    Absent lock, absent scene entries, or an unreadable one all leave
+    `installs_checked` false, which the report renders as "not checked" rather
+    than as "none" -- the lock is the only thing that can answer this, and no
+    answer is not the same as a clean one.
+    """
+    from .compare.verdict import ArmContext
+
+    editable: tuple[str, ...] = ()
+    checked = False
+    try:
+        from .resolve.lock import BuildLock
+
+        path = Path(results) / "catalog" / "build.lock"
+        if path.exists():
+            lock = BuildLock.model_validate_json(path.read_text())
+            names = sorted({
+                name
+                for entry in lock.scenes
+                for name, doc in (entry.installed or {}).items()
+                if isinstance(doc, dict) and doc.get("editable")
+            })
+            editable, checked = tuple(names), True
+    except Exception:
+        editable, checked = (), False
+    return {c: ArmContext(editable=editable, installs_checked=checked)
+            for c in checkpoints}
 
 
 def cmd_build(args: argparse.Namespace) -> int:

@@ -56,6 +56,7 @@ from ..resolve.lock import (
     filter_key,
     filter_source_sha,
 )
+from .installed import editable_among, installed_dists
 from ..schema.errors import CatalogError, RefractalError
 from ..schema.canonical import hash_obj
 from ..schema.identity import (
@@ -190,6 +191,33 @@ class BuildReport:
         return lines
 
 
+def _distributions_behind(scene: Scene) -> list[str]:
+    """Which installed distributions this scene's identity rests on.
+
+    The provider's own package, because it is what supplied the facts, and the
+    engine's, because it is what will run them. Both are names rather than
+    imports: this asks what is installed, and importing to find out would fail
+    on exactly the laptop where the question is cheapest to ask.
+    """
+    names: list[str] = []
+    module = str(scene.external.provider).split(":", 1)[0].split(".", 1)[0]
+    try:
+        from importlib.metadata import packages_distributions
+
+        for dist in packages_distributions().get(module, []):
+            if dist not in names:
+                names.append(dist)
+    except Exception:
+        pass
+    if not names:
+        # No mapping is itself worth recording: it is reported as missing
+        # rather than silently leaving the provider unmentioned.
+        names.append(module.replace("_", "-"))
+    if scene.engine and scene.engine not in names:
+        names.append(scene.engine)
+    return names
+
+
 def build(
     catalog: Catalog | str | Path,
     *,
@@ -259,6 +287,19 @@ def build(
                 {"facts": facts, "catalog_ref": external_scene_ref_key(scene)}
             )
             resolved_scene_hashes[scene.id] = digest
+            provenance = installed_dists(_distributions_behind(scene))
+            editable = editable_among(provenance)
+            if editable:
+                # Said, not enforced. An editable install is how a provider
+                # gets written, so refusing would refuse the development loop;
+                # the defect is that it is invisible, and this is the fix.
+                report.warnings.append(
+                    f"scene {scene.id!r} is defined by an editable install of "
+                    f"{', '.join(editable)}. Its scene_hash is built from "
+                    "version strings, so edits to those sources do not move it "
+                    "and results recorded here are not reproducible from a "
+                    "published release."
+                )
             report.lock.scenes.append(
                 SceneEntry(
                     scene_id=scene.id,
@@ -269,6 +310,7 @@ def build(
                     ref_key=external_scene_ref_key(scene),
                     facts=facts,
                     capabilities=_capabilities(probe, scene, report),
+                    installed={n: d.document() for n, d in provenance.items()},
                 )
             )
             continue

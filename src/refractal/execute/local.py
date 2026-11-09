@@ -15,7 +15,8 @@ from .fake import FakeProvider
 from .metrics import Measured, extract, verdict
 from .harness import LOCAL, describe_installed_harness
 from .physics import ABSENT as PHYSICS_ABSENT
-from .results import ResultWriter
+from ..schema.outcome import Outcome, TerminationMap, validate_row
+from .results import EPISODES_SCHEMA_VERSION, ResultWriter
 
 #: Written to every row. Under the `local` backend nothing talks to the harness,
 #: and saying so is more honest than recording a version that never ran.
@@ -42,8 +43,31 @@ def _row(
     started_at: dt.datetime,
     harness_version: str,
     harness_surface: str,
+    termination_map: TerminationMap,
 ) -> dict:
     ended_at = started_at + dt.timedelta(seconds=outcome["elapsed_sec"])
+
+    # The native flag through the provider's declared map. The provider never
+    # produces an Outcome itself: if it did, the interpretation would stop
+    # being a hashed artifact and two runs reading the same simulator
+    # differently could not be told apart mechanically.
+    reason = outcome["termination_reason"]
+    resolved, _basis = termination_map.resolve(reason)
+
+    # Only a SUCCESS has one, and for this backend the episode's own length IS
+    # the step the predicate was satisfied at -- the fake stops when it
+    # succeeds. A real adapter reports the step; it is not derivable from the
+    # length there, because an episode can continue past its success.
+    step_to_success = outcome["steps"] if resolved is Outcome.SUCCESS else None
+
+    validate_row(
+        outcome=resolved,
+        step_to_success=step_to_success,
+        step_budget=episode.max_steps,
+        steps=outcome["steps"],
+        decisions=outcome["decisions"],
+    )
+
     return {
         "episode_id": episode.episode_id,
         "scenario_hash": episode.scenario_hash,
@@ -89,7 +113,24 @@ def _row(
         "metrics": measured.values or None,
         "metrics_from": measured.ran or None,
         "phase_outcomes": outcome["phase_outcomes"],
-        "terminal_phase": outcome["terminal_phase"],
+        # The native flag, always set. `success` above stays derived from the
+        # catalog rule; `outcome` below is derived from this flag through the
+        # provider's declared termination map, which is the hashed artifact
+        # that makes two differing interpretations refusable rather than
+        # invisible.
+        "termination_reason": reason,
+        "outcome": resolved.value,
+        # On every row, not once per run: `compare` reads a results directory,
+        # not a run, and two arms in one directory can have been produced by
+        # two sessions under two maps.
+        "termination_map_digest": termination_map.digest(),
+        "step_to_success": step_to_success,
+        # Recorded, not inferred from the plan at analysis time. Equal to the
+        # planned max_steps by the assertion below; a divergence is a bug to
+        # catch rather than a value to record quietly.
+        "step_budget": episode.max_steps,
+        "decisions": outcome["decisions"],
+        "schema_version": EPISODES_SCHEMA_VERSION,
         "failure_reason": outcome["failure_reason"],
         "is_infra_failure": outcome["is_infra_failure"],
         "steps": outcome["steps"],
@@ -166,6 +207,7 @@ def run_local(
                         started_at=cursor,
                         harness_version=LOCAL_HARNESS_VERSION,
                         harness_surface=LOCAL,
+                        termination_map=provider.TERMINATION_MAP,
                     )
                 )
                 cursor += dt.timedelta(seconds=outcome["elapsed_sec"])

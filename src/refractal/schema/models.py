@@ -348,11 +348,81 @@ class Phase(Strict):
     name: str = Field(min_length=1)
     predicate: ImportString
     predicate_args: dict[str, Any] = Field(default_factory=dict)
+    #: Phases that must be satisfied before this one may be attempted. Empty
+    #: means the declaration order is the order, which is every catalog
+    #: written before this field.
+    #:
+    #: A LIST, because prerequisites are genuinely plural: open the drawer and
+    #: turn on the light before picking. A single predecessor would force a
+    #: false linearisation of two independent preconditions and make the
+    #: traversal order look like a policy choice when it was the catalog's.
+    #:
+    #: On the phase rather than as a top-level edge list, which is the same
+    #: graph in adjacency-list form. The per-phase field inherits the
+    #: hash-stability argument already made for extending a phase entry: a key
+    #: emitted only when set leaves every existing task_hash where it is. A
+    #: separate edge list would be a new top-level key and would need that
+    #: argument made again.
+    after: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _check(self) -> "Phase":
         validate_import_string(self.predicate)
+        if self.name in self.after:
+            raise ValueError(
+                f"phase {self.name!r} lists itself in `after`, so it can never "
+                "be attempted. A phase cannot be its own prerequisite."
+            )
+        if len(set(self.after)) != len(self.after):
+            raise ValueError(
+                f"phase {self.name!r} names a prerequisite twice in `after`: "
+                f"{list(self.after)}. Duplicates change no ordering and read as "
+                "though one of them meant something else."
+            )
         return self
+
+
+def _check_phase_order(task_id: str, phases: "list[Phase]") -> None:
+    """Refuse a prerequisite graph no traversal can satisfy.
+
+    At catalog load, which is earlier than plan time and for the same reason:
+    a cycle is a property of the declaration, not of a run, and discovering it
+    at step 200 of the first episode wastes a simulator and reports as a
+    policy failure. Compiler, not runtime.
+
+    Two refusals. A prerequisite naming a phase the task does not declare is a
+    typo that would otherwise silently never be satisfiable, and a cycle is a
+    set of phases none of which can ever start -- stated with the cycle named,
+    because "there is a cycle" leaves the author to find it.
+    """
+    known = {p.name for p in phases}
+    for phase in phases:
+        unknown = [a for a in phase.after if a not in known]
+        if unknown:
+            raise ValueError(
+                f"task {task_id!r}: phase {phase.name!r} requires "
+                f"{unknown} first, which this task does not declare. "
+                f"It declares {sorted(known)}."
+            )
+
+    # Kahn's algorithm. What survives when no node has an empty in-degree is
+    # exactly the cycle, which is why this is worth more than a visited-set
+    # walk that only reports that one exists.
+    pending = {p.name: set(p.after) for p in phases}
+    while True:
+        ready = sorted(n for n, need in pending.items() if not need)
+        if not ready:
+            break
+        for name in ready:
+            del pending[name]
+        for need in pending.values():
+            need.difference_update(ready)
+    if pending:
+        raise ValueError(
+            f"task {task_id!r} declares phases whose prerequisites form a "
+            f"cycle: {sorted(pending)}. None of them can ever be attempted, "
+            "because each waits on another in the set."
+        )
 
 
 class MetricExtractor(Strict):
@@ -503,6 +573,7 @@ class Task(Strict):
         names = [p.name for p in self.phases]
         if len(names) != len(set(names)):
             raise ValueError(f"task {self.id!r} declares duplicate phase names: {names}")
+        _check_phase_order(self.id, self.phases)
         return self
 
 
@@ -733,6 +804,21 @@ class Checkpoint(Strict):
     path: str
     server: ImportString
     server_args: dict[str, Any] = Field(default_factory=dict)
+    #: Environment steps one policy inference drives, when the policy
+    #: emits action chunks. None means it is not declared, which is
+    #: every catalog written before this field existed.
+    #:
+    #: ON THE ARM, not on the task and not on the run. Driving the same
+    #: checkpoint at k=8 instead of its native k=50 is a different
+    #: experiment and must not share a plan_id with the original -- but
+    #: it is not a different TASK, so task_hash must not move and every
+    #: result recorded against that task stays comparable.
+    #:
+    #: Two arms at different chunk lengths in one comparison is the
+    #: normal case rather than a refusal: the chunk length is a property
+    #: of the policy under test. `compare` reports it per arm so a
+    #: reader can see the arms were driven differently.
+    chunk_length: int | None = Field(default=None, gt=0)
     #: ``ge=0``, not ``gt=0``: a CPU-only policy needs no VRAM, and so does the
     #: echo server the `refractal init` example ships. Requiring a positive
     #: value would make the shipped example unplannable, which is how this was

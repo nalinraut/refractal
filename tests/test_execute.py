@@ -410,15 +410,43 @@ class TestSchemaAndLayout(ExecuteCase):
 
 
 class TestFailureSemantics(ExecuteCase):
-    def test_failure_reason_is_null_exactly_when_successful(self):
-        # The API reference says null means a policy failure -- but null is also
-        # what a success writes, so the two would be indistinguishable.
+    """What distinguishes a success from a failure, after the v2 split.
+
+    These asserted that `failure_reason` is non-null exactly on a failure.
+    That contract moved: `failure_reason` used to carry a copy of the
+    termination flag and nothing read the copy, so it is now optional
+    free-form detail BEYOND the flag, and `termination_reason` is the column
+    that is always set. The property the old tests were defending -- that a
+    success and a failure are never indistinguishable -- is unchanged and is
+    asserted here against the column that now carries it.
+    """
+
+    def test_termination_reason_is_always_set(self):
+        self.run_once(provider=FakeProvider(success_rate=0.5))
+        rows = read_episodes(self.results, self.plan.plan_id).to_pylist()
+        self.assertTrue(rows)
+        for row in rows:
+            # Always, including on success. It is the input to the termination
+            # map, so a null would be an episode whose outcome cannot be
+            # derived at all.
+            self.assertIsNotNone(row["termination_reason"])
+
+    def test_success_and_failure_are_distinguishable(self):
+        self.run_once(provider=FakeProvider(success_rate=0.5))
+        rows = read_episodes(self.results, self.plan.plan_id).to_pylist()
+        seen = {r["termination_reason"] for r in rows}
+        self.assertIn("predicate_satisfied", seen)
+        self.assertIn("horizon", seen)
+        for row in rows:
+            expected = "predicate_satisfied" if row["success"] else "horizon"
+            self.assertEqual(row["termination_reason"], expected)
+
+    def test_failure_reason_is_no_longer_a_copy_of_the_flag(self):
         self.run_once(provider=FakeProvider(success_rate=0.5))
         for row in read_episodes(self.results, self.plan.plan_id).to_pylist():
-            if row["success"]:
-                self.assertIsNone(row["failure_reason"])
-            else:
-                self.assertIsNotNone(row["failure_reason"])
+            # Free-form detail beyond the flag, and this provider has none.
+            # The copy it used to hold had no reader anywhere in compare/.
+            self.assertIsNone(row["failure_reason"])
 
     def test_infra_failure_is_its_own_column(self):
         self.run_once(provider=FakeProvider(success_rate=0.7, infra_failure_rate=0.2))
@@ -427,9 +455,10 @@ class TestFailureSemantics(ExecuteCase):
         self.assertTrue(infra, "expected some injected infra failures")
         for row in infra:
             # `compare` must be able to drop these without pattern-matching a
-            # string, so the flag and the reason are separate facts.
+            # string, so the flag and the verdict stay separate facts.
             self.assertFalse(row["success"])
-            self.assertEqual(row["failure_reason"], "worker_crashed")
+            self.assertEqual(row["termination_reason"], "worker_crashed")
+            self.assertEqual(row["outcome"], "APPARATUS")
 
 
 class TestResume(ExecuteCase):

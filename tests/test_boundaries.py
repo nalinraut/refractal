@@ -266,6 +266,9 @@ class TestTheDocsNameFlagsThatExist(unittest.TestCase):
     #: show for context: uv, pip, twine, and a model server's own command line.
     FOREIGN = {
         "--python", "--no-cache-dir", "--repository", "--address", "--short",
+        # git's, in the release checklist: a release is now a pushed tag, so
+        # the only upload credential is the short-lived one GitHub mints.
+        "--tags",
     }
 
     @staticmethod
@@ -306,3 +309,63 @@ class TestTheDocsNameFlagsThatExist(unittest.TestCase):
             "docs name flags the CLI does not offer (add to FOREIGN if the flag "
             f"belongs to another tool): {unknown}",
         )
+
+class TestFixturesCannotInventColumns(unittest.TestCase):
+    """A row fixture may only use columns the schema has.
+
+    This closes a class rather than an instance. A hand-built dict never
+    passes through the Arrow schema, so a key that does not exist rides along
+    silently -- and a test asserting on it passes forever while verifying
+    nothing. That is what happened: a Phase 6 test built rows with a
+    `termination_map_digest` column that did not exist, which hid a refusal
+    that could never fire on a real result, and a `terminal_phase` key
+    survived the v2 rename in this very file.
+
+    It is the same shape as a RECORD line count that reads like a digest: a
+    signal that looks real. The subset assertion is cheap and catches the next
+    one for free.
+
+    Building fixtures through the production writer is the stronger version
+    and far more invasive -- it would need pyarrow in every compare test. This
+    is the one worth having today.
+    """
+
+    #: All three, so a stub namespace built with `type()` and a pydantic
+    #: `model_copy(update=...)` do not qualify. Measured: this matches 16 row
+    #: fixtures across the suite and no false positives.
+    REQUIRED = {"checkpoint_id", "scenario_hash", "seed"}
+
+    def test_no_row_fixture_names_a_column_the_schema_lacks(self):
+        import ast
+        import collections
+        import pathlib
+
+        from refractal.execute.results import EPISODES_SCHEMA
+
+        known = {f.name for f in EPISODES_SCHEMA}
+        matched = 0
+        unknown = collections.defaultdict(set)
+        for path in sorted(pathlib.Path("tests").glob("test_*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, ast.Dict):
+                    continue
+                keys = {k.value for k in node.keys
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+                if not self.REQUIRED <= keys:
+                    continue
+                matched += 1
+                if keys - known:
+                    unknown[path.name] |= keys - known
+
+        # The guard is worthless if it stops matching the fixtures. A refactor
+        # that renames `checkpoint_id` would otherwise make this pass by
+        # finding nothing to check.
+        self.assertGreaterEqual(
+            matched, 10,
+            "this guard no longer recognises row fixtures; REQUIRED is stale")
+        self.assertEqual(
+            dict(unknown), {},
+            "row fixtures name columns EPISODES_SCHEMA does not have, so "
+            "nothing in the production path would ever read them: "
+            f"{dict(unknown)}")
+

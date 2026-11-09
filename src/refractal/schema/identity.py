@@ -148,7 +148,18 @@ def task_identity(
         "max_steps": task.max_steps,
         "provider_ref": task.provider_ref,
         "phases": [
-            {"name": p.name, "predicate": p.predicate, "predicate_args": p.predicate_args}
+            # `after` emitted only when the phase declares one, which is the
+            # whole reason it lives on the phase rather than in a top-level
+            # edge list: the same graph, in the one form that leaves every
+            # task_hash recorded before this field exactly where it is.
+            #
+            # Hashed, though, because a different prerequisite graph is a
+            # different task: "pick after opening the drawer" and "pick" are
+            # not the same goal, and results recorded against one must not
+            # join results recorded against the other.
+            {"name": p.name, "predicate": p.predicate,
+             "predicate_args": p.predicate_args,
+             **({"after": list(p.after)} if p.after else {})}
             for p in task.phases
         ],
     }
@@ -285,11 +296,37 @@ def scene_identity(catalog_root: Path, scene: Scene) -> dict[str, Any]:
             "from this catalog. It comes from catalog/build.lock; run 'refractal build'.",
             file="scenes.yaml",
         )
-    return {
+    document = {
         "engine": scene.engine,
         "engine_version": scene.engine_version,
         "files": hash_file_set(catalog_root.resolve(), _scene_files(catalog_root, scene)),
     }
+    # Canonical post-phase start states, when the scene declares any.
+    #
+    # IN THE SCENE HASH, because they are scene assets and because
+    # re-authoring them must refuse comparison with earlier runs: the
+    # isolated condition changed, so the isolated rates are a different
+    # measurement, and `compounding` is the difference between those rates
+    # and the chained one.
+    #
+    # `method` is hashed alongside the digest. The same episodes give
+    # different compounding numbers depending on where the canonical state
+    # came from -- a hand-authored ideal makes the product an upper bound no
+    # policy reaches; a median end state over a reference policy's runs makes
+    # it relative to that policy; one specific reference run makes it
+    # relative to that trajectory's idiosyncrasies. Three methods, three
+    # meanings, one set of episodes, which makes it an identity fact rather
+    # than a catalog detail.
+    #
+    # Emitted only when declared, so every scene_hash recorded before
+    # canonical states existed stays valid.
+    canonical = getattr(scene, "canonical_states", None)
+    if canonical:
+        document["canonical_states"] = {
+            phase: {"digest": entry.get("digest"), "method": entry.get("method")}
+            for phase, entry in sorted(canonical.items())
+        }
+    return document
 
 
 def scene_hash(catalog_root: Path, scene: Scene) -> str:
@@ -339,6 +376,45 @@ def comparison_unit(*, scene_id: str, task_hash: str, scenario_hash: str) -> tup
     not a silent zero-row result.
     """
     return (scene_id, task_hash, scenario_hash)
+
+
+def arm_descriptor(checkpoint: Any, *, with_id: bool = True) -> dict[str, Any]:
+    """One arm, as it enters ``plan_id``.
+
+    THE definition of what an arm is, used by ``experiment_identity`` to build
+    the hash and by ``compare`` to refuse two arms declared identically. One
+    function rather than two lists, because the second place a decision lives
+    is the place it drifts -- and these two must agree by construction: the
+    behavioural identity check reads outcomes, and this one reads the
+    declaration, so a disagreement between them would be invisible.
+
+    ``vram_mb`` is absent and that is the point of the distinction: it says
+    where the arm fits, not what it does. ``chunk_length`` is emitted only
+    when declared, so catalogs written before it keep their ``plan_id``.
+
+    ``with_id=False`` drops the label. ``Run`` already refuses duplicate ids,
+    so two arms always differ there and comparing ids would make every pair
+    look distinct -- which is exactly the under-blocking the caller is trying
+    to avoid.
+
+    **``server_args`` is behaviour-only by CONVENTION, not by enforcement.**
+    Every other identity decision here is enforced: a new ``Checkpoint`` field
+    fails a classification test until someone decides whether it is identity
+    or placement. ``server_args`` is an open dict, so a timeout, a port or a
+    device index dropped into it joins ``plan_id`` and this rule silently, and
+    a placement value starts behaving like a behavioural one. Enumerating it
+    would mean a per-adapter schema, which is real work for a hypothetical --
+    but the asymmetry should be visible to whoever adds the next adapter.
+    """
+    out: dict[str, Any] = {}
+    if with_id:
+        out["id"] = checkpoint.id
+    out["path"] = checkpoint.path
+    out["server"] = checkpoint.server
+    out["server_args"] = checkpoint.server_args
+    if checkpoint.chunk_length is not None:
+        out["chunk_length"] = checkpoint.chunk_length
+    return out
 
 
 def experiment_identity(
@@ -458,12 +534,7 @@ def experiment_identity(
         "run": {
             "checkpoints": sorted(
                 (
-                    {
-                        "id": c.id,
-                        "path": c.path,
-                        "server": c.server,
-                        "server_args": c.server_args,
-                    }
+                    arm_descriptor(c)
                     for c in run.checkpoints
                 ),
                 key=lambda d: d["id"],

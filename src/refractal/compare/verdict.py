@@ -49,7 +49,7 @@ make the gate's calibration depend on a second test's power.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, NamedTuple
 
 from .pairing import Dichotomy, Eligibility, Unit
 from .variance import VarianceReport, measure_variance
@@ -72,6 +72,13 @@ from .stats import (
 #: corrects -- so this is small-cluster behaviour and more machinery would not
 #: have fixed it. Saying so beats pretending otherwise.
 MIN_UNITS_FOR_CALIBRATED_CI = 200
+
+#: Scenarios the behavioural identity check needs before it will judge.
+#:
+#: It reads a design effect, and a design effect over a handful of units is
+#: noise. Below this it DECLINES and says so rather than passing quietly: a
+#: verdict that does not mention the check reads as one where it ran.
+MIN_UNITS_FOR_IDENTITY_CHECK = 10
 
 
 @dataclass
@@ -157,6 +164,35 @@ class Verdict:
         return 1 if self.regressed else 0
 
 
+@dataclass(frozen=True)
+class ArmContext:
+    """What an arm's rows cannot say about themselves.
+
+    One parameter rather than one per refusal, because the four outstanding
+    checks were never four signature changes. Two of them read facts that are
+    already in the data -- apparatus losses and termination maps are per-row
+    and arrive on `Eligibility` -- so they take nothing from a caller. What is
+    left is genuinely external: a convention chosen at analysis time, and the
+    provenance of the environment that built the catalog.
+
+    Per arm rather than per run, and not for symmetry: in a distributed run
+    two arms can be executed on two machines, one of them from an editable
+    checkout. A single run-level flag would report the first machine's answer
+    for both.
+    """
+
+    #: What a never-finishing episode contributed to a restricted mean. A
+    #: choice, not a measurement, so two arms scored under different ones are
+    #: not on one scale.
+    ghost_penalty: object | None = None
+    #: Distributions installed editable when this arm's catalog was built,
+    #: from `build.lock`.
+    editable: tuple[str, ...] = ()
+    #: Whether the lock was read at all. False makes an empty `editable` mean
+    #: "not checked" instead of "none", which are different statements.
+    installs_checked: bool = False
+
+
 def evaluate(
     eligibility: Eligibility,
     checkpoints: Sequence[str] | None = None,
@@ -169,7 +205,16 @@ def evaluate(
     seed: int = 0,
     correct: bool = True,
     allow_harness_mismatch: bool = False,
+    #: Per-arm declarations from the plan, keyed by checkpoint_id, as
+    #: `arm_descriptor(c, with_id=False)` builds them. None when the plan
+    #: is not in reach, and the declared-identity check then declines and
+    #: says so rather than passing quietly.
+    arms: Mapping[str, Mapping[str, object]] | None = None,
     surface_manifests: Mapping[str, Mapping[str, str]] | None = None,
+    #: Per-arm facts that are not in the rows: the ghost penalty an arm's
+    #: restricted mean used, and the install provenance of the catalog that
+    #: produced it. See `ArmContext`.
+    context: Mapping[str, "ArmContext"] | None = None,
 ) -> Verdict:
     """Compare k checkpoints against a baseline, correcting across the family."""
     checkpoints = list(checkpoints or eligibility.checkpoints)
@@ -233,22 +278,92 @@ def evaluate(
             "keeping the instruction string, which is why the goal's own facts are "
             "in the digest. Re-run, or compare within one definition."
         )
-    identical = _checkpoints_look_identical(eligibility, checkpoints)
-    if identical:
-        verdict.blocking.append(identical)
-    elif len(checkpoints) >= 2 and eligibility.units and all(
-        len(unit.outcomes.get(checkpoints[0], {})) <= 1 for unit in eligibility.units
-    ):
-        # Declined, not passed. A check that quietly does not run is
-        # indistinguishable from one that ran and found nothing, and this one
-        # guards a failure whose whole character is looking clean.
+    # Three outcomes, and all three are visible now. The decline used to
+    # be reported for one of its two causes -- single-seed designs --
+    # while a comparison with too few scenarios declined in silence,
+    # which reads from the verdict exactly like a check that ran and
+    # found nothing.
+    # Declared identity first: it needs no replicates, so it is the half
+    # that still works where the behavioural half declines.
+    for message in _arms_declared_identical(arms, checkpoints):
+        verdict.blocking.append(message)
+    if arms is None and len(checkpoints) >= 2:
         verdict.notes.append(
-            "the identical-checkpoints check did not run: every scenario has one "
-            "seed, so there is no within-scenario variance to estimate a design "
-            "effect from and a reading of zero would say nothing about whether "
-            "the checkpoints differ. Re-run with seeds: 2 or more to enable it. "
-            "The comparison below is unaffected, since McNemar needs no "
-            "replicates."
+            "the declared-identity check did not run: the plan was not in "
+            "reach, so nothing here has compared what the arms were declared "
+            "to be. Only their behaviour was checked."
+        )
+    identical = _checkpoints_look_identical(eligibility, checkpoints)
+    if identical.blocking:
+        verdict.blocking.append(identical.blocking)
+    elif identical.declined:
+        verdict.notes.append(identical.declined)
+
+    # The three refusals that had no caller. Two read the data and take
+    # nothing: `apparatus_by_arm` and `termination_digests` are counted while
+    # the rows are walked, because an apparatus episode is excluded before a
+    # unit exists and the evidence is gone by the time anyone holds units.
+    compared = {c: eligibility.apparatus_by_arm[c]
+                for c in checkpoints if c in eligibility.apparatus_by_arm}
+    apparatus = apparatus_rates_differ(compared)
+    if apparatus:
+        verdict.blocking.append(apparatus)
+
+    digests = {c: sorted(eligibility.termination_digests.get(c, ()))
+               for c in checkpoints}
+    split = [c for c, d in digests.items() if len(d) > 1]
+    if split:
+        verdict.blocking.append(
+            f"arm(s) {', '.join(sorted(split))} have rows interpreted under more "
+            "than one termination map, so the arm disagrees with itself about "
+            "what its own episodes mean. Re-run, or compare within one map."
+        )
+    elif all(digests[c] for c in checkpoints):
+        across = termination_maps_differ({c: digests[c][0] for c in checkpoints})
+        if across:
+            verdict.blocking.append(across)
+    else:
+        # Said, because silence here is indistinguishable from agreement.
+        verdict.notes.append(
+            "Termination maps not compared: "
+            f"{sum(1 for c in checkpoints if not digests[c])} of "
+            f"{len(checkpoints)} arm(s) have rows written before the map digest "
+            "was recorded. The arms may have been read under different maps."
+        )
+
+    # The two that are genuinely external.
+    penalties = {c: ctx.ghost_penalty for c, ctx in (context or {}).items()
+                 if c in checkpoints and ctx.ghost_penalty is not None}
+    if len(penalties) > 1:
+        mismatch = ghost_penalties_differ(penalties)
+        if mismatch:
+            verdict.blocking.append(mismatch)
+
+    checked = [c for c in checkpoints
+               if (context or {}).get(c) is not None
+               and (context or {})[c].installs_checked]
+    editable = sorted({name for c in checkpoints
+                       for name in ((context or {}).get(c) or ArmContext()).editable})
+    if editable:
+        verdict.notes.append(
+            f"Editable installs behind this comparison: {', '.join(editable)}. "
+            "An external scene's hash is built from version strings, so edits "
+            "to those sources move no identity and these results cannot be "
+            "reproduced from a published release."
+        )
+    elif len(checked) == len(checkpoints) and checkpoints:
+        verdict.notes.append(
+            "Installs: every arm's catalog was built from a published release."
+        )
+    else:
+        # Flagged, not refused. An editable install of identical code is the
+        # same experiment that cannot be proved to be the same experiment:
+        # refusing would fragment the result space and add no information,
+        # while saying nothing lets unverifiability read as verification.
+        verdict.notes.append(
+            f"Installs not checked for {len(checkpoints) - len(checked)} of "
+            f"{len(checkpoints)} arm(s): no build.lock was read, so whether "
+            "they came from a published release is unknown."
         )
 
     if eligibility.duplicate_rows:
@@ -442,7 +557,180 @@ def evaluate(
 DEGENERATE_DESIGN_EFFECT = 0.25
 
 
-def _checkpoints_look_identical(eligibility: Eligibility, checkpoints: Sequence[str]) -> str | None:
+def apparatus_rates_differ(
+    rates: Mapping[str, tuple[int, int]], *, threshold: float = 0.05
+) -> str | None:
+    """Refuse when the arms lost materially different shares to apparatus.
+
+    Dropping APPARATUS episodes is safe arithmetically -- they are not the
+    policy's behaviour and belong in no distribution. It stops being safe
+    when the drop rate is ARM-DEPENDENT, because the arms are then compared
+    over different subsets of the scenarios they were assigned, and the
+    difference between those subsets is not random: whatever made one arm
+    crash the simulator more often is a property of that arm.
+
+    Reported as a rate elsewhere; refused here, because a reader cannot
+    correct for it after the fact.
+    """
+    if len(rates) < 2:
+        return None
+    shares = {arm: (bad / total if total else 0.0)
+              for arm, (bad, total) in rates.items()}
+    lo_arm, lo = min(shares.items(), key=lambda kv: kv[1])
+    hi_arm, hi = max(shares.items(), key=lambda kv: kv[1])
+    if hi - lo <= threshold:
+        return None
+    return (
+        f"apparatus rates differ materially across arms: {hi_arm!r} lost "
+        f"{hi:.1%} of its episodes against {lo_arm!r} at {lo:.1%}. Dropping "
+        "those rows is safe only when the loss is arm-independent; here the "
+        "arms were compared over different subsets of the scenarios they were "
+        "assigned, and whatever made one arm fail the apparatus more often is "
+        "a property of that arm rather than noise."
+    )
+
+
+def ghost_penalties_differ(
+    penalties: Mapping[str, object]
+) -> str | None:
+    """Refuse an RMST comparison whose arms used different conventions.
+
+    What a never-finishing episode contributes is a choice, not a
+    measurement, and two arms scored under different choices are not on one
+    scale. Readable because the estimate records the penalty its ghosts were
+    built with, rather than it being forwarded and forgotten.
+    """
+    distinct = {repr(v) for v in penalties.values()}
+    if len(distinct) < 2:
+        return None
+    shown = ", ".join(f"{arm}={value!r}" for arm, value in sorted(penalties.items()))
+    return (
+        f"arms were scored under different ghost_penalty conventions ({shown}). "
+        "What an episode that can never succeed contributes to a restricted "
+        "mean is a convention rather than a measurement, so these numbers are "
+        "not on one scale and the difference between them is partly the "
+        "difference between the two choices."
+    )
+
+
+def termination_maps_differ(digests: Mapping[str, str]) -> str | None:
+    """Refuse two arms interpreted under different termination maps.
+
+    Unlike a harness surface, which puts the numbers in doubt, this changes
+    them directly: the same native flag becomes SUCCESS under one map and
+    TERMINAL under another, which moves an episode between the distribution
+    and the ghost penalty. No override, for that reason.
+    """
+    distinct = sorted(set(digests.values()))
+    if len(distinct) < 2:
+        return None
+    shown = ", ".join(f"{arm}={d[:19]}" for arm, d in sorted(digests.items()))
+    return (
+        f"arms were interpreted under {len(distinct)} different termination "
+        f"maps ({shown}). A map decides which native flag becomes SUCCESS and "
+        "which becomes TERMINAL, so the same episode enters the distribution "
+        "under one and takes a ghost penalty under the other. This changes the "
+        "numbers rather than casting doubt on them, which is why it has no "
+        "override."
+    )
+
+
+def identical_arm_pairs(
+    arms: Mapping[str, Mapping[str, object]] | None,
+    checkpoints: Sequence[str],
+) -> list[tuple[str, str]]:
+    """Which declared arms are the same arm under two names.
+
+    Separate from the message so the Holm family can be pruned with it:
+    reporting that two arms are duplicates while still charging the family
+    for the contrast would name the problem and keep paying for it.
+    """
+    if arms is None or len(checkpoints) < 2:
+        return []
+    out = []
+    for i, a in enumerate(checkpoints):
+        for b in checkpoints[i + 1:]:
+            if a in arms and b in arms and arms[a] == arms[b]:
+                out.append((a, b))
+    return out
+
+
+def _arms_declared_identical(
+    arms: Mapping[str, Mapping[str, object]] | None,
+    checkpoints: Sequence[str],
+) -> list[str]:
+    """Refuse two arms that were DECLARED the same thing.
+
+    The sibling of ``_checkpoints_look_identical``, and deliberately a second
+    site rather than a widening of it. That one reads outcomes and answers
+    "did these behave identically, whatever the cause". This reads the
+    declaration and answers "were these the same arm". Folding them together
+    would make a firing ambiguous, which is the complaint that guard's own
+    docstring already makes about itself.
+
+    It is also the declared-versus-realized split used everywhere else here:
+    a perturbation's declared dose against what the receipt says fired, a
+    declared chunk length against ``steps / decisions``. Each half catches
+    what the other misses, and this half is the one that still works when the
+    behavioural check declines -- single-seed and small designs, which is
+    exactly where it does.
+
+    Why it blocks rather than notes: a duplicated arm inflates the Holm
+    family. Five distinct arms deserve m = 10; six arms with one duplicate
+    give m = 15, so the smallest p-value is tested against alpha/15 rather
+    than alpha/10 -- a 50% tighter bar on the strongest result, for nothing.
+    The null contrasts themselves are harmless, since they sort to the end and
+    Holm stops at the first failure to reject. The divisor is the whole harm
+    and it is enough.
+
+    Compares the hashed arm descriptor MINUS the id, because ``Run`` already
+    refuses duplicate ids: comparing them would make every pair look distinct.
+
+    Under-blocks in one direction, on purpose. Two arms on the same weights,
+    one declaring ``chunk_length: 8`` and the other declaring nothing where
+    native happens to be 8, are the same arm in two notations and pass here.
+    That is the right way to fail: ``steps / decisions`` on the rows is the
+    realized length, so they remain detectably identical after the fact.
+    """
+    if arms is None or len(checkpoints) < 2:
+        return []
+    out = []
+    for i, a in enumerate(checkpoints):
+        for b in checkpoints[i + 1:]:
+            if a not in arms or b not in arms:
+                continue
+            if arms[a] == arms[b]:
+                shared = ", ".join(
+                    f"{k}={v!r}" for k, v in sorted(arms[a].items()))
+                out.append(
+                    f"arms {a!r} and {b!r} are declared identically ({shared}). "
+                    "They differ only in their id, so one of them is the other "
+                    "under a second name and the contrast between them is "
+                    "structurally null. Worse, it inflates the correction "
+                    "family: every genuine contrast in this comparison is then "
+                    "held to a tighter threshold for no reason. Drop one arm, "
+                    "or declare what actually differs between them."
+                )
+    return out
+
+
+class IdenticalCheck(NamedTuple):
+    """What the behavioural identity check concluded.
+
+    Three outcomes, and the third is the one that used to be invisible:
+    it BLOCKED, it RAN AND PASSED, or it COULD NOT RUN. A check that
+    silently declines is worse than no check, because a verdict with no
+    mention of it reads as though it ran and found nothing -- and this one
+    guards a failure whose whole character is looking clean.
+    """
+
+    blocking: str | None = None
+    declined: str | None = None
+
+
+def _checkpoints_look_identical(
+    eligibility: Eligibility, checkpoints: Sequence[str]
+) -> IdenticalCheck:
     """Catch a comparison of a checkpoint against itself.
 
     The failure this exists for: two checkpoints pointed at one model server.
@@ -459,8 +747,14 @@ def _checkpoints_look_identical(eligibility: Eligibility, checkpoints: Sequence[
     run; this is the second, independent one -- and it also catches ways of
     duplicating a checkpoint that have nothing to do with URLs, such as copied rows.
     """
-    if len(checkpoints) < 2 or len(eligibility.units) < 10:
-        return None
+    if len(checkpoints) < 2:
+        return IdenticalCheck()
+    if len(eligibility.units) < MIN_UNITS_FOR_IDENTITY_CHECK:
+        return IdenticalCheck(declined=(
+            f"the identical-checkpoints check did not run: {len(eligibility.units)} "
+            f"scenario(s) is below the {MIN_UNITS_FOR_IDENTITY_CHECK} it needs to "
+            "estimate a design effect from. The comparison below is unaffected, but "
+            "nothing here has checked whether the arms are the same thing."))
 
     # A replicate-free design produces the same symptom as identical
     # checkpoints, and this guard used to report the second with confidence.
@@ -487,14 +781,19 @@ def _checkpoints_look_identical(eligibility: Eligibility, checkpoints: Sequence[
         len(unit.outcomes.get(checkpoints[0], {})) for unit in eligibility.units
     }
     if seed_counts <= {1}:
-        return None
+        return IdenticalCheck(declined=(
+            "the identical-checkpoints check did not run: every scenario has one "
+            "seed, so there is no within-scenario variance to estimate a design "
+            "effect from and a reading of zero would say nothing about whether the "
+            "checkpoints differ. Re-run with seeds: 2 or more to enable it. The "
+            "comparison below is unaffected, since McNemar needs no replicates."))
 
     from .variance import measure_variance
 
     report = measure_variance(eligibility.units, checkpoints[0], checkpoints[1])
     if report.observed_var > 0 and report.design_effect >= DEGENERATE_DESIGN_EFFECT:
-        return None
-    return (
+        return IdenticalCheck()
+    return IdenticalCheck(blocking=(
         f"{checkpoints[0]!r} and {checkpoints[1]!r} produced outcomes with no "
         f"scenario-level variation between them (design effect "
         f"{report.design_effect:.3f}, observed Var {report.observed_var:.6f} across "
@@ -502,7 +801,7 @@ def _checkpoints_look_identical(eligibility: Eligibility, checkpoints: Sequence[
         "like "
         "this. The usual cause is two checkpoints pointed at one model server, which "
         "produces a clean-looking null that no downstream check can question."
-    )
+    ))
 
 
 def _name_changed_files(

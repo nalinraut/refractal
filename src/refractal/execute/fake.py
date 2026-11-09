@@ -22,6 +22,7 @@ import hashlib
 import struct
 from dataclasses import dataclass, field
 
+from ..schema.outcome import Outcome, TerminalBasis, TerminationMap
 from ..schema.plan import PlannedEpisode
 
 
@@ -31,6 +32,31 @@ def _unit(episode_id: str, salt: str) -> float:
     return struct.unpack(">Q", digest[:8])[0] / float(1 << 64)
 
 
+#: The fake's whole vocabulary, declared as a total map.
+#:
+#: Two entries, because the fake has two ways to end and no irrecoverable
+#: state. A two-entry total map is a valid map, and this is a faithful preview
+#: of a LIBERO map, whose real vocabulary is also close to success-or-timeout.
+#:
+#: `worker_crashed` is here rather than falling through the totality rule: it
+#: is an out-of-vocabulary sentinel for a simulated infrastructure failure, and
+#: APPARATUS is what it means. Declaring it keeps it auditable instead of
+#: implicit.
+FAKE_TERMINATION_MAP = TerminationMap(
+    "fake",
+    {
+        "predicate_satisfied": (Outcome.SUCCESS, None),
+        "horizon": (Outcome.BUDGET_EXHAUSTED, None),
+        "worker_crashed": (Outcome.APPARATUS, None),
+        # Two terminals, one per basis, because the functional layer lets
+        # ghost_penalty treat them differently and a fixture with only one
+        # kind cannot exercise that.
+        "object_unrecoverable": (Outcome.TERMINAL, TerminalBasis.TASK),
+        "simulator_gave_up": (Outcome.TERMINAL, TerminalBasis.SIMULATOR),
+    },
+)
+
+
 @dataclass
 class FakeProvider:
     """Configurable synthetic outcomes.
@@ -38,6 +64,11 @@ class FakeProvider:
     ``success_rate`` may be keyed per ``(checkpoint_id, task_id)`` so a test can
     construct a known difference. A flat rate is the boring default.
     """
+
+    #: The provider declares its own map. `local` reads it off the
+    #: instance rather than importing it, so a different provider in the
+    #: same backend brings its own vocabulary with it.
+    TERMINATION_MAP = FAKE_TERMINATION_MAP
 
     success_rate: float = 0.7
     per_task: dict[tuple[str, str], float] = field(default_factory=dict)
@@ -81,6 +112,18 @@ class FakeProvider:
     #: test is wrong -- which is the only way to choose between tests.
     salt: str = ""
     phases: tuple[str, ...] = ("reach", "grasp", "transport", "place")
+    #: Fraction of episodes that reach an irrecoverable state BEFORE the
+    #: budget. Zero by default, so every existing test keeps its distribution;
+    #: the Phase 2 fixtures turn it on, because nothing else in this provider
+    #: produces a TERMINAL and ghost_penalty has nothing to weigh without one.
+    terminal_rate: float = 0.0
+    #: Of those, the share whose basis is SIMULATOR rather than TASK.
+    simulator_basis_share: float = 0.5
+    #: Multiplies how long a SUCCESS takes, per checkpoint or flat. This is
+    #: what lets two arms sit at the same success-at-budget while differing in
+    #: median and RMST -- one finishing briskly, the other scraping in late --
+    #: which is the case the whole phase exists to detect.
+    speed: float | dict[str, float] = 1.0
     min_steps: int = 40
     max_steps: int = 400
     sec_per_step: float = 0.004
@@ -110,10 +153,15 @@ class FakeProvider:
             return {
                 "success": False,
                 "phase_outcomes": [],
-                "terminal_phase": None,
-                "failure_reason": "worker_crashed",
+                # Always set: it is the input to the termination map, and a null
+                # would be an episode whose outcome cannot be derived.
+                "termination_reason": "worker_crashed",
+                # Free-form detail BEYOND the flag, and there is none. It used
+                # to repeat the flag; nothing read the copy.
+                "failure_reason": None,
                 "is_infra_failure": True,
                 "steps": 0,
+                "decisions": 0,
                 "elapsed_sec": 0.0,
             }
 
@@ -127,23 +175,79 @@ class FakeProvider:
         else:
             reached = int(_unit(episode.episode_id, self.salt + "phase") * len(self.phases))
         outcomes = [(name, i < reached) for i, name in enumerate(self.phases)]
-        terminal = self.phases[min(reached, len(self.phases) - 1)]
-
-        span = self.max_steps - self.min_steps
-        steps = self.min_steps + int(_unit(episode.episode_id, self.salt + "steps") * span)
+        # NOT the phase reached. This wrote `self.phases[reached]` into a
+        # column the schema documents as "the reason, where success is the
+        # verdict" -- a provider putting the wrong semantic into a
+        # documented column, which is a defect rather than a second
+        # legitimate use. How far an episode got is `phase_outcomes`, which
+        # already carries it: over all 360 affected rows on disk, every
+        # phase-name value was already a key in its own phase_outcomes.
+        #
+        # The fake has no irrecoverable state, so its vocabulary is two
+        # words and its map is two entries. A two-entry total map is a
+        # valid map, and a faithful preview of what a LIBERO map looks
+        # like: success-or-timeout.
+        # The fake has no irrecoverable state unless `terminal_rate` asks for
+        # one, and its vocabulary stays small: a two-entry map was a faithful
+        # preview of LIBERO's, and the terminals exist so the functional layer
+        # has something for ghost_penalty to weigh.
+        #
+        # A success is NOT the phase reached. This wrote `self.phases[reached]`
+        # into a column documented as "the reason, where success is the
+        # verdict" -- the wrong semantic in a documented column, fixed at the
+        # source and migrated out of the 360 rows it had already written.
+        terminal_roll = _unit(episode.episode_id, self.salt + "terminal")
+        terminal = not success and terminal_roll < self.terminal_rate
         if success:
-            steps = self.min_steps + int(steps * 0.6)  # successes finish sooner
+            termination = "predicate_satisfied"
+        elif terminal:
+            basis = _unit(episode.episode_id, self.salt + "basis")
+            termination = ("simulator_gave_up"
+                           if basis < self.simulator_basis_share
+                           else "object_unrecoverable")
+        else:
+            termination = "horizon"
+
+        # Duration. A MODE AND A TAIL, not uniform noise: three uniforms summed
+        # concentrate near the middle and still reach the ends, so quantiles
+        # and RMST read differently from each other. Uniform lengths make the
+        # median and the mean agree and the whole phase untestable.
+        u = (_unit(episode.episode_id, self.salt + "d1")
+             + _unit(episode.episode_id, self.salt + "d2")
+             + _unit(episode.episode_id, self.salt + "d3")) / 3.0
+        span = self.max_steps - self.min_steps
+
+        if success:
+            # `speed` stretches the whole distribution without moving the
+            # success RATE, which is the two-arm case this fixture exists for:
+            # same success-at-budget, different median and RMST.
+            speed = (self.speed.get(episode.checkpoint_id, 1.0)
+                     if isinstance(self.speed, dict) else self.speed)
+            steps = self.min_steps + int(u * span * 0.55 * speed)
+            steps = max(1, min(steps, episode.max_steps))
+        elif terminal:
+            # Strictly before the budget: a terminal AT the budget is
+            # indistinguishable from running out of it, and the two are the
+            # distinction this whole change exists to record.
+            steps = max(1, min(int(u * (episode.max_steps - 1)) + 1,
+                               episode.max_steps - 1))
+        else:
+            steps = episode.max_steps
 
         return {
             "success": success,
             "phase_outcomes": outcomes,
-            "terminal_phase": terminal,
-            # Never null on a failure: null is what a success writes, so a
-            # nullable reason cannot distinguish "succeeded" from "the policy
-            # failed for no recorded reason".
-            "failure_reason": None if success else "policy_failure",
+            "termination_reason": termination,
+            # Free-form detail beyond the flag, not a copy of it. The old
+            # comment argued a null could not tell "succeeded" from "failed
+            # for no recorded reason" -- right, and now termination_reason's
+            # job, where it is never null.
+            "failure_reason": None,
             "is_infra_failure": False,
             "steps": steps,
+            # One inference per step: this provider has no chunking, so the
+            # realized chunk length is exactly 1.
+            "decisions": steps,
             "elapsed_sec": round(steps * self.sec_per_step, 4),
         }
 

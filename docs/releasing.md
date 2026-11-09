@@ -24,18 +24,51 @@ twine check dist/*
 # 5. Re-verify the claims against whatever [vla-eval] resolves to now.
 python scripts/verify_harness_claims.py
 
-# 6. Rehearse. TestPyPI is free and catches README rendering.
-twine upload --repository testpypi dist/*
-
-# 7. Upload.
-twine upload dist/*
+# 6. Rehearse, then release: push the tag. Both uploads happen in CI.
+git tag v$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+git push origin --tags
 ```
+
+## Do not upload from a laptop
+
+`twine upload` needs a long-lived API token, and a token on a developer
+machine is the one part of a release that cannot be made safe. It gets copied
+into a `.env`, the editor snapshots the `.env` into its local history, and
+deleting the file does not delete the snapshot -- which is not hypothetical:
+two such snapshots held live tokens on this machine for two days after the
+cleanup that was believed to have removed them. Deletion is never the fix for
+a leaked secret; revocation is the only fix.
+
+So both uploads run in GitHub Actions over OIDC, with no secret stored
+anywhere: `rehearse.yml` publishes to TestPyPI on a `rehearse-*` tag and
+installs the result back from the index, and `publish.yml` publishes to PyPI
+on a `v*` tag after re-running the full suite on the tagged commit. The
+short-lived credential is minted per run by GitHub and cannot leak from a
+file, because there is no file.
+
+Each needs a publisher configured once on the index, which the header comment
+of each workflow records:
+
+| | PyPI | TestPyPI |
+|---|---|---|
+| Owner | `nalinraut` | `nalinraut` |
+| Repository | `refractal` | `refractal` |
+| Workflow | `publish.yml` | `rehearse.yml` |
+| Environment | `pypi` | `testpypi` |
+
+`refractal` already exists on both indexes, so these go under the project's
+own **Manage -> Publishing** page. A *pending* publisher, configured under the
+account instead, is only for a project that has never been uploaded -- the
+normal form has no project to attach to then, which is the point people hit
+first and the one that does not apply here.
 
 ## Why step 2 deletes rather than rebuilds
 
 `uv build` adds to `dist/` and does not clear it. A stale wheel from an earlier
-version stays, `twine upload dist/*` uploads both, and the older one wins on any
-resolver that sees it first. Nothing warns.
+version stays, an upload of `dist/*` takes both, and the older one wins on any
+resolver that sees it first. Nothing warns. The workflows `rm -rf dist` for the
+same reason, so this matters for the local checks in steps 3 and 4 -- which are
+what you are running the build for now that the upload happens in CI.
 
 ## Why step 3 checks the artefact
 

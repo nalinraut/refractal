@@ -46,6 +46,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
+from ..schema.outcome import Outcome
+
 Dichotomy = Literal["majority", "all"]
 
 
@@ -62,19 +64,80 @@ class UnitKey:
         return (self.scene_id, self.task_hash, self.scenario_hash)
 
 
+def _outcome_of(row: Mapping[str, object]) -> "EpisodeOutcome":
+    """One result row as the record every consumer reads.
+
+    `outcome` is absent on every pre-v2 row, and is derived from `success`
+    there rather than left null: a row that recorded success IS a SUCCESS, and
+    one that did not is a failure this schema cannot separate into budget
+    exhaustion and a terminal state. BUDGET_EXHAUSTED is the honest reading of
+    that -- it is the one that keeps the episode IN the distribution with its
+    own duration, where TERMINAL would charge it a ghost penalty nobody
+    recorded grounds for.
+
+    The step fields stay null regardless, and that is what makes the
+    distinction safe: a functional over these rows refuses on the null
+    `step_budget` long before the derived outcome could mislead anyone.
+    """
+    raw = row.get("outcome")
+    if raw:
+        outcome = Outcome(raw)
+    elif row.get("is_infra_failure"):
+        outcome = Outcome.APPARATUS
+    else:
+        outcome = Outcome.SUCCESS if row.get("success") else Outcome.BUDGET_EXHAUSTED
+    step = row.get("step_to_success")
+    budget = row.get("step_budget")
+    return EpisodeOutcome(
+        outcome=outcome,
+        step_to_success=int(step) if step is not None else None,
+        step_budget=int(budget) if budget is not None else None,
+    )
+
+
+@dataclass(frozen=True)
+class EpisodeOutcome:
+    """What one episode did, as every test and functional sees it.
+
+    A RECORD, not a union and not an optional. Widening the old `bool` to
+    `bool | EpisodeOutcome` would mean every consumer deciding which it had,
+    and the one that forgot would read a record as truthy and call every
+    episode a success. One shape, always present; the nullable fields are
+    inside it, and those nulls are what the guards read.
+
+    `step_to_success` is None except on SUCCESS. `step_budget` is None for
+    every row written before schema version 2, and is NOT reconstructed from
+    the plan beside the rows -- the absence is the signal that a
+    distributional comparison must refuse rather than degrade.
+    """
+
+    outcome: Outcome
+    step_to_success: int | None
+    step_budget: int | None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.outcome is Outcome.SUCCESS
+
+    @property
+    def is_apparatus(self) -> bool:
+        return self.outcome is Outcome.APPARATUS
+
+
 @dataclass
 class Unit:
     """One scenario faced by every checkpoint, after the pairing rule."""
 
     key: UnitKey
-    #: checkpoint id -> {seed: success}, restricted to seeds every checkpoint kept
-    outcomes: dict[str, dict[int, bool]]
+    #: checkpoint id -> {seed: EpisodeOutcome}, restricted to seeds every
+    #: checkpoint kept.
+    outcomes: dict[str, dict[int, EpisodeOutcome]]
     seeds_kept: list[int]
     seeds_dropped: list[int]
 
     def rate(self, checkpoint_id: str) -> float:
         seeds = self.outcomes[checkpoint_id]
-        return sum(seeds.values()) / len(seeds)
+        return sum(o.succeeded for o in seeds.values()) / len(seeds)
 
     def passed(self, checkpoint_id: str, rule: Dichotomy) -> bool:
         """Collapse several seeds into the one bit McNemar consumes.
@@ -86,8 +149,8 @@ class Unit:
         """
         seeds = self.outcomes[checkpoint_id]
         if rule == "all":
-            return all(seeds.values())
-        return sum(seeds.values()) * 2 > len(seeds)
+            return all(o.succeeded for o in seeds.values())
+        return sum(o.succeeded for o in seeds.values()) * 2 > len(seeds)
 
 
 @dataclass
@@ -107,6 +170,19 @@ class Eligibility:
     seed_slots_dropped: int = 0
     episodes_dropped_to_preserve_pairing: int = 0
     episodes_excluded_infra: int = 0
+    #: Apparatus losses per arm, as (apparatus, total). Counted here rather
+    #: than derived from the units, because apparatus episodes are excluded
+    #: BEFORE a unit is built -- by the time a caller holds the units, the
+    #: evidence that the arms lost different shares is gone.
+    #:
+    #: A fact about the data, so it is not a parameter. The refusal that reads
+    #: it needs nothing passed in.
+    apparatus_by_arm: dict[str, tuple[int, int]] = field(default_factory=dict)
+    #: Which termination maps each arm's rows were interpreted under. A set
+    #: per arm, because an arm whose own rows disagree is its own fault to
+    #: report. Empty for pre-v2 rows, which did not record it -- and empty is
+    #: "not recorded", never "they agreed".
+    termination_digests: dict[str, set[str]] = field(default_factory=dict)
     min_seeds: int = 0
     total_seed_slots: int = 0
     seed_counts: dict[int, int] = field(default_factory=dict)
@@ -269,6 +345,8 @@ def build_units(
     task_hashes: dict[str, set[str]] = defaultdict(set)
     duplicates: list[tuple[str, str, int]] = []
     infra = 0
+    apparatus_counts: dict[str, tuple[int, int]] = {}
+    termination_digests: dict[str, set[str]] = {}
 
     for row in rows:
         key = UnitKey(
@@ -293,6 +371,12 @@ def build_units(
             unfired += 1
         scene_hashes[row["scene_id"]].add(row["scene_hash"])
         task_hashes[row["task_id"]].add(row["task_hash"])
+        arm = row["checkpoint_id"]
+        seen, total = apparatus_counts.get(arm, (0, 0))
+        apparatus_counts[arm] = (seen + bool(row["is_infra_failure"]), total + 1)
+        digest = row.get("termination_map_digest")
+        if digest:
+            termination_digests.setdefault(arm, set()).add(digest)
         if row["is_infra_failure"]:
             infra += 1
         seeds = grouped[key.as_tuple()][row["checkpoint_id"]]
@@ -311,6 +395,8 @@ def build_units(
         checkpoints=checkpoints,
         min_seeds=min_seeds,
         episodes_excluded_infra=infra,
+        apparatus_by_arm=apparatus_counts,
+        termination_digests=termination_digests,
         sessions=sessions,
         harness_versions=harness_versions,
         harness_surfaces=harness_surfaces,
@@ -361,7 +447,7 @@ def build_units(
             Unit(
                 key=keys[tuple_key],
                 outcomes={
-                    c: {seed: bool(per_checkpoint[c][seed]["success"]) for seed in kept}
+                    c: {seed: _outcome_of(per_checkpoint[c][seed]) for seed in kept}
                     for c in checkpoints
                 },
                 seeds_kept=kept,
