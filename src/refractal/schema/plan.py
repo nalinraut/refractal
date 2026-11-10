@@ -217,6 +217,9 @@ class Plan(Strict):
     refractal_version: str
     hardware_profile: str
     execution_mode: str
+    #: Copied from ``run.policy_seeding`` so the bridge knows to send seeds.
+    #: Already in ``plan_id`` through ``identity``; None means unseeded.
+    policy_seeding: str | None = None
     checkpoints: list[Checkpoint]
     tier: str
     seeds: list[int]

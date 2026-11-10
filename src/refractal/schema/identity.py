@@ -543,6 +543,13 @@ def experiment_identity(
             "seed_base": run.seed_base,
             "tier": run.tier,
             "scenario_sets": sorted(run.scenario_sets) if run.scenario_sets else None,
+            # Only when declared, so an unseeded catalog keeps its plan_id. A
+            # declared scheme is identity: it decides what noise an episode
+            # draws, and two schemes are two experiments.
+            **(
+                {"policy_seeding": run.policy_seeding}
+                if getattr(run, "policy_seeding", None) else {}
+            ),
         },
     }
 

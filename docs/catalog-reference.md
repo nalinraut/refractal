@@ -172,6 +172,7 @@ a sampler takes `range` + `samples` + `distribution`.
 | `tier` | no | `full` | Which tier of the catalog to run. |
 | `scenario_sets` | no | `None` | Restrict the run to named sets. `None` means all of them. |
 | `execution_mode` | no | `serial` | **Within one task**, `serial` runs every seed for checkpoint A, then for checkpoint B, then moves to the next task. `concurrent` runs the checkpoints together, one thread per checkpoint. **This is about checkpoints within a worker, not about whether workers are parallel.** See below. |
+| `policy_seeding` | no | absent | Seeds the policy's sampling noise per episode by a named scheme; the only one is `episode-id-sha256/v1` (see `refractal/seeding.py`). The episode's seed is derived from its `episode_id` and sent to the model server with the episode; the server derives a per-call seed from it and the step. Part of `plan_id` when declared; absent leaves `plan_id` unchanged. vla-eval backend only, and only with a server that reads it. |
 
 ### What `serial` actually orders
 
@@ -252,6 +253,7 @@ experiment.
 | a task's `instruction`, `predicate`, `max_steps` | `task_hash`, every episode of it |
 | a scenario's generated values or `perturbations` | `scenario_hash` |
 | `checkpoints`, `seeds`, `seed_base`, `tier`, `execution_mode` | `plan_id` |
+| `policy_seeding`, when declared | `plan_id` |
 | `resource_shape`, `hardware.yaml`, `results_uri`, the backend | **nothing** — placement, not identity |
 
 ### `scenes[].metrics[]` — what to measure

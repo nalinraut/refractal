@@ -47,12 +47,14 @@ from typing import Any, Callable, Mapping
 
 from ..schema.plan import Plan, PlannedEpisode, PlannedScene
 from ..perturbations import level_arg_of
+from ..seeding import episode_seed
 from .physics import ABSENT as PHYSICS_ABSENT
 from .physics import actuator_facts, physics_digest, physics_manifest
 from .harness import describe_installed_harness
 from .resources import PeakWatcher
 from .results import ResultWriter
 from .vla_eval import (
+    POLICY_SEEDS_KEY,
     ReceiptBuffer,
     BridgeError,
     EpisodeRow,
@@ -93,8 +95,10 @@ def default_invoke(
     """
     import anyio  # type: ignore
 
-    orchestrator_cls = make_parquet_orchestrator(recorder_cls, physics)
-    orchestrator = orchestrator_cls(dict(config))
+    config = dict(config)
+    seeds = config.pop(POLICY_SEEDS_KEY, None)
+    orchestrator_cls = make_parquet_orchestrator(recorder_cls, physics, seeds)
+    orchestrator = orchestrator_cls(config)
     results = anyio.run(orchestrator.run)
     if not results:
         raise BridgeError(
@@ -361,6 +365,7 @@ def _run_group(
     physics: Any,
     benchmark_override: str | None = None,
     concurrent_with: str | None,
+    policy_seeding: str | None = None,
 ) -> tuple[int, str | None]:
     """One harness invocation, start to written rows. Returns (rows, part path).
 
@@ -409,6 +414,20 @@ def _run_group(
         record_video=record_video,
         benchmark_override=benchmark_override,
     )
+    if policy_seeding:
+        # Position -> the episode's seed, for `_build_recorder` to put on the
+        # task dict the harness sends with EPISODE_START. Position, because the
+        # harness only knows its counter; `check_index_contract` above is what
+        # makes position i this group's i-th planned episode. A private key,
+        # removed by `default_invoke` before the harness sees the config.
+        config[POLICY_SEEDS_KEY] = {
+            index: {
+                "policy_seed": episode_seed(episode.episode_id, policy_seeding),
+                "policy_seed_scheme": policy_seeding,
+                "refractal_episode_id": episode.episode_id,
+            }
+            for index, episode in enumerate(group)
+        }
     buffer = StepBuffer()
     frames = FrameBuffer(keep_every=frame_every) if record_video else None
     receipts = ReceiptBuffer()
@@ -628,6 +647,7 @@ def run_vla_eval(
                         physics=physics,
                         benchmark_override=benchmark_override,
                         concurrent_with=",".join(sorted(alongside)) or None,
+                        policy_seeding=getattr(plan, "policy_seeding", None),
                     )
 
                 if plan.execution_mode == "concurrent":

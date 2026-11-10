@@ -847,7 +847,12 @@ class NullRecordingStore:
     def close(self) -> None: ...
 
 
-def make_parquet_orchestrator(recorder_cls, physics=None) -> type:
+#: Private key on the harness config carrying position -> episode seed. Popped
+#: by `default_invoke` before the harness parses the config.
+POLICY_SEEDS_KEY = "_refractal_policy_seeds"
+
+
+def make_parquet_orchestrator(recorder_cls, physics=None, policy_seeds=None) -> type:
     """Build the Orchestrator subclass. The store override is not a method.
 
     ``_build_recorder`` is the obvious hook. The other gate is ``self._store``,
@@ -903,6 +908,21 @@ def make_parquet_orchestrator(recorder_cls, physics=None) -> type:
             # model does not change underneath a running worker.
             if physics is not None:
                 physics.observe(benchmark)
+            if policy_seeds is not None:
+                # The orchestrator builds `task = {**task, "episode_idx": ...}`,
+                # hands that same dict here and then to `run_episode`, whose
+                # runner forwards its primitive fields to the server in
+                # EPISODE_START. So setting keys here is how the seed reaches
+                # the server, with no benchmark change. A position with no seed
+                # is refused: an unseeded episode inside a seeded plan would
+                # look seeded in every artifact.
+                position = int(task["episode_idx"])
+                if position not in policy_seeds:
+                    raise BridgeError(
+                        f"no policy seed for harness position {position}; this "
+                        f"group has seeds for {sorted(policy_seeds)}"
+                    )
+                task.update(policy_seeds[position])
             if rec_cfg is None:
                 from vla_eval.recording import NullEpisodeRecorder  # type: ignore
 
@@ -918,6 +938,7 @@ def make_parquet_orchestrator(recorder_cls, physics=None) -> type:
 
 
 __all__ = [
+    "POLICY_SEEDS_KEY",
     "RECORDER_SURFACE",
     "BridgeError",
     "EpisodeRow",

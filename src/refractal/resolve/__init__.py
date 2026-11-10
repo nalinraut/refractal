@@ -270,6 +270,7 @@ def resolve(
         refractal_version=__version__,
         hardware_profile=hardware_profile,
         execution_mode=catalog.run.execution_mode,
+        policy_seeding=catalog.run.policy_seeding,
         checkpoints=list(catalog.run.checkpoints),
         tier=catalog.run.tier,
         seeds=catalog.run.seed_values(),

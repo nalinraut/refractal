@@ -862,6 +862,15 @@ class Run(Strict):
     #: in one comparison, so this is recorded per episode and `compare` gates
     #: latency reporting on it rather than refusing the join.
     execution_mode: Literal["serial", "concurrent"] = "serial"
+    #: How the policy's sampling noise is seeded, by named scheme. See
+    #: ``refractal.seeding``. Absent means unseeded: the server draws from its
+    #: own global generator and ``seed`` is a repeat label only.
+    #:
+    #: IN ``plan_id`` when declared, because it changes what an episode is:
+    #: under a scheme the noise is a function of the episode, without one it is
+    #: whatever the server's generator held. Omitted from the identity document
+    #: when absent, so every plan_id recorded before this field stays valid.
+    policy_seeding: Literal["episode-id-sha256/v1"] | None = None
 
     @field_validator("execution_mode", mode="before")
     @classmethod
