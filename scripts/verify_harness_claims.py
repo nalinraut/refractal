@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Re-verify the claims Refractal makes about the harness it does not control.
 
-Six claims, each of which was checked once by reading and would otherwise stay
+Eight claims, each of which was checked once by reading and would otherwise stay
 true by assumption. They are not covered by ``harness_surface``: that digest
 catches a *change* to files Refractal subclasses, which is a different question
 from "is this thing still absent" or "is this still a default rather than a
@@ -162,6 +162,112 @@ def check_server_url_is_a_default(root: Path) -> Claim:
     )
 
 
+def _server_call_seed(root: Path):
+    """The harness's own `_call_seed`, lifted out and made callable.
+
+    Extracted by AST and executed with nothing but `hashlib` in scope, rather
+    than imported: importing the module pulls torch and a policy. And rather
+    than compared as text, because two spellings of the same arithmetic are
+    equal and a regex would call them different -- while a changed constant
+    inside an unchanged-looking line would slip past.
+
+    Returns None if the function is no longer there, which is itself the
+    finding.
+    """
+    import ast
+    import hashlib
+
+    source = _read(root, "model_servers/lerobot.py")
+    if not source:
+        return None
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.FunctionDef) and node.name == "_call_seed":
+            namespace: dict = {"hashlib": hashlib}
+            exec(compile(ast.Module(body=[node], type_ignores=[]),
+                         "<harness>", "exec"), namespace)
+            return namespace["_call_seed"]
+    return None
+
+
+def check_call_seed_agrees(root: Path) -> Claim:
+    """The claim `refractal/seeding.py` makes in its own docstring.
+
+    Both halves of the derivation are written down in one place so there is
+    one definition; this is what makes that true rather than aspirational. The
+    server computes `call_seed` because only it knows the step, so nothing in
+    a run would notice the two drifting apart -- the rows would record a
+    `policy_seed` and a scheme, and the noise would come from a different
+    rule.
+    """
+    from refractal.seeding import call_seed
+
+    theirs = _server_call_seed(root)
+    if theirs is None:
+        return Claim(
+            "the server derives call_seed by refractal's rule",
+            "`policy_seeding` claims a reproducible noise draw per (episode, "
+            "step). Without the server's half, the scheme named in plan_id "
+            "describes a derivation nothing performs",
+            False,
+            "model_servers/lerobot.py has no _call_seed -- the server's half is gone",
+        )
+    # Across episode seeds and steps, including the boundaries where a
+    # truncation or a shift would differ from ours and nowhere else.
+    for seed in (0, 1, 2 ** 31, 2 ** 62, 2 ** 63 - 1):
+        for step in (0, 1, 2, 9, 10, 255, 999):
+            if theirs(seed, step) != call_seed(seed, step):
+                return Claim(
+                    "the server derives call_seed by refractal's rule",
+                    "`policy_seeding` claims a reproducible noise draw per "
+                    "(episode, step). If the two rules differ, every recorded "
+                    "policy_seed names a derivation that did not run",
+                    False,
+                    f"DIVERGES at episode_seed={seed}, step={step}: "
+                    f"harness {theirs(seed, step)} vs refractal "
+                    f"{call_seed(seed, step)}",
+                )
+    return Claim(
+        "the server derives call_seed by refractal's rule",
+        "`policy_seeding` claims a reproducible noise draw per (episode, step)",
+        True,
+        "identical over 35 (seed, step) pairs including the 2**63 boundary",
+    )
+
+
+def check_seed_schemes_agree(root: Path) -> Claim:
+    """Refractal must not name a scheme the server cannot implement.
+
+    The server refuses an unknown scheme at episode start, which is the right
+    place for it -- but that refusal lands after a plan is built, a results
+    directory is created and the models are loaded. Here it lands before
+    anything runs.
+    """
+    import re as _re
+
+    from refractal.seeding import SCHEMES
+
+    source = _read(root, "model_servers/lerobot.py")
+    match = _re.search(r"_SEED_SCHEMES\s*=\s*\(([^)]*)\)", source)
+    if not match:
+        return Claim(
+            "the server implements every scheme refractal can name",
+            "a catalog declaring `policy_seeding` is refused at episode start "
+            "rather than at plan time if the server does not know the scheme",
+            False,
+            "model_servers/lerobot.py declares no _SEED_SCHEMES",
+        )
+    theirs = set(_re.findall(r"[\"\']([^\"\']+)[\"\']", match.group(1)))
+    missing = sorted(set(SCHEMES) - theirs)
+    return Claim(
+        "the server implements every scheme refractal can name",
+        "a catalog declaring `policy_seeding` would be refused at episode "
+        "start -- after the plan, the results directory and the model load",
+        not missing,
+        f"both sides declare {sorted(theirs)}" if not missing
+        else f"refractal names {missing}, which the server does not implement",
+    )
+
+
 CHECKS = (
     check_store_gate,
     check_db_path_unused,
@@ -169,6 +275,8 @@ CHECKS = (
     check_cross_validation_inline,
     check_work_items_inline,
     check_server_url_is_a_default,
+    check_call_seed_agrees,
+    check_seed_schemes_agree,
 )
 
 
