@@ -53,6 +53,8 @@ did not write.
 
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -206,6 +208,18 @@ class StepBuffer:
 
     def steps_for(self, episode_id: str) -> list[tuple[str, Any]]:
         return self._fields.get(episode_id, [])
+
+    def in_order(self) -> list[str]:
+        """Episode keys in the order the harness first recorded into them.
+
+        The same positional correspondence `FrameBuffer` and `ReceiptBuffer`
+        rely on, and stated here rather than left to a caller iterating a dict
+        and assuming insertion order holds. An episode that recorded nothing
+        has no key, so a caller zipping this against rows must tolerate a
+        shorter list -- which is the honest shape: there is no per-step record
+        to report for an episode that produced none.
+        """
+        return list(self._fields)
 
     def discard(self, episode_id: str) -> None:
         self._fields.pop(episode_id, None)
@@ -719,6 +733,141 @@ class FrameBuffer:
         self._seen.clear()
 
 
+class CallCounter:
+    """Inference calls per episode, from the model server's own log.
+
+    The only measurement of `decisions` this backend offers. The harness
+    records per ENVIRONMENT STEP -- reward, done, success, action, state --
+    and never per inference call, so nothing inside a run can count them.
+    The server appends one JSON line per call, carrying the episode id
+    Refractal sent with EPISODE_START.
+
+    Measured rather than derived, which is what keeps the declared-versus-
+    realized check honest: `steps / decisions` computed from the declared
+    chunk size would be a restatement of the declaration, and comparing a
+    declaration against itself always passes.
+
+    Reads forward from where it last stopped, per path. A run writes one log
+    per arm and asks for the counts after every group, so re-reading from the
+    start would be quadratic in a long run -- and would also double-count if
+    the caller ever added rather than replaced.
+
+    Attribution is KEYED, on the episode id Refractal itself sent, and not
+    positional. So two episodes interleaving in one log at ten environments is
+    safe, which segmentation by step reset would not be -- there the step
+    sequence of one episode is interrupted by another's and means nothing.
+    The id is present only when the run declares `policy_seeding`; without it
+    the server has no Refractal id to log and nothing is attributed, which is
+    reported as unmeasured rather than as zero.
+
+    A missing or unreadable log is not an error: the server may have been
+    launched without one, and `decisions` is then null with that reason
+    rather than guessed.
+
+    THE HAZARD THIS REFUSES. The server opens the log in append mode, so
+    re-running a plan without rotating it puts the same episode ids in the
+    file twice and every count doubles -- silently, and in the direction that
+    makes the realized chunk length look half what it was. A repeated
+    (episode, step) pair is the detector: one episode cannot have made two
+    inference calls at one step. Such an episode is marked ambiguous and
+    reports None, because a wrong count is worse than no count here: null
+    reads as "nobody measured it" and a doubled one reads as a measurement.
+    """
+
+    def __init__(self) -> None:
+        self._offsets: dict[str, int] = {}
+        self._counts: dict[str, int] = {}
+        self._seen: dict[str, set] = {}
+        self._ambiguous: set = set()
+
+    def update(self, path: str | None) -> None:
+        if not path:
+            return
+        try:
+            with open(path, "rb") as handle:
+                handle.seek(self._offsets.get(path, 0))
+                chunk = handle.read()
+                end = handle.tell()
+        except OSError:
+            return
+        # The server appends while this reads, so the last line can be half
+        # written. Stop at the last newline and leave the remainder for the
+        # next pass -- dropping it would silently lose a call, and parsing it
+        # would lose the same call with a swallowed exception.
+        cut = chunk.rfind(b"\n") + 1
+        self._offsets[path] = end - (len(chunk) - cut)
+        for raw in chunk[:cut].splitlines():
+            try:
+                record = json.loads(raw)
+            except ValueError:
+                continue
+            if record.get("event") or not record.get("episode_id"):
+                continue
+            key = record["episode_id"]
+            step = record.get("step")
+            if step is not None:
+                steps = self._seen.setdefault(key, set())
+                if step in steps:
+                    self._ambiguous.add(key)
+                steps.add(step)
+            self._counts[key] = self._counts.get(key, 0) + 1
+
+    def calls(self, episode_id: str) -> int | None:
+        if episode_id in self._ambiguous:
+            return None
+        return self._counts.get(episode_id)
+
+    def ambiguous(self) -> tuple[str, ...]:
+        """Episodes logged more than once, usually an un-rotated log."""
+        return tuple(sorted(self._ambiguous))
+
+
+def step_facts(fields: "list[tuple[str, Any]]") -> dict[str, Any]:
+    """What the per-step record says that the harness's aggregate does not.
+
+    The harness's aggregate gives `success` and `steps`. The per-step record
+    gives the step each field took at each step, so the step the predicate
+    FIRST held is observable rather than inferred -- which matters because
+    `steps` equals the success step only on a harness that stops at success,
+    and that is a property of this backend rather than of the schema.
+
+    Returns, per episode:
+
+    ``step_to_success``
+        the index of the first step whose recorded ``success`` was true, or
+        None if none was or if the benchmark recorded no ``success`` field.
+    ``ended_early``
+        True if a recorded ``done`` went true at a step where ``success`` did
+        not. That is a terminal failure, and on LIBERO it never happens -- so
+        it is detected rather than assumed absent.
+    ``success_samples``
+        how many steps carried a ``success`` field at all. Zero means the
+        benchmark records none, and `step_to_success` is then unmeasured
+        rather than negative evidence.
+
+    `_ALL_RECORD_FIELDS` is advisory and per-benchmark, so a benchmark that
+    records neither field is the normal case rather than an error.
+    """
+    successes: list[bool] = []
+    dones: list[bool] = []
+    for name, value in fields:
+        if name == "success":
+            successes.append(bool(value))
+        elif name == "done":
+            dones.append(bool(value))
+
+    first = next((i for i, ok in enumerate(successes) if ok), None)
+    ended_early = any(
+        done and not (successes[i] if i < len(successes) else False)
+        for i, done in enumerate(dones[:-1])
+    )
+    return {
+        "step_to_success": first,
+        "ended_early": ended_early,
+        "success_samples": len(successes),
+    }
+
+
 def make_parquet_recorder(collect, frames=None, receipts=None) -> type:
     """Build the recorder subclass, lazily.
 
@@ -938,6 +1087,7 @@ def make_parquet_orchestrator(recorder_cls, physics=None, policy_seeds=None) -> 
 
 
 __all__ = [
+    "step_facts",
     "POLICY_SEEDS_KEY",
     "RECORDER_SURFACE",
     "BridgeError",

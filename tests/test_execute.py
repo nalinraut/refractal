@@ -1,4 +1,5 @@
 import datetime as dt
+import pathlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -963,3 +964,52 @@ class TestTheResourceReceipt(unittest.TestCase):
         for name in ("peak_rss_mb", "peak_vram_mb"):
             self.assertTrue(EPISODES_SCHEMA.field(name).nullable,
                             f"{name} must be able to say 'not measured'")
+
+
+class TestThePlanIsByteIdenticalWhereverItIsWritten(unittest.TestCase):
+    """`plans/<name>.json` and the copy beside the rows must agree exactly.
+
+    Both are committed, deliberately: the per-comparison copy is the only
+    thing that expands that run's `plan_id` into what it covered, and a plan
+    is not re-derivable from anything else in a repository -- `refractal plan`
+    needs the catalog AND a `build.lock` whose facts are per-machine version
+    labels.
+
+    Keeping two copies is cheap only if a reader can confirm they are the same
+    copy. They differed by one byte: `Plan.write` appended a trailing newline
+    and `ResultWriter.write_plan` did not. Identical content, identical
+    plan_id, different sha256 -- so comparing digests would have reported
+    divergence in the identity chain where there was a formatting difference.
+    """
+
+    def test_both_writers_produce_the_same_bytes(self):
+        import tempfile
+
+        from refractal.execute.results import ResultWriter
+        from refractal.schema.plan import Plan
+
+        plan = Plan(
+            plan_schema=4, plan_id="sha256:" + "ab" * 32, catalog_hash="sha256:c",
+            refractal_version="0.1.0a2", hardware_profile="laptop",
+            execution_mode="serial", checkpoints=[], tier="full", seeds=[0],
+            total_episodes=0, estimated_seconds=0, scenes=[], warnings=[],
+            identity={},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            standalone = pathlib.Path(tmp) / "standalone.json"
+            plan.write(standalone)
+            writer = ResultWriter(tmp + "/results", plan.plan_id)
+            writer.write_plan(plan.to_json())
+            beside = pathlib.Path(writer.prefix) / "plan.json"
+            self.assertEqual(standalone.read_bytes(), beside.read_bytes())
+
+    def test_a_json_string_already_ending_in_a_newline_is_not_doubled(self):
+        import tempfile
+
+        from refractal.execute.results import ResultWriter
+
+        with tempfile.TemporaryDirectory() as tmp:
+            writer = ResultWriter(tmp + "/results", "sha256:" + "cd" * 32)
+            writer.write_plan("{}\n")
+            body = (pathlib.Path(writer.prefix) / "plan.json").read_bytes()
+            self.assertEqual(body, b"{}\n")

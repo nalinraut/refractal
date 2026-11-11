@@ -310,7 +310,7 @@ class TestArmHashKeysAreDecided(unittest.TestCase):
 
     HASHED = {"id", "path", "server", "server_args"}
     OPTIONAL = {"chunk_length"}       # hashed only when declared
-    UNHASHED = {"vram_mb"}            # placement, never hashed
+    UNHASHED = {"vram_mb", "action_hash_log"}   # placement, never hashed
 
     def test_every_checkpoint_field_is_classified(self):
         from refractal.schema.models import Checkpoint

@@ -142,6 +142,54 @@ class TestShippedExamplesResolve(unittest.TestCase):
         self.assertGreater(checked, 0, "no example catalogs found to check")
 
 
+class TestWritersCannotInventColumns(unittest.TestCase):
+    """The other half of the subset guard, and the half that was missing.
+
+    `TestFixturesCannotInventColumns` covers test fixtures. It does not cover
+    WRITERS, which is where the third instance of this bug lived: the
+    production vla-eval row path kept writing `terminal_phase` after v2
+    renamed it to `termination_reason`, `from_pylist` dropped the key without
+    a word, and every LIBERO row ever written recorded a null termination
+    reason while the writer's code read as though it wrote one.
+
+    This one is enforced in `ResultWriter.write_episodes` rather than only
+    here, so it covers every writer and every future one at the single point
+    they all pass through. Measured across the suite: 253 writes, 7,922 rows
+    checked.
+    """
+
+    def test_a_renamed_key_is_refused_rather_than_dropped(self):
+        from refractal.execute.results import check_schema_keys
+
+        with self.assertRaises(ValueError) as caught:
+            check_schema_keys([{"episode_id": "a", "terminal_phase": "horizon"}])
+        message = str(caught.exception)
+        self.assertIn("terminal_phase", message)
+        self.assertIn("_RENAMED_ON_READ", message)
+
+    def test_it_counts_the_rows_so_a_stray_key_is_distinguishable(self):
+        """One row with a typo reads differently from every row carrying it."""
+        from refractal.execute.results import check_schema_keys
+
+        rows = [{"episode_id": "a"}, {"episode_id": "b", "stpes": 1}]
+        with self.assertRaises(ValueError) as caught:
+            check_schema_keys(rows)
+        self.assertIn("'stpes' (1 row(s))", str(caught.exception))
+
+    def test_a_missing_key_is_not_an_error(self):
+        """One directional check. A null column is a real statement -- "nobody
+        recorded this" -- so requiring every field would refuse every honest
+        partial row."""
+        from refractal.execute.results import check_schema_keys
+
+        check_schema_keys([{"episode_id": "a"}])
+
+    def test_every_field_the_schema_has_is_accepted(self):
+        from refractal.execute.results import EPISODES_SCHEMA, check_schema_keys
+
+        check_schema_keys([{f.name: None for f in EPISODES_SCHEMA}])
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -269,6 +317,9 @@ class TestTheDocsNameFlagsThatExist(unittest.TestCase):
         # git's, in the release checklist: a release is now a pushed tag, so
         # the only upload credential is the short-lived one GitHub mints.
         "--tags",
+        # vla-eval's, in the catalog reference: `action_hash_log` is set on the
+        # server at launch, which is why Refractal has to be told the path.
+        "--arg",
     }
 
     @staticmethod
@@ -368,4 +419,3 @@ class TestFixturesCannotInventColumns(unittest.TestCase):
             "row fixtures name columns EPISODES_SCHEMA does not have, so "
             "nothing in the production path would ever read them: "
             f"{dict(unknown)}")
-

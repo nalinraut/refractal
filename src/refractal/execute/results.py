@@ -388,6 +388,25 @@ EPISODES_SCHEMA = pa.schema(
         # cannot know two arms were read under different maps, and the refusal
         # for that could not fire on a real result at all.
         pa.field("termination_map_digest", pa.string()),
+        # Where each non-native field on this row came from, field by field.
+        #
+        # A row can hold three provenance classes at once: `steps` observed by
+        # the harness, `step_to_success` derived from it by an exact partition,
+        # and `decisions` measured from a different artefact entirely. A single
+        # "derived" flag would answer "was this measured or inferred?" vaguely
+        # when the row can answer it precisely, and the three are not the same
+        # evidence even where the arithmetic is exact.
+        #
+        # Absent for a natively written row: every field came from the writer,
+        # so there is nothing to disambiguate. Present only for the fields that
+        # did not, which keeps it a statement rather than a ritual.
+        #
+        # FLAGS, never refuses -- same treatment as authorship and
+        # reproducible. A comparison mixing derived and natively written rows
+        # is permitted and says so on the verdict, because where the derivation
+        # is exact the rows genuinely are comparable and refusing would be the
+        # over-refusal case.
+        pa.field("field_provenance", pa.map_(pa.string(), pa.string())),
         # The step the predicate was satisfied at. A typed column rather than
         # a `metrics` entry, because it carries an enforced invariant a map
         # cannot: non-null exactly when outcome is SUCCESS, and <= step_budget.
@@ -616,6 +635,47 @@ def check_receipts(rows: Iterable[dict[str, Any]]) -> None:
                 )
 
 
+def check_schema_keys(rows: list[dict[str, Any]]) -> None:
+    """Refuse a row carrying a key the schema does not have.
+
+    ``pa.Table.from_pylist(rows, schema=...)`` takes the schema's fields and
+    IGNORES every other key, silently. A writer that spells a column wrong, or
+    keeps writing one that was renamed, therefore produces a file where that
+    column is null and no error anywhere -- while the writer's own code reads
+    as though it wrote it.
+
+    Three instances before this guard existed, all the same shape and all
+    found by hand: a test fixture asserting against a `termination_map_digest`
+    column that did not exist; a `terminal_phase` key in another fixture that
+    survived the v2 rename; and `terminal_phase` in the PRODUCTION vla-eval
+    writer, which meant every LIBERO row ever written recorded a null
+    termination reason.
+
+    The fixture half is guarded by a subset assertion over test files. That
+    one does not cover writers, which is where the third instance lived. This
+    does, for every writer and every future one, because it sits at the single
+    point all of them pass through.
+
+    An explicit assertion because `from_pylist` has no strict mode. Missing
+    keys are fine -- a null column is a real statement -- so this is one
+    directional check, not a schema equality.
+    """
+    known = {field.name for field in EPISODES_SCHEMA}
+    unknown: dict[str, int] = {}
+    for row in rows:
+        for key in row:
+            if key not in known:
+                unknown[key] = unknown.get(key, 0) + 1
+    if unknown:
+        named = ", ".join(f"{k!r} ({n} row(s))" for k, n in sorted(unknown.items()))
+        raise ValueError(
+            f"these rows carry key(s) the episode schema does not have: {named}. "
+            "`from_pylist` would drop them without a word and write the column "
+            "they were meant for as null. Either the key is misspelled, or it "
+            "was renamed and the writer was not -- check _RENAMED_ON_READ."
+        )
+
+
 @dataclass
 class ResultWriter:
     """Appends episode rows under a comparison prefix, one part file per flush."""
@@ -636,6 +696,7 @@ class ResultWriter:
         """Write one part file atomically. Returns its path, or None if no rows."""
         if not rows:
             return None
+        check_schema_keys(rows)
         check_receipts(rows)
         directory = self.scene_dir(checkpoint_id, scene_id)
         self.fs.makedirs(directory, exist_ok=True)
@@ -956,8 +1017,16 @@ class ResultWriter:
         back out of a results tree.
         """
         self.fs.makedirs(self.prefix, exist_ok=True)
+        # The trailing newline matters, and only because of what it makes
+        # possible: `Plan.write` appends one and this did not, so the copy
+        # beside the rows differed from the standalone plan by exactly one
+        # byte. Semantically identical, `plan_id` identical -- and not
+        # verifiable with `sha256sum`, which is the whole point of keeping
+        # both. A reader comparing digests would have read a formatting
+        # difference as divergence in the identity chain.
+        body = plan_json if plan_json.endswith("\n") else plan_json + "\n"
         with self.fs.open(f"{self.prefix}/plan.json", "wb") as handle:
-            handle.write(plan_json.encode("utf-8"))
+            handle.write(body.encode("utf-8"))
 
     def copy_catalog(self, catalog_root: str) -> None:
         """Results and the definitions that produced them travel together.
@@ -1100,6 +1169,7 @@ def _renamed(table: "pa.Table") -> "pa.Table":
 
 __all__ = [
     "EPISODES_SCHEMA",
+    "check_schema_keys",
     "STEPS_SCHEMA",
     "ResultWriter",
     "comparison_prefix",

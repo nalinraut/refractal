@@ -823,6 +823,17 @@ class Checkpoint(Strict):
     #: echo server the `refractal init` example ships. Requiring a positive
     #: value would make the shipped example unplannable, which is how this was
     #: found.
+    #: Where this arm's model server appends one JSON line per inference
+    #: call, if it was launched with one. PLACEMENT, never hashed: a different
+    #: log path is the same experiment written down somewhere else, and
+    #: hashing it would give two runs of one experiment two plan_ids.
+    #:
+    #: Declared because the server is launched outside Refractal -- the path
+    #: is a `--arg` on the serve command -- so there is no other way for a run
+    #: to find it. Without it `decisions` is null on this backend: the harness
+    #: records per environment step and never per inference call, so the
+    #: server's own log is the only place the count exists.
+    action_hash_log: str | None = None
     vram_mb: int = Field(default=8192, ge=0)
 
     @model_validator(mode="after")
@@ -870,7 +881,9 @@ class Run(Strict):
     #: under a scheme the noise is a function of the episode, without one it is
     #: whatever the server's generator held. Omitted from the identity document
     #: when absent, so every plan_id recorded before this field stays valid.
-    policy_seeding: Literal["episode-id-sha256/v1"] | None = None
+    #: ``v2`` mixes the replicate index (the episode's ``seed``) into the
+    #: derivation; the replicate count is ``seeds``, already in ``plan_id``.
+    policy_seeding: Literal["episode-id-sha256/v1", "episode-id-sha256/v2"] | None = None
 
     @field_validator("execution_mode", mode="before")
     @classmethod
@@ -899,6 +912,17 @@ class Run(Strict):
 
     @model_validator(mode="after")
     def _check(self) -> "Run":
+        logs = [c.action_hash_log for c in self.checkpoints if c.action_hash_log]
+        if len(set(logs)) != len(logs):
+            raise ValueError(
+                f"two checkpoints declare the same action_hash_log: {logs}. Each "
+                "arm's model server appends to its own file, so one path shared "
+                "between arms puts both arms' calls in it -- every episode then "
+                "has a repeated (episode, step) pair, `decisions` is refused as "
+                "ambiguous on all of them, and the declared-versus-realized "
+                "chunk check reports 'unchecked' for exactly the comparison it "
+                "was added to make."
+            )
         ids = [c.id for c in self.checkpoints]
         if len(ids) != len(set(ids)):
             raise ValueError(f"duplicate checkpoint ids: {ids}")

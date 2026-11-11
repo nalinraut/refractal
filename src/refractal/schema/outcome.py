@@ -39,6 +39,7 @@ exists so that difference is refusable rather than invisible.
 from __future__ import annotations
 
 import enum
+import math
 
 
 class Outcome(str, enum.Enum):
@@ -294,6 +295,49 @@ def validate_row(
             )
 
 
+#: Chunk lengths an arm's rows are consistent with: ``(lo, hi)``, where ``hi``
+#: of None means unbounded above. ``None`` in place of the pair means the rows
+#: contradict each other -- no single chunk length explains them all.
+ChunkRange = "tuple[int, int | None] | None"
+
+
+def chunk_lengths_consistent_with(steps: int, decisions: int) -> ChunkRange:
+    """Chunk lengths k for which ``ceil(steps / k) == decisions``, as a range.
+
+    ``ceil(steps/k) == d`` rearranges to ``steps/d <= k < steps/(d-1)``, so one
+    row admits a contiguous interval:
+
+        104 steps / 11 calls -> [9.45, 10.4)  -> 10..10
+         81 steps /  9 calls -> [9, 10.125)   ->  9..10
+        104 steps / 21 calls -> [4.95, 5.2)   ->  5..5
+
+    A range rather than a set, for two reasons. **One decision leaves the upper
+    bound unbounded** -- ``ceil(steps/k) == 1`` for every k at least as long as
+    the episode -- and an enumerated set silently truncated that to ``{steps}``,
+    which would have falsely refused a correct declaration on any suite with
+    episodes shorter than its chunk length. And it avoids walking ``range(1,
+    steps + 1)`` per row, which is wasted work on a 220-step episode.
+    """
+    if decisions <= 0 or steps <= 0:
+        return None
+    lo = -(-steps // decisions)                      # ceil(steps / decisions)
+    if decisions == 1:
+        return (lo, None)
+    hi = -(-steps // (decisions - 1)) - 1            # ceil(steps/(d-1)) - 1
+    return (lo, hi) if lo <= hi else None
+
+
+def intersect_chunk_ranges(a: ChunkRange, b: ChunkRange) -> ChunkRange:
+    """Both rows' ranges, or None where they cannot both hold."""
+    if a is None or b is None:
+        return None
+    lo = max(a[0], b[0])
+    hi = a[1] if b[1] is None else (b[1] if a[1] is None else min(a[1], b[1]))
+    if hi is not None and lo > hi:
+        return None
+    return (lo, hi)
+
+
 def validate_phase_records(
     records, *, steps: int, phase_names=None
 ) -> None:
@@ -375,6 +419,9 @@ __all__ = [
     "TerminationMapError",
     "DERIVED",
     "derived_flags",
+    "ChunkRange",
+    "chunk_lengths_consistent_with",
+    "intersect_chunk_ranges",
     "validate_phase_records",
     "validate_row",
     "OutcomeInvariantError",

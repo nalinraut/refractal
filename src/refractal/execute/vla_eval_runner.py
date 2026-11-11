@@ -47,12 +47,13 @@ from typing import Any, Callable, Mapping
 
 from ..schema.plan import Plan, PlannedEpisode, PlannedScene
 from ..perturbations import level_arg_of
+from ..schema.outcome import chunk_lengths_consistent_with
 from ..seeding import episode_seed
 from .physics import ABSENT as PHYSICS_ABSENT
 from .physics import actuator_facts, physics_digest, physics_manifest
 from .harness import describe_installed_harness
 from .resources import PeakWatcher
-from .results import ResultWriter
+from .results import EPISODES_SCHEMA_VERSION, ResultWriter
 from .vla_eval import (
     POLICY_SEEDS_KEY,
     ReceiptBuffer,
@@ -60,6 +61,8 @@ from .vla_eval import (
     EpisodeRow,
     check_server_assignment,
     StepBuffer,
+    CallCounter,
+    step_facts,
     build_eval_config,
     FrameBuffer,
     check_index_contract,
@@ -262,6 +265,10 @@ def _row(
     ended_at: dt.datetime,
     concurrent_with: str | None,
     peaks: Any = None,
+    step_facts: Mapping[str, Any] | None = None,
+    step_budget: int | None = None,
+    decisions: int | None = None,
+    decisions_absent: str | None = None,
 ) -> dict[str, Any]:
     """One Parquet row.
 
@@ -314,7 +321,12 @@ def _row(
         "physics_surface": physics_surface,
         "success": row.success,
         "phase_outcomes": row.phase_outcomes,
-        "terminal_phase": row.terminal_phase,
+        # RENAMED, and it was being thrown away. This wrote `terminal_phase`,
+        # which schema v2 renamed to `termination_reason`; `from_pylist` takes
+        # a schema and silently ignores keys outside it, so every vla-eval row
+        # recorded a null termination reason while the writer believed it had
+        # written one. The same shape as a recorder whose store stays null.
+        "termination_reason": row.terminal_phase,
         "failure_reason": row.failure_reason,
         "is_infra_failure": row.is_infra_failure,
         "steps": row.steps,
@@ -322,6 +334,264 @@ def _row(
         "started_at": started_at,
         "ended_at": ended_at,
         "artifact_uri": None,
+        **_distributional(row, step_facts, step_budget, decisions,
+                          decisions_absent),
+    }
+
+
+#: Arms whose action-hash log has already been reported on, so the canary
+#: prints once per arm rather than once per group.
+_CANARY_SEEN: set = set()
+
+
+def _canary(
+    counter: "CallCounter", log: str | None, checkpoint_id: str, outcomes: list,
+    declared_chunk: int | None = None, per_step: list | None = None,
+) -> None:
+    """Say, after the first group, whether the declared log is the one in use.
+
+    The catalog declares where to READ and `vla-eval serve --arg` decides
+    where to WRITE, so the two can name different files and nothing in a run
+    would notice: `decisions` comes out null with an honest reason, at the end.
+
+    This is purely about timing. It refuses nothing -- null with a stated
+    reason is already the honest degradation -- but discovering that the
+    server writes elsewhere in the first minute is worth a great deal more
+    than discovering it after a thousand episodes. For a probe whose primary
+    check IS `decisions`, an unmeasured one leaves it unavailable, and that is
+    better known before the GPU time than after.
+    """
+    if checkpoint_id in _CANARY_SEEN:
+        return
+    _CANARY_SEEN.add(checkpoint_id)
+    if not log:
+        print(f"  {checkpoint_id}: no action_hash_log declared, so `decisions` "
+              "will be null and the declared chunk length cannot be checked")
+        return
+    counted = [o for o in outcomes
+               if counter.calls(o.episode.episode_id) is not None]
+    if counted:
+        first = counted[0]
+        calls = counter.calls(first.episode.episode_id)
+        print(f"  {checkpoint_id}: action-hash log is live -- "
+              f"{calls} inference call(s) "
+              f"recorded for the first episode, {len(counted)}/{len(outcomes)} "
+              "of this group attributed")
+        _chunk_canary(checkpoint_id, first, calls, declared_chunk)
+        _step_canary(checkpoint_id, outcomes, per_step)
+        return
+    ambiguous = [o for o in outcomes
+                 if o.episode.episode_id in counter.ambiguous()]
+    if ambiguous:
+        print(f"  {checkpoint_id}: WARNING -- {log} already contains "
+              f"{len(ambiguous)} of this group's episodes from an earlier run. "
+              "Counts are ambiguous and `decisions` will be null; rotate the "
+              "log and re-run to measure the chunk length.")
+        return
+    print(f"  {checkpoint_id}: WARNING -- {log} records no call for any of this "
+          "group's episodes. The catalog says where to read and the serve "
+          "command decides where to write; check they name the same file, or "
+          "`decisions` stays null for the whole run and the declared chunk "
+          "length cannot be checked.")
+
+
+def _chunk_canary(
+    checkpoint_id: str, first: Any, calls: int, declared: int | None
+) -> None:
+    """Does the server appear to have loaded the config the arm declares?
+
+    The canary above proves the log is live. It says nothing about WHICH
+    configuration the server came up on, and that is a separate failure:
+    `server_args` is a declaration Refractal never sends -- the chunk size
+    comes from the server's own config file at launch -- so a chunk-5 arm can
+    come up on a chunk-10 config and nothing notices until the
+    declared-versus-realized check runs after the fact.
+
+    One episode is enough, and it is the same arithmetic as that check:
+    `decisions == ceil(steps / k)` admits an interval of k per episode, and
+    104 steps over 11 calls gives 10..10 while 104 over 21 gives 5..5. It will
+    not always pin one value -- 81 steps over 9 calls gives 9..10 -- but it
+    always separates 5 from 10, which is the only distinction a replan-interval
+    probe needs. Declared 5 against an interval of 9..10 is caught in the
+    first minute rather than the third hour.
+
+    A warning rather than a refusal, because the post-hoc check is the one
+    with the whole run behind it. This is about when you learn, not whether.
+    """
+    if declared is None:
+        return
+    steps = getattr(first, "steps", None)
+    if not steps or not calls:
+        return
+    window = chunk_lengths_consistent_with(steps, calls)
+    if window is None:
+        return
+    lo, hi = window
+    span = f"{lo}" if hi == lo else f"{lo}..{hi if hi is not None else 'unbounded'}"
+    if lo <= declared and (hi is None or declared <= hi):
+        print(f"  {checkpoint_id}: first episode ran {steps} step(s) in {calls} "
+              f"inference call(s), consistent with chunk length {span}; "
+              f"declares {declared}")
+        return
+    print(f"  {checkpoint_id}: WARNING -- declares chunk_length={declared}, but "
+          f"its first episode ran {steps} step(s) in {calls} inference call(s), "
+          f"which is only consistent with {span}. The server was most likely "
+          "launched on another config: Refractal never sends `server_args`, so "
+          "the chunk size comes from the server's own config file. Stop now "
+          "rather than finding this in the post-hoc check.")
+
+
+def _step_canary(checkpoint_id: str, outcomes: list, per_step: list | None) -> None:
+    """Check the newly measured `step_to_success` against `steps`.
+
+    Two routes to one number, one new and one long established. The per-step
+    measurement is the least exercised code in this path; `steps` comes from
+    the harness's aggregate and has been written for far longer. On a harness
+    that ends the episode when the predicate holds they must agree on a
+    success row, so agreement validates the new measurement against the old
+    field, and disagreement is a finding either way -- it would mean either
+    that the per-step attribution is off, or that this harness keeps stepping
+    past success, which changes what `steps` means on every row ever written.
+    """
+    if not per_step:
+        return
+    agree = disagree = 0
+    example = None
+    for index, outcome in enumerate(outcomes):
+        if index >= len(per_step) or not outcome.success:
+            continue
+        measured = (per_step[index] or {}).get("step_to_success")
+        if measured is None:
+            continue
+        if measured == outcome.steps:
+            agree += 1
+        else:
+            disagree += 1
+            example = example or (measured, outcome.steps)
+    if not (agree or disagree):
+        return
+    if not disagree:
+        print(f"  {checkpoint_id}: step_to_success agrees with steps on all "
+              f"{agree} success row(s) of the first group -- the per-step "
+              "measurement checks out against the harness aggregate")
+        return
+    print(f"  {checkpoint_id}: NOTE -- step_to_success differs from steps on "
+          f"{disagree} of {agree + disagree} success row(s), e.g. {example[0]} "
+          f"vs {example[1]}. Either the per-step attribution is off, or this "
+          "harness keeps stepping past success -- which would change what "
+          "`steps` means on every row written to date.")
+
+
+def _why_no_count(
+    counter: "CallCounter | None", log: str | None, episode_id: str
+) -> str | None:
+    """Which of the four reasons `decisions` is absent, where it is.
+
+    They are not interchangeable and a reader acts on them differently: a
+    missing declaration is a catalog fix, an ambiguous count is a log that
+    needs rotating, and an episode the log never mentions means the server was
+    launched pointing somewhere else -- which is invisible from here because
+    the catalog says where to READ and the serve command says where to WRITE.
+    """
+    if counter is None:
+        return "unmeasured:this run counted no inference calls"
+    if not log:
+        return ("unmeasured:this arm declares no action_hash_log, and the "
+                "harness records per environment step rather than per "
+                "inference call")
+    if episode_id in counter.ambiguous():
+        return ("unmeasured:this episode appears more than once in the action "
+                "hash log, so its call count is ambiguous. The server appends, "
+                "so a re-run against an un-rotated log doubles every count -- "
+                "rotate it and re-read rather than trusting the doubled value")
+    if counter.calls(episode_id) is None:
+        return (f"unmeasured:{log} records no call for this episode. The "
+                "catalog declares where to read and the serve command decides "
+                "where to write; check they name the same file")
+    return None
+
+
+def _distributional(
+    row: EpisodeRow, facts: Mapping[str, Any] | None, step_budget: int | None,
+    decisions: int | None = None, decisions_absent: str | None = None,
+) -> dict[str, Any]:
+    """The v2 columns, each written only where this backend can answer it.
+
+    Every one of these was null on every vla-eval row, which put the whole
+    distributional layer out of reach of the only experiment that needed it:
+    no ECDF, no median, no quantile, no restricted mean, and no budget sweep
+    without a re-run. The rows were thin while the real data sat in a
+    side-channel log.
+
+    `decisions` comes from the model server's own log, because the harness
+    records per ENVIRONMENT STEP -- reward, done, success, action, state --
+    and never per inference call, so nothing inside a run can count them.
+    Measured rather than derived: the declared chunk size would make
+    `steps / decisions` a restatement of the declaration, and a check that
+    compares a declaration against itself always passes. Null with the reason
+    recorded when the server was launched without a log.
+    """
+    facts = facts or {}
+    provenance: dict[str, str] = {}
+    first = facts.get("step_to_success")
+    samples = facts.get("success_samples") or 0
+
+    if row.success and first is not None:
+        step_to_success = first
+        provenance["step_to_success"] = "measured:per-step success field"
+    elif row.success and samples == 0:
+        # Observed success, no per-step record to say when. `steps` is the
+        # success step on a harness that stops at success, and that is a
+        # property of the backend -- so it is recorded as the derivation it is.
+        step_to_success = row.steps
+        provenance["step_to_success"] = (
+            "derived:steps; this harness ends the episode at success")
+    else:
+        step_to_success = None
+        if row.success:
+            provenance["step_to_success"] = (
+                "unmeasured:success recorded but no step carried it")
+
+    if facts.get("ended_early") and not row.success:
+        # Never seen on LIBERO: all 315 failures in the recorded run sat at
+        # exactly the budget. Detected rather than assumed away, and left null
+        # because naming it TERMINAL needs a basis, which needs a termination
+        # map this backend does not declare.
+        outcome = None
+        provenance["outcome"] = (
+            "unmeasured:ended before budget without success, and this backend "
+            "declares no termination map to name the basis")
+    elif row.success:
+        outcome = "SUCCESS"
+        provenance["outcome"] = "derived:success flag"
+    elif step_budget is not None and row.steps >= step_budget:
+        outcome = "BUDGET_EXHAUSTED"
+        provenance["outcome"] = "derived:ran to the declared budget"
+    else:
+        outcome = None
+        provenance["outcome"] = "unmeasured:no budget declared for this group"
+
+    # WHY it is absent, not a single reason covering every way it can be.
+    # "this arm declares no action_hash_log" was printed for an episode whose
+    # arm declared one and whose count was refused as ambiguous -- a reason
+    # that reads as an explanation and names the wrong cause, which is the
+    # same defect as a refusal that convincingly blames the wrong thing.
+    provenance["decisions"] = (
+        "measured:model server action-hash log, one line per inference call"
+        if decisions is not None else
+        decisions_absent or
+        "unmeasured:this harness records per environment step and never per "
+        "inference call, and no action_hash_log was read")
+    if step_budget is not None:
+        provenance["step_budget"] = "declared:the group's step limit"
+
+    return {
+        "outcome": outcome,
+        "step_to_success": step_to_success,
+        "step_budget": step_budget,
+        "decisions": decisions,
+        "schema_version": EPISODES_SCHEMA_VERSION,
+        "field_provenance": sorted(provenance.items()),
     }
 
 
@@ -366,6 +636,12 @@ def _run_group(
     benchmark_override: str | None = None,
     concurrent_with: str | None,
     policy_seeding: str | None = None,
+    #: Per-arm, because each arm's server writes its own log. Shared across
+    #: groups so a long run reads each log forward rather than from the start
+    #: every time, and thread-safe by being per (arm, path) rather than global.
+    call_counts: "CallCounter | None" = None,
+    action_hash_log: str | None = None,
+    declared_chunk: int | None = None,
 ) -> tuple[int, str | None]:
     """One harness invocation, start to written rows. Returns (rows, part path).
 
@@ -422,8 +698,12 @@ def _run_group(
         # removed by `default_invoke` before the harness sees the config.
         config[POLICY_SEEDS_KEY] = {
             index: {
-                "policy_seed": episode_seed(episode.episode_id, policy_seeding),
+                "policy_seed": episode_seed(
+                    episode.episode_id, policy_seeding,
+                    replicate=episode.seed if policy_seeding.endswith("/v2") else None,
+                ),
                 "policy_seed_scheme": policy_seeding,
+                "policy_replicate": episode.seed,
                 "refractal_episode_id": episode.episode_id,
             }
             for index, episode in enumerate(group)
@@ -446,7 +726,18 @@ def _run_group(
             "gate in orchestrator.py still reads `self._store is None` -- "
             "scripts/verify_harness_claims.py checks exactly this."
         )
+    # Read BEFORE the buffer is cleared, and this is the whole reason the
+    # order matters: the per-step record is the only place the step a predicate
+    # first held is observable, and `clear()` is two lines away from throwing
+    # it out. Keyed positionally, like the frames and the receipts.
+    per_step = [step_facts(buffer.steps_for(key)) for key in buffer.in_order()]
     buffer.clear()
+
+    # After the invocation, so every call this group made has been written.
+    if call_counts is not None:
+        call_counts.update(action_hash_log)
+        _canary(call_counts, action_hash_log, checkpoint_id, outcomes,
+                declared_chunk=declared_chunk, per_step=per_step)
 
     # Positional, like the frames: the buffer is keyed by the harness's episode
     # counter and the rows by Refractal's content-addressed id. Zipped rather
@@ -487,6 +778,12 @@ def _run_group(
             ended_at=ended_at,
             concurrent_with=concurrent_with,
             peaks=peaks,
+            step_facts=(per_step[index] if index < len(per_step) else None),
+            step_budget=_max_steps(group),
+            decisions=(call_counts.calls(outcome.episode.episode_id)
+                       if call_counts is not None else None),
+            decisions_absent=_why_no_count(
+                call_counts, action_hash_log, outcome.episode.episode_id),
         )
         for index, outcome in enumerate(outcomes)
     ]
@@ -572,6 +869,23 @@ def run_vla_eval(
     check_server_assignment(servers)
     servers = preflight_servers(servers)
 
+    # Per arm: each server writes its own log, and a shared counter across
+    # groups is what lets a long run read each one forward rather than from
+    # the start every time. Declared on the checkpoint because the server is
+    # launched outside Refractal, so the path cannot be discovered.
+    #
+    # Read from the PLAN's checkpoints rather than the catalog's, so a run
+    # filtered to one worker still finds its own arm's log.
+    hash_logs = {
+        c.id: getattr(c, "action_hash_log", None)
+        for c in (getattr(plan, "checkpoints", None) or [])
+    }
+    call_counts: dict[str, CallCounter] = {}
+    declared_chunks = {
+        c.id: getattr(c, "chunk_length", None)
+        for c in (getattr(plan, "checkpoints", None) or [])
+    }
+
     writer = ResultWriter(results_uri, plan.plan_id)
     # The WHOLE plan, not this worker's slice of it.
     #
@@ -648,6 +962,10 @@ def run_vla_eval(
                         benchmark_override=benchmark_override,
                         concurrent_with=",".join(sorted(alongside)) or None,
                         policy_seeding=getattr(plan, "policy_seeding", None),
+                        call_counts=call_counts.setdefault(
+                            checkpoint_id, CallCounter()),
+                        action_hash_log=hash_logs.get(checkpoint_id),
+                        declared_chunk=declared_chunks.get(checkpoint_id),
                     )
 
                 if plan.execution_mode == "concurrent":

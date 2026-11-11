@@ -155,6 +155,33 @@ class Reproducible:
     #: Whether the question was asked at all. False where no lock was read, so
     #: an empty ``editable`` means "not checked" rather than "none".
     installs_checked: bool = False
+    #: Whether anything checked that the servers were configured the way the
+    #: arms declare. One line, because the answer is currently always the same
+    #: and a reader must not have to infer it from silence.
+    #:
+    #: `server_args` is in `plan_id` and in the arm descriptor, and Refractal's
+    #: execute path NEVER READS IT -- `build_eval_config` sends a server only
+    #: its URL. So it describes behaviour without causing it, which no other
+    #: field in the identity chain does: `scene_hash` covers files that
+    #: actually load and `task_hash` covers the predicate actually evaluated,
+    #: while `server_args` covers a label. `plan_id` can therefore be
+    #: confidently wrong about how a policy was driven.
+    #:
+    #: Keeping it in `plan_id` is still right -- two runs declaring different
+    #: arguments ARE different experiments, and the declaration is the only
+    #: record of intent. What is not right is leaving the record silent about
+    #: whether anyone checked it.
+    server_args_verified: str | None = None
+    #: Non-native fields on the rows, as ``field -> how many rows took which
+    #: route``, from each row's ``field_provenance``.
+    #:
+    #: FLAGS, never refuses, for the reason the whole taxonomy turns on: where
+    #: a derivation is exact the rows genuinely are comparable, so refusing
+    #: would fragment the result space and add no information. What it stops is
+    #: a reader taking a reconstructed field for an observed one -- and a row
+    #: can hold three classes at once, which is why it is per field rather
+    #: than a single flag.
+    provenance: tuple[tuple[str, str], ...] = ()
 
     def render(self) -> str:
         base = "yes" if self.complete else "no (" + "; ".join(self.missing) + ")"
@@ -162,6 +189,11 @@ class Reproducible:
         # line reads as a check that ran and found nothing, which is the one
         # thing it cannot distinguish itself from -- the same reason
         # `declined` prints `none`.
+        if self.server_args_verified:
+            base = f"{base}; server_args {self.server_args_verified}"
+        if self.provenance:
+            routes = "; ".join(f"{field} {how}" for field, how in self.provenance)
+            base = f"{base}; DERIVED FIELDS: {routes}"
         if not self.installs_checked:
             return f"{base}; installs not checked"
         if self.editable:

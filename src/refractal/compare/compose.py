@@ -58,6 +58,21 @@ from .report import (
 )
 from .verdict import ArmContext, Verdict
 
+#: What any run can currently say about its arms' server configuration.
+#:
+#: The harness's HELLO handshake does carry some of it -- the model server's
+#: class name, and `observation_params`, which for the LeRobot server means
+#: `send_state` and `send_wrist_image`. It does NOT carry `chunk_size`, so a
+#: handshake check would narrow this and not close it. Until one exists, the
+#: honest line is that nothing checked, with the one thing that does checked
+#: named.
+SERVER_ARGS_UNVERIFIED = (
+    "declared, NOT verified: no server-config check runs, so plan_id records "
+    "how the arms were meant to be driven rather than how they were. The "
+    "declared chunk length is checked against the realized steps/decisions "
+    "after the fact, and only where `decisions` was measured"
+)
+
 #: Phrases `evaluate` uses for a check that did not run. Matched rather than
 #: flagged on the note itself, because the notes are strings by the time they
 #: reach here -- and each phrase is produced in exactly one place, so a
@@ -143,6 +158,36 @@ def _arm_scalars(
                                   ("ghost_penalty", str(spec.ghost_penalty)))
                       + cells,
                       undefined_reason=reason))
+    return tuple(out)
+
+
+def _provenance_of(
+    episodes: Mapping[str, Sequence[Mapping[str, object]]] | None,
+    checkpoints: Sequence[str],
+) -> tuple[tuple[str, str], ...]:
+    """Which non-native fields these rows carry, and by which route.
+
+    Summarised per field rather than per row, because a reader needs to know
+    that a median rests on a derived `step_to_success` -- not which 1,685
+    rows it rests on. The route is kept, not collapsed to "derived": a field
+    measured from a different artefact and one reconstructed by arithmetic are
+    not the same evidence even where the arithmetic is exact.
+    """
+    counts: dict[str, dict[str, int]] = {}
+    for arm in checkpoints:
+        for row in (episodes or {}).get(arm) or ():
+            entries = row.get("field_provenance") or ()
+            if isinstance(entries, Mapping):
+                entries = entries.items()
+            for field, route in entries:
+                kind = str(route).split(":", 1)[0]
+                counts.setdefault(str(field), {})
+                counts[str(field)][kind] = counts[str(field)].get(kind, 0) + 1
+    out = []
+    for field in sorted(counts):
+        shown = ", ".join(f"{kind} on {n} row(s)"
+                          for kind, n in sorted(counts[field].items()))
+        out.append((field, shown))
     return tuple(out)
 
 
@@ -287,6 +332,8 @@ def compose_report(
             missing=tuple(verdict.blocking[:1]),
             editable=tuple(editable),
             installs_checked=bool(checkpoints) and len(checked) == len(checkpoints),
+            provenance=_provenance_of(episodes, checkpoints),
+            server_args_verified=SERVER_ARGS_UNVERIFIED,
         ),
         arms=tuple(arm_reports),
         pairwise=tuple(pairwise),
