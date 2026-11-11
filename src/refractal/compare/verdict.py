@@ -193,6 +193,110 @@ class ArmContext:
     installs_checked: bool = False
 
 
+def chunk_length_mismatch(
+    feasible: Mapping[str, "set[int]"],
+    arms: Mapping[str, Mapping[str, object]] | None,
+) -> list[str]:
+    """Refuse an arm whose rows cannot have run at the chunk length it declared.
+
+    Declared is `chunk_length` on the arm. Realized is not a number but a SET:
+    if the policy replans every k steps then `decisions == ceil(steps / k)`, so
+    each row admits an interval of k and the arm's feasible set is the
+    intersection over its rows. The declaration is checked for membership.
+
+    Inverting instead -- reading `steps / decisions` as the chunk length -- is
+    wrong, and wrong quietly. The last chunk of an episode is partial, so 104
+    steps over 11 calls gives 9.455; across one arm that genuinely ran at 10
+    this produced 67 distinct "chunk lengths" and a refusal naming every one
+    of them. `ceil` of the ratio is a lower bound and reads 9 for an 81-step
+    episode at chunk 10. Found by running the check against recorded data
+    rather than against a fixture that divided evenly.
+
+    Both sides still come from different places, which is what keeps it from
+    being circular: the feasible set is counted from `decisions`, measured
+    from the model server's own per-call log, and the declaration comes from
+    the catalog.
+
+    No override. A different chunk length means the policy saw the world a
+    different number of times, which changes what the number MEANS rather than
+    casting doubt on it.
+
+    It also closes a hole in promotion, though not the main guard for it:
+    `episode_id` covers scene, task, scenario, seed and checkpoint id and
+    nothing in `server_args`, so two plans differing only in the chunk size
+    and both labelling an arm `pi0` mint identical episode ids. `arms_differ`
+    refuses that at the boundary, declared to declared; this is what sees it
+    if the rows get pooled anyway.
+    """
+    out: list[str] = []
+    for arm in sorted(feasible):
+        seen = feasible[arm]
+        if seen is None:
+            # DISTINCT from a declaration outside the range, and pointing at a
+            # different fix: these rows cannot all have come from one chunk
+            # length, so the arm is two conditions under one name. The other
+            # case is rows that agree with each other and disagree with the
+            # catalog.
+            out.append(
+                f"arm {arm!r} has rows no single chunk length explains: there "
+                "is no k for which every episode's `decisions` equals "
+                "ceil(steps / k). One arm is one policy driven one way, so "
+                "rows from two chunk lengths pooled under one name is the "
+                "likely cause -- which is what promoting a run with a "
+                "different chunk size looks like, because episode_id does not "
+                "cover it."
+            )
+            continue
+        declared = (arms or {}).get(arm, {}).get("chunk_length")
+        if declared is None:
+            continue
+        lo, hi = seen
+        if int(declared) < lo or (hi is not None and int(declared) > hi):
+            span = f"{lo}" if hi == lo else f"{lo}..{hi if hi is not None else 'unbounded'}"
+            out.append(
+                f"arm {arm!r} declares chunk_length={declared}, and its rows "
+                f"are only consistent with {span}. `decisions` is counted from "
+                "the server's own per-call log, so the policy saw the world a "
+                "different number of times than the catalog says and the "
+                "number means something other than its label. No override: "
+                "this changes the measurement rather than casting doubt on it."
+            )
+    return out
+
+
+def chunk_length_weakly_constrained(
+    feasible: Mapping[str, object], arms: Mapping[str, Mapping[str, object]] | None
+) -> list[str]:
+    """Arms whose rows admit a wide range of chunk lengths.
+
+    A declaration inside a wide range has not been verified, it has merely not
+    been contradicted, and the two must not read the same. An arm whose
+    episodes all have lengths that are multiples of k pins nothing: every row
+    then admits the same wide interval and the intersection stays wide.
+
+    Said rather than refused -- the declaration may well be right, and there
+    is no evidence against it. This is the flag side of the same taxonomy.
+    """
+    out: list[str] = []
+    for arm in sorted(feasible):
+        seen = feasible[arm]
+        if not isinstance(seen, tuple):
+            continue
+        lo, hi = seen
+        if hi == lo:
+            continue
+        declared = (arms or {}).get(arm, {}).get("chunk_length")
+        span = f"{lo}..{hi if hi is not None else 'unbounded'}"
+        out.append(
+            f"arm {arm!r}: its rows constrain the chunk length only to {span}"
+            + (f", which contains the declared {declared}" if declared is not None
+               else ", and it declares none")
+            + ". Not contradicted, and not verified either: episode lengths "
+            "that are all multiples of the chunk length pin nothing."
+        )
+    return out
+
+
 def evaluate(
     eligibility: Eligibility,
     checkpoints: Sequence[str] | None = None,
@@ -329,6 +433,21 @@ def evaluate(
             f"{sum(1 for c in checkpoints if not digests[c])} of "
             f"{len(checkpoints)} arm(s) have rows written before the map digest "
             "was recorded. The arms may have been read under different maps."
+        )
+
+    measured = {a: eligibility.realized_chunk[a] for a in checkpoints
+                if a in eligibility.realized_chunk}
+    verdict.blocking.extend(chunk_length_mismatch(measured, arms))
+    verdict.notes.extend(chunk_length_weakly_constrained(measured, arms))
+    unchecked = [a for a in checkpoints if a not in eligibility.realized_chunk]
+    if unchecked:
+        # Said, because a silent pass here is indistinguishable from a check
+        # that ran. Without `decisions` the realized side does not exist.
+        verdict.notes.append(
+            f"Chunk length not checked for {', '.join(sorted(unchecked))}: their "
+            "rows record no `decisions`, so there is no realized steps/decisions "
+            "to compare the declaration against. On the vla-eval backend that "
+            "means the arm's server was launched without an action_hash_log."
         )
 
     # The two that are genuinely external.

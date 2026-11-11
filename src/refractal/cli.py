@@ -497,7 +497,15 @@ def cmd_compare(args: argparse.Namespace) -> int:
             return 2
         promoted_rows = read_episodes(args.results, args.promote_from).to_pylist()
         try:
-            rows, promotion = promote(plan, rows, promoted_rows, args.promote_from)
+            # Both sides' declarations, so promotion can refuse at the
+            # boundary. None where a plan is out of reach, and `arms_differ`
+            # then declines rather than passing -- the comparison's own
+            # declared-identity check reports that it did not run.
+            rows, promotion = promote(
+                plan, rows, promoted_rows, args.promote_from,
+                target_arms=_arms_from_plan(args.results, args.plan_id),
+                source_arms=_arms_from_plan(args.results, args.promote_from),
+            )
         except PromotionError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2

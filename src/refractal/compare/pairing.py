@@ -46,7 +46,12 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
-from ..schema.outcome import Outcome
+from ..schema.outcome import (
+    ChunkRange,
+    Outcome,
+    chunk_lengths_consistent_with as _chunks_consistent_with,
+    intersect_chunk_ranges as _intersect,
+)
 
 Dichotomy = Literal["majority", "all"]
 
@@ -178,6 +183,31 @@ class Eligibility:
     #: A fact about the data, so it is not a parameter. The refusal that reads
     #: it needs nothing passed in.
     apparatus_by_arm: dict[str, tuple[int, int]] = field(default_factory=dict)
+    #: Chunk lengths consistent with every one of an arm's rows.
+    #:
+    #: NOT ``steps / decisions``. That is not the chunk length, because the
+    #: last chunk of an episode is partial: 104 steps over 11 calls gives
+    #: 9.455, and the first version of this check read 67 distinct "chunk
+    #: lengths" off one arm that had run at exactly one. `ceil` of it is no
+    #: better -- a lower bound, which reads 9 for an 81-step episode that ran
+    #: at 10.
+    #:
+    #: What IS exact runs the other way. If the policy replans every k steps
+    #: then ``decisions == ceil(steps / k)``, so each row admits an interval
+    #: of k and the arm's feasible set is the intersection over its rows.
+    #: A declaration is checked for membership rather than compared against an
+    #: inverted estimate.
+    #:
+    #: ``None`` in place of a range means no single k explains the arm's rows,
+    #: which is what two conditions pooled under one name looks like -- a
+    #: different error from a range that excludes the declaration, and given a
+    #: different message. A missing arm means its rows record no `decisions`:
+    #: "nobody counted the inference calls", not "the chunk length was 1".
+    #:
+    #: A WIDE range is weakly constrained, not verified. An arm whose episodes
+    #: all have lengths that are multiples of k pins nothing, and the verdict
+    #: says how wide rather than reporting a pass.
+    realized_chunk: dict[str, ChunkRange] = field(default_factory=dict)
     #: Which termination maps each arm's rows were interpreted under. A set
     #: per arm, because an arm whose own rows disagree is its own fault to
     #: report. Empty for pre-v2 rows, which did not record it -- and empty is
@@ -347,6 +377,7 @@ def build_units(
     infra = 0
     apparatus_counts: dict[str, tuple[int, int]] = {}
     termination_digests: dict[str, set[str]] = {}
+    realized_chunk: dict[str, Any] = {}
 
     for row in rows:
         key = UnitKey(
@@ -374,6 +405,13 @@ def build_units(
         arm = row["checkpoint_id"]
         seen, total = apparatus_counts.get(arm, (0, 0))
         apparatus_counts[arm] = (seen + bool(row["is_infra_failure"]), total + 1)
+        decisions = row.get("decisions")
+        if decisions:
+            feasible = _chunks_consistent_with(row["steps"], decisions)
+            if arm in realized_chunk:
+                realized_chunk[arm] = _intersect(realized_chunk[arm], feasible)
+            else:
+                realized_chunk[arm] = feasible
         digest = row.get("termination_map_digest")
         if digest:
             termination_digests.setdefault(arm, set()).add(digest)
@@ -397,6 +435,7 @@ def build_units(
         episodes_excluded_infra=infra,
         apparatus_by_arm=apparatus_counts,
         termination_digests=termination_digests,
+        realized_chunk=realized_chunk,
         sessions=sessions,
         harness_versions=harness_versions,
         harness_surfaces=harness_surfaces,

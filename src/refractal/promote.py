@@ -90,17 +90,84 @@ def duplicated_in(promoted: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     return {k: v for k, v in counts.items() if v > 1}
 
 
+def arms_differ(
+    target: Mapping[str, Mapping[str, Any]] | None,
+    source: Mapping[str, Mapping[str, Any]] | None,
+) -> list[str]:
+    """Arms declared differently on the two sides of a promoted boundary.
+
+    **Promotion is a comparison across plans, so it inherits the
+    comparison's refusals.** Everything that must match within one comparison
+    must match across a promoted boundary, and the only exceptions are the
+    seed and `plan_id` itself, because varying those is what promotion is for.
+
+    Nesting and duplication ask whether each promoted id belongs and appears
+    once. Neither asks whether the arms are the SAME ARMS, and `episode_id`
+    cannot answer it: it covers scene, task, scenario, seed and checkpoint id,
+    and nothing in `server_args`. So two plans differing only in
+    `server_args.chunk_size`, both labelling an arm `pi0`, mint identical
+    episode ids and both existing guards pass.
+
+    Chunk size is only the field that happened to be invisible. The exposure
+    is every behaviour-determining key in the arm descriptor, `server_args`
+    generally, and whatever lands there next -- which is why this compares the
+    whole descriptor rather than enumerating fields.
+
+    Declared to declared, because both catalogs carry the declaration. That
+    refuses at the point the wrong thing is being done rather than several
+    steps downstream where the error names a symptom -- and it works when no
+    `action_hash_log` exists, which is the case the realized-chunk check can
+    only mark unchecked. The two catch different failures: this one catches
+    the configuration, that one catches a server that did not do what its
+    catalog said.
+    """
+    if not target or not source:
+        return []
+    out: list[str] = []
+    for arm in sorted(set(target) & set(source)):
+        if target[arm] != source[arm]:
+            moved = sorted(
+                key for key in set(target[arm]) | set(source[arm])
+                if target[arm].get(key) != source[arm].get(key)
+            )
+            out.append(
+                f"arm {arm!r} is declared differently in the two runs: "
+                f"{moved} differ. Promotion pools episodes across plans, so an "
+                "arm has to be the same arm on both sides -- `episode_id` "
+                "covers the checkpoint's ID and nothing in its declaration, so "
+                "these rows would merge under one name while describing two "
+                "configurations."
+            )
+    return out
+
+
 def promote(
     plan: Plan,
     target_rows: Sequence[Mapping[str, Any]],
     promoted_rows: Sequence[Mapping[str, Any]],
     from_plan_id: str,
+    target_arms: Mapping[str, Mapping[str, Any]] | None = None,
+    source_arms: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[list[Mapping[str, Any]], Promotion]:
     """Pool ``promoted_rows`` into ``target_rows``, or refuse with the reason."""
     if not promoted_rows:
         raise PromotionError(
             f"no episodes found for {from_plan_id}. Promotion needs a run that "
             "actually happened; check the plan id and the results URI."
+        )
+
+    # Before nesting and duplication, because this is the only one of the
+    # three that asks whether the two runs are comparable at all. The others
+    # ask whether these particular rows belong, which is a question about a
+    # comparison that should not be happening.
+    conflicting = arms_differ(target_arms, source_arms)
+    if conflicting:
+        raise PromotionError(
+            "\n\n".join(conflicting)
+            + "\n\nPromotion inherits the comparison's refusals: everything "
+            "that must match within one comparison must match across a "
+            "promoted boundary, and the only exceptions are the seed and the "
+            "plan_id, because varying those is what promotion is for."
         )
 
     doubled = duplicated_in(promoted_rows)
@@ -148,4 +215,5 @@ def promote(
     )
 
 
-__all__ = ["Promotion", "PromotionError", "check_nesting", "promote"]
+__all__ = [
+    "arms_differ","Promotion", "PromotionError", "check_nesting", "promote"]
