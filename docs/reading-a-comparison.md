@@ -161,6 +161,10 @@ unverifiability into apparent verification. Everything in this category is
 stated, including when there is nothing to report -- which is why `declined`
 prints `none` and the installs line prints `not checked`.
 
+The same sentence applies to the tests behind these refusals, and it has gone
+wrong six times here: see [checks-that-cannot-fail.md](checks-that-cannot-fail.md).
+A check whose pass and whose "nothing to check" look identical is not a check.
+
 ### Refused (exit 2)
 
 - **Fewer than two checkpoints** in the results.

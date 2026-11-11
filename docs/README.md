@@ -45,6 +45,7 @@ minute, ending on a real verdict. No GPU, no simulator, no checkpoints.
 | | read it when |
 |---|---|
 | [releasing.md](releasing.md) | Publishing. |
+| [checks-that-cannot-fail.md](checks-that-cannot-fail.md) | Writing a test or a guard here. Six times a check ran, reported success, and never exercised the thing it names — the shape, what stopped each one, and the sibling class that matches a proxy instead. |
 
 ## Commands
 
