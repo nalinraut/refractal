@@ -839,10 +839,22 @@ class TestStartupIsPaidPerInvocation(unittest.TestCase):
             tmp = Temp.__new__(Temp)
             tmp.root = root
             # Expensive construction, cheap episodes: more workers stop helping.
+            #
+            # `partition_unit: scenario` as well, and the fixture needs it. A
+            # task-partitioned scene is capped at one worker per task by
+            # `useful_worker_ceiling` and floored at the same number by the
+            # correctness rule, so the two meet and this heuristic has nothing
+            # left to decide -- it could never fire, and the test would assert
+            # on a warning the planner has no room to emit. At `scenario` the
+            # ceiling is above the floor and the trade is live, which is the
+            # thing being tested.
             tmp.edit(
                 "scenes.yaml",
                 lambda d: [
-                    s["resource_shape"][0].update({"startup_sec": 120, "sec_per_1k_steps": 1})
+                    s["resource_shape"][0].update({
+                        "startup_sec": 120, "sec_per_1k_steps": 1,
+                        "partition_unit": "scenario",
+                    })
                     for s in d["scenes"]
                 ],
             )
@@ -1368,3 +1380,86 @@ class TestResourceShapesArePerEnvironment(unittest.TestCase):
                 if w.cpuset
             )
             self.assertLessEqual(used, cores, f"pinned {used} cores on a {cores}-core host")
+
+
+class TestATaskPartitionedSceneGetsAWorkerPerTask(unittest.TestCase):
+    """`partition_unit: task` has a floor as well as a ceiling.
+
+    `max_workers_for_scene` enforces the ceiling: such a scene never gets more
+    workers than tasks. Nothing enforced the floor, and the floor is where the
+    correctness property lives -- below one worker per task some worker holds a
+    SLICE of a task's scenario range, and a backend that counts episodes from
+    zero within a task then runs the early init states while every row claims
+    the late ones. Wrong data, not a slower run.
+
+    The shipped libero-spatial example hit this by side effect: a third model
+    server took VRAM to 28,672 of 32,108 MiB, leaving 3,436, which at 768 MiB
+    per environment is exactly four workers for ten tasks. Nothing noticed
+    until the execute backend refused, after the servers were warm.
+    """
+
+    def _shape(self, **over):
+        from refractal.schema.models import ResourceShape
+
+        base = dict(hardware_profile="gpu", partition_unit="task",
+                    envs_per_process=1, vram_per_env_mb=768, cpu_cores=1,
+                    sec_per_1k_steps=40.0, startup_sec=0)
+        base.update(over)
+        return ResourceShape(**base)
+
+    def _demand(self, tasks, episodes, **over):
+        from refractal.resolve.fit import SceneDemand
+
+        return SceneDemand(scene_id="s", shape=self._shape(**over),
+                           episodes=episodes, tasks=tasks, max_steps=220)
+
+    def _allocate(self, demand, *, vram_mb, max_workers=12):
+        from refractal.resolve.fit import DeviceBudget, allocate_workers
+        from refractal.schema.models import Device, HardwareProfile
+
+        hardware = HardwareProfile(
+            id="gpu", cpu_cores=16, memory_mb=65536, max_workers=max_workers,
+            devices=[Device(id="cuda:0", vram_mb=vram_mb)],
+        )
+        return allocate_workers(
+            [demand], hardware, [DeviceBudget("cuda:0", vram_mb)])
+
+    def test_enough_vram_gives_one_worker_per_task(self):
+        got = self._allocate(self._demand(tasks=10, episodes=900), vram_mb=32108)
+        self.assertEqual(got.workers["s"], 10)
+
+    def test_too_little_vram_refuses_rather_than_splitting_a_task(self):
+        from refractal.resolve.fit import CapacityError
+
+        with self.assertRaises(CapacityError) as caught:
+            self._allocate(self._demand(tasks=10, episodes=900), vram_mb=4204)
+        message = str(caught.exception)
+        self.assertIn("for 10 task(s)", message)
+        self.assertIn("whole zero-based scenario range", message)
+        self.assertIn("dies after the servers are warm", message)
+        self.assertIn("would record the wrong rows silently", message)
+        # And it does not suggest the fix that would hide the problem.
+        self.assertIn("`partition_unit: scenario` is NOT the fix", message)
+
+    def test_a_scenario_partitioned_scene_is_unaffected(self):
+        """The legal near-miss, and the fixture matters: everything is held
+        equal except `partition_unit`.
+
+        The first version also raised `envs_per_process` to 4096, which makes
+        the per-worker VRAM demand enormous and got zero workers for an
+        unrelated reason -- it would have "passed" the interesting assertion
+        by failing to allocate at all. At `scenario` a worker may hold any
+        slice, so fewer workers than tasks is a scheduling outcome rather than
+        a defect.
+        """
+        got = self._allocate(
+            self._demand(tasks=10, episodes=900, partition_unit="scenario"),
+            vram_mb=4204)
+        self.assertGreater(got.workers["s"], 0)
+        self.assertLess(got.workers["s"], 10)
+
+    def test_one_task_is_not_a_split(self):
+        """A single-task scene can never be under-partitioned, and the guard
+        must not fire on it."""
+        got = self._allocate(self._demand(tasks=1, episodes=90), vram_mb=4204)
+        self.assertEqual(got.workers["s"], 1)

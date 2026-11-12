@@ -213,8 +213,10 @@ def allocate_workers(
     There used to be a ``workers_per_scene`` cap here, added when a LIBERO plan's
     twelve workers each held a slice of one task's scenario range and 12 of 16
     episode groups were refused. It was a workaround for a missing field:
-    ``partition_unit`` now says where cuts may fall, the planner respects it, and
-    the cap protected nothing it still needs to. Removed rather than kept as a
+    ``partition_unit`` now says where cuts may fall, the planner respects its
+    ceiling, and the cap protected nothing it still needs to. The FLOOR is
+    enforced separately, by `_refuse_a_split_task` -- that distinction was
+    missing here and is where a silent violation lived. Removed rather than kept as a
     knob, because a flag whose help text claims a correctness property it no
     longer has is worse than no flag -- someone would reach for it believing it
     guarded something.
@@ -282,7 +284,20 @@ def allocate_workers(
             current = allocation.workers[demand.scene_id]
             gain = demand.makespan(current) - demand.makespan(current + 1)
             added_startup = demand.shape.startup_sec * demand.invocations_per_worker
-            if current > 0 and gain < added_startup:
+            # The startup trade is an OPTIMISATION and the partition floor is a
+            # correctness property, so the floor is not for sale. Below one
+            # worker per task a task-partitioned scene hands some worker a
+            # slice of a task's range, and the rows then claim init states the
+            # episodes did not run. Stopping there to save scene construction
+            # buys seconds with wrong data.
+            #
+            # Found by this guard colliding with the startup test: an expensive
+            # scene stopped at one worker for two tasks, and the right answer
+            # was to stop trading rather than to refuse the plan.
+            below_floor = (
+                demand.shape.partition_unit == "task" and current < demand.tasks
+            )
+            if current > 0 and gain < added_startup and not below_floor:
                 allocation.warnings.append(
                     f"scene {demand.scene_id!r}: stopped at {current} worker(s) -- one more "
                     f"would save {gain:.0f}s of wall clock and cost {added_startup:.0f}s of "
@@ -306,7 +321,77 @@ def allocate_workers(
     if starved:
         _pack_or_fail(starved, allocation, pack_below_startup_sec)
 
+    _refuse_a_split_task(demands, allocation)
     return allocation
+
+
+def _refuse_a_split_task(
+    demands: list["SceneDemand"], allocation: "Allocation"
+) -> None:
+    """Refuse a scene that declared ``partition_unit: task`` and got fewer
+    workers than it has tasks.
+
+    ``max_workers_for_scene`` enforces the CEILING -- a task-partitioned scene
+    never gets more workers than tasks. Nothing enforced the floor, and the
+    floor is where the correctness property lives: below one worker per task,
+    some worker holds a slice of a task's scenario range rather than the whole
+    of it.
+
+    That is not a performance question, and the consequence depends on what
+    reads the plan. A backend that rebuilds per task and counts episodes from
+    zero within one would run the EARLY init states while every row claims the
+    late ones. The vla-eval bridge does not let that happen: it refuses any
+    group whose `init_state_index` values are not exactly `range(len(group))`,
+    before the group runs -- measured once at 540 of 600 groups refused. So on
+    that backend the cost is a run that dies after the model servers are warm,
+    with 90% of the work never attempted.
+
+    The floor is enforced here anyway, for two reasons. The plan is wrong
+    independent of which backend reads it, and a backend WITHOUT an index
+    contract would record the wrong rows silently -- so the guarantee should
+    not depend on the reader noticing. And refusing at plan time costs nothing,
+    while refusing per group costs a GPU warm-up and most of a run.
+
+    It went unnoticed because the shortfall is a side effect of something
+    else entirely. Three model servers on one GPU reserved 28,672 of 32,108
+    MiB, leaving 3,436, which at 768 MiB per environment is exactly four
+    workers -- for ten tasks. Adding a third arm to a catalog silently broke a
+    declaration about where cuts may fall, and the only thing that noticed was
+    the execute backend, after the servers were warm. The planner's own
+    docstring claimed it "respects" ``partition_unit``, which was true of the
+    ceiling and not of the floor.
+
+    Refused at plan time, which is the whole argument for having a planner.
+    """
+    split = [
+        d
+        for d in demands
+        if d.shape.partition_unit == "task"
+        and 0 < allocation.workers[d.scene_id] < d.tasks
+    ]
+    if not split:
+        return
+    detail = "; ".join(
+        f"{d.scene_id!r} got {allocation.workers[d.scene_id]} worker(s) for "
+        f"{d.tasks} task(s)"
+        for d in sorted(split, key=lambda d: d.scene_id)
+    )
+    raise CapacityError(
+        f"{detail}. These scenes declare `partition_unit: task`, which means a "
+        "worker must own a task's whole zero-based scenario range -- below one "
+        "worker per task some worker holds a slice, and a backend that counts "
+        "episodes from zero within a task indexes from zero into a range that "
+        "does not start there. The vla-eval bridge refuses such a group before "
+        "it runs, so the cost there is a run that dies after the servers are "
+        "warm; a backend without that check would record the wrong rows "
+        "silently. Refused here because the plan is wrong either way.\n\n"
+        "Usually the cause is elsewhere in the plan: model servers reserving "
+        "VRAM leave fewer workers than the scene has tasks. Free capacity "
+        "(fewer arms per plan, smaller `vram_mb`, a bigger device), raise "
+        "`max_workers`, or split the run so each plan has at most as many tasks "
+        "as it can give workers. `partition_unit: scenario` is NOT the fix "
+        "unless the backend genuinely tolerates a partial range."
+    )
 
 
 def _pack_or_fail(
