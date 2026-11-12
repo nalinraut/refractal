@@ -143,3 +143,43 @@ there.
 Both columns were declared long before anything filled them. The first adapter
 to populate either was a driving one, which is the shape of evidence that they
 are general rather than manipulation-specific.
+
+## Conformance: what is required, not merely documented
+
+Everything above is a contract you implement. `refractal.conformance` is the
+part a backend is **required** to prove, by being exercised rather than by
+declaring compliance — a declaration is a label, refusing a bad input is a
+behaviour, and only the second is worth requiring.
+
+```python
+from refractal.conformance import REQUIREMENTS
+
+for name, requirement in REQUIREMENTS:
+    requirement(my_backend_group_admission)
+```
+
+### The index contract
+
+A backend that maps Refractal's planned episodes onto its own counter must
+refuse any group whose `init_state_index` values are not exactly
+`range(len(group))`.
+
+The vla-eval harness indexes init states by `episode_idx = ep` over
+`range(episodes_per_task)`. That coincides with what the plan names only when a
+worker holds a task's whole zero-based range. Hand it a slice — 5..9 — and it
+runs 0..4 while every recorded row claims 5..9: rows describing episodes that
+did not happen, with nothing anywhere disagreeing.
+
+The planner refuses the plan that causes this, by requiring one worker per task
+on a `partition_unit: task` scene. **This requirement is the second layer**, and
+it is the one that holds if the planner regresses or a plan arrives from
+somewhere else. It existed in the vla-eval bridge because that bridge happens to
+have it; nothing required it until this suite.
+
+It matters most for a backend nobody here wrote. `authorship: customer` on a
+verdict says the measurements came from someone else's code. It does not say
+that code checks its own inputs, and conformance is the only place that can.
+
+Both directions are checked. A backend that refuses every group does not
+conform — it is unusable — so the contiguous-from-zero case must pass.
+
