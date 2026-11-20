@@ -489,17 +489,29 @@ def check_index_contract(episodes: list[PlannedEpisode], scenarios: Mapping[str,
             "the ones without an index would run whichever state the counter reached."
         )
 
-    wanted = sorted(
+    # In PLAN ORDER, not sorted. Position i is what the harness runs as init
+    # state i and what the rows and seeds are mapped back to, so the set being
+    # right is not enough: a group ordered [2, 0, 1] has the right set and
+    # labels every row with another state. This sorted once, and passed it.
+    wanted = [
         scenarios[e.scenario_hash]["init_state_index"]
         for e in episodes
         if e.scenario_hash in scenarios
-    )
+    ]
     if len(wanted) != len(episodes):
         raise BridgeError(
             "some episodes reference scenarios that are not in the plan's scenario list, "
             "so their init-state index cannot be checked against the harness's counter."
         )
     expected = list(range(len(wanted)))
+    if wanted != expected and sorted(wanted) == expected:
+        raise BridgeError(
+            f"this worker's init states are in the order {wanted[:6]}"
+            f"{'...' if len(wanted) > 6 else ''}, but the harness runs them as {expected[:6]}"
+            f"{'...' if len(expected) > 6 else ''} and results are mapped back by position, "
+            "so every row would be labelled with another init state. Order the group by "
+            "init_state_index."
+        )
     if wanted != expected:
         raise BridgeError(
             f"this worker's init_state_index values are {wanted[:6]}"

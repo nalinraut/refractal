@@ -400,6 +400,15 @@ class TestTheIndexContract(unittest.TestCase):
         self.assertIn("never executed", message)
         self.assertIn("range: [0, N-1]", message)
 
+    def test_the_right_set_in_the_wrong_order_is_refused(self):
+        """[2, 0, 1] has the right set. The harness runs states 0, 1, 2 and the rows
+        are mapped back by position, so each would be labelled with another state."""
+        with self.assertRaises(BridgeError) as ctx:
+            check_index_contract(
+                self._episodes(["s2", "s0", "s1"]), self._scenarios([0, 1, 2])
+            )
+        self.assertIn("mapped back by position", str(ctx.exception))
+
     def test_a_gap_is_refused(self):
         with self.assertRaises(BridgeError):
             check_index_contract(
