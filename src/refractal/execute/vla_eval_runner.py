@@ -66,6 +66,7 @@ from .vla_eval import (
     build_eval_config,
     FrameBuffer,
     check_index_contract,
+    check_reset_ordinals,
     group_by_seed,
     make_parquet_orchestrator,
     make_parquet_recorder,
@@ -329,6 +330,7 @@ def _row(
         "termination_reason": row.terminal_phase,
         "failure_reason": row.failure_reason,
         "is_infra_failure": row.is_infra_failure,
+        "reset_ordinal": row.reset_ordinal,
         "steps": row.steps,
         "elapsed_sec": row.elapsed_sec,
         "started_at": started_at,
@@ -718,6 +720,7 @@ def _run_group(
     ended_at = dt.datetime.now(dt.timezone.utc)
 
     outcomes = rows_from_benchmark_result(result, group)
+    check_reset_ordinals(group, outcomes, scenarios)
     if not recorder_cls.constructed:
         raise BridgeError(
             f"the harness ran {len(group)} episode(s) and never constructed the injected "

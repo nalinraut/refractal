@@ -1370,3 +1370,64 @@ class TestRenderInputsAreRecorded(LoopCase):
         self.run_loop(plan, FakeHarness())
         self.run_loop(plan, FakeHarness())
         self.assertEqual(len(self._writer(plan).read_render_manifests()), 1)
+
+
+class OrdinalHarness(FakeHarness):
+    """Reports each episode's reset ordinal the way vla-eval's LIBERO benchmark
+    does: in the episode's metrics. ``offset`` 0 is a fresh env per invocation
+    with states run 0..N-1; 1 is an env that had already been reset once."""
+
+    def __init__(self, *, offset=0, **kwargs):
+        super().__init__(**kwargs)
+        self.offset = offset
+
+    def __call__(self, config, recorder_cls):
+        result = super().__call__(config, recorder_cls)
+        for episode in result["tasks"][0]["episodes"]:
+            episode["metrics"]["reset_ordinal"] = episode["episode_id"] + 1 + self.offset
+        return result
+
+
+class TestTheResetOrdinal(LoopCase):
+    """LIBERO's scene is (init state, reset ordinal), so the ordinal is recorded
+    on every row and an episode at the wrong one is refused."""
+
+    def test_the_measured_ordinal_lands_on_every_row(self):
+        plan = make_plan(scenarios=4, seeds=(0, 1), checkpoints=("pi0",))
+        self.run_loop(plan, OrdinalHarness(), only=("pi0",))
+        index = {s.scenario_hash: s.params["init_state_index"] for s in plan.scenes[0].scenarios}
+        rows = self.rows(plan)
+        self.assertEqual(len(rows), 8)
+        self.assertTrue(all(r["reset_ordinal"] == index[r["scenario_hash"]] + 1 for r in rows))
+
+    def test_a_group_not_started_in_a_fresh_env_is_refused_and_writes_nothing(self):
+        plan = make_plan(scenarios=3, checkpoints=("pi0",))
+        with self.assertRaises(BridgeError) as ctx:
+            self.run_loop(plan, OrdinalHarness(offset=1), only=("pi0",))
+        self.assertIn("wrong reset", str(ctx.exception))
+        self.assertEqual(self.rows(plan), [])
+
+    def test_an_unreported_ordinal_is_null_not_refused(self):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness(), only=("pi0",))
+        self.assertEqual({r["reset_ordinal"] for r in self.rows(plan)}, {None})
+
+    def test_a_version_2_part_file_still_reads_alongside_version_3(self):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        from refractal.execute.results import EPISODES_SCHEMA, comparison_prefix
+
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, OrdinalHarness(), only=("pi0",))
+        new = read_episodes(self.results, plan.plan_id)
+        old = new.drop_columns(["reset_ordinal"])
+        old = old.set_column(old.schema.get_field_index("schema_version"), "schema_version",
+                             pa.array([2] * old.num_rows, type=pa.int32()))
+        old_dir = Path(comparison_prefix(self.results, plan.plan_id)) / "checkpoint=pi0" / "scene=old" / "episodes"
+        old_dir.mkdir(parents=True)
+        pq.write_table(old, old_dir / "part-old.parquet")
+        both = read_episodes(self.results, plan.plan_id)
+        self.assertEqual(both.schema, EPISODES_SCHEMA)
+        self.assertEqual(sorted(both.column("reset_ordinal").to_pylist(), key=lambda v: (v is None, v)),
+                         [1, 2, None, None])

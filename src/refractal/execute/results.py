@@ -92,7 +92,9 @@ READ_THREADS = False
 #:
 #: 2 adds outcome, step_to_success, step_budget and schema_version, and
 #: renames terminal_phase to termination_reason.
-EPISODES_SCHEMA_VERSION = 2
+#:
+#: 3 adds reset_ordinal. Version-2 rows load with it null.
+EPISODES_SCHEMA_VERSION = 3
 
 EPISODES_SCHEMA = pa.schema(
     [
@@ -476,6 +478,12 @@ EPISODES_SCHEMA = pa.schema(
         # rename after 0.1.0 should be a schema version rather than an alias,
         # and this is that version.
         pa.field("schema_version", pa.int32()),
+        # Which reset of its environment this episode was: 1 for the first
+        # reset of a freshly built env. LIBERO re-places its fixtures from the
+        # env's RNG on every reset, so the scene an init state shows depends on
+        # this, not on the init state alone. Measured by the harness; null when
+        # the harness does not report it, never inferred.
+        pa.field("reset_ordinal", pa.int32()),
         # What was measured, as opposed to what was run.
         #
         # NOT hashed, and the distinction is the whole point: measuring more
@@ -1139,8 +1147,9 @@ def _upgraded(table: "pa.Table") -> "pa.Table":
     """
     table = _renamed(table)
     names = set(table.column_names)
-    if "schema_version" in names:
-        return table
+    # Columns a later version added (reset_ordinal, from version 3) are
+    # null-filled on any older file, including one that carries a
+    # schema_version, or its rows would not concatenate with newer ones.
     for field in EPISODES_SCHEMA:
         if field.name in names:
             continue

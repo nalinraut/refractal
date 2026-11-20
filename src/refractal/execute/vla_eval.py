@@ -99,6 +99,9 @@ class EpisodeRow:
     is_infra_failure: bool
     phase_outcomes: list[tuple[str, bool]] = field(default_factory=list)
     terminal_phase: str | None = None
+    #: Which reset of its env the harness says this episode was; None if it
+    #: does not say. See `check_reset_ordinals`.
+    reset_ordinal: int | None = None
 
 
 def require_harness() -> Any:
@@ -272,6 +275,7 @@ def to_episode_row(episode: PlannedEpisode, result: Mapping[str, Any]) -> Episod
         failure_reason = "policy_failure"
 
     phases = metrics.get("phase_outcomes") or {}
+    ordinal = metrics.get("reset_ordinal")
     return EpisodeRow(
         episode=episode,
         success=success,
@@ -281,7 +285,42 @@ def to_episode_row(episode: PlannedEpisode, result: Mapping[str, Any]) -> Episod
         is_infra_failure=infra_reason is not None,
         phase_outcomes=[(str(k), bool(v)) for k, v in phases.items()],
         terminal_phase=metrics.get("terminal_phase"),
+        reset_ordinal=None if ordinal is None else int(ordinal),
     )
+
+
+def check_reset_ordinals(
+    episodes: list[PlannedEpisode], rows: list[EpisodeRow], scenarios: Mapping[str, Any]
+) -> None:
+    """Refuse a group whose init state *i* was not the (i+1)-th reset of a fresh env.
+
+    LIBERO re-places its fixtures (cabinet, stove) from the env's RNG on every
+    reset; ``env.seed`` seeds that RNG once, when the env is built, and
+    ``set_init_state`` does not pin the fixtures. So an init state is a scene
+    only together with its reset ordinal. Every replicate of a state shares a
+    scene exactly when every group starts at init state 0 in a freshly built
+    env and runs the states in order -- which is what ordinal == index + 1
+    measures, and what this checks.
+
+    Only measured ordinals are checked. A harness that does not report one
+    leaves the row's column null; that is recorded, not refused.
+    """
+    wrong = []
+    for episode, row in zip(episodes, rows):
+        index = (scenarios.get(episode.scenario_hash) or {}).get("init_state_index")
+        if index is None or row.reset_ordinal is None:
+            continue
+        if row.reset_ordinal != int(index) + 1:
+            wrong.append((episode.episode_id, int(index), row.reset_ordinal))
+    if wrong:
+        eid, index, ordinal = wrong[0]
+        raise BridgeError(
+            f"{len(wrong)} episode(s) ran at the wrong reset of their environment, e.g. "
+            f"{eid}: init state {index} was reset {ordinal} of its env, not {index + 1}. "
+            "The fixtures are re-placed on every reset, so this episode saw a different "
+            "scene from every other replicate of its state. A group must start at init "
+            "state 0 in a freshly built env and run its states in order."
+        )
 
 
 def check_server_assignment(servers: Mapping[str, str]) -> None:
@@ -1099,6 +1138,7 @@ __all__ = [
     "to_episode_row",
     "build_eval_config",
     "check_index_contract",
+    "check_reset_ordinals",
     "check_server_assignment",
     "preflight_servers",
     "group_by_seed",
