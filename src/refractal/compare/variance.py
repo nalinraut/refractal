@@ -61,6 +61,14 @@ class VarianceReport:
     icc: dict[str, float] = field(default_factory=dict)
     #: Per checkpoint: between-scenario variance of the cell proportion.
     between_var: dict[str, float] = field(default_factory=dict)
+    #: Per checkpoint: within-cell (seed-to-seed) Bernoulli variance, mean over
+    #: cells of p(1-p) * s/(s-1) -- unbiased, like the between term.
+    within_var: dict[str, float] = field(default_factory=dict)
+
+    def within_share(self, checkpoint: str) -> float:
+        """Fraction of outcome variance that is within a cell: 1 - ICC."""
+        total = self.between_var[checkpoint] + self.within_var[checkpoint]
+        return self.within_var[checkpoint] / total if total > 0 else 0.0
 
     @property
     def design_effect(self) -> float:
@@ -200,13 +208,20 @@ def measure_variance(units: Sequence[Unit], a: str, b: str) -> VarianceReport:
 
     for checkpoint in (a, b):
         proportions = _cell_proportions(usable, checkpoint)
+        seeds = [len(u.seeds_kept) for u in usable]
         observed = statistics.variance(proportions)
-        within = statistics.fmean(p * (1 - p) for p in proportions)
+        # The s/(s-1) correction in BOTH terms, per cell. E[p_hat(1-p_hat)] is
+        # (s-1)/s * p(1-p), so the plug-in understates the within-cell variance;
+        # the between term already subtracted the corrected sampling variance
+        # p(1-p)/(s-1). Mixing the two, as this did, overstated the ICC.
+        within = statistics.fmean(p * (1 - p) * s / (s - 1) for p, s in zip(proportions, seeds))
+        sampling = statistics.fmean(p * (1 - p) / (s - 1) for p, s in zip(proportions, seeds))
         # Subtract the sampling component to leave the between-scenario part.
         # Clamped at zero: a negative variance estimate is an artefact of a small
         # sample, not a finding, and reporting it as negative invites nonsense.
-        between = max(0.0, observed - within / max(1.0, mean_seeds - 1))
+        between = max(0.0, observed - sampling)
         report.between_var[checkpoint] = between
+        report.within_var[checkpoint] = within
         report.icc[checkpoint] = between / (between + within) if (between + within) > 0 else 0.0
 
     return report
