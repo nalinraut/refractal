@@ -65,7 +65,11 @@ from .models import (
 #: so an extractor it cannot see cannot run and a rule it cannot see cannot
 #: decide. Every field is additive with a default, so a plan written at 3 still
 #: reads -- the bump says the SHAPE moved, which is what the number is for.
-PLAN_SCHEMA = 4
+#:
+#: 5 adds ``engine_version`` to every scene: the version `build` recorded in
+#: the lock, so `run` can refuse a harness running another one. Additive with
+#: a default; a plan written at 4 still reads, and is not checked.
+PLAN_SCHEMA = 5
 
 
 class PlanSchemaError(RefractalError):
@@ -177,6 +181,10 @@ class PlannedScene(Strict):
     scene_id: str
     scene_hash: str
     engine: str
+    #: The engine version `build` recorded for this scene (the lock's, else the
+    #: catalog's). NOT identity -- scene_hash already covers it. Carried so `run`
+    #: can compare it with the version the harness reports it actually ran.
+    engine_version: str | None = None
     #: Carried through from the catalog when the scene is externally defined, so a
     #: backend can name the provider that owns this scene without the catalog.
     #:
@@ -211,7 +219,7 @@ class Plan(Strict):
     #: is a deliberate edit here as well as to ``PLAN_SCHEMA``. ``read_plan``
     #: enforces the same range with a message; this is the backstop for a Plan
     #: built by any other route.
-    plan_schema: Literal[1, 2, 3, 4] = PLAN_SCHEMA
+    plan_schema: Literal[1, 2, 3, 4, 5] = PLAN_SCHEMA
     plan_id: str
     catalog_hash: str
     refractal_version: str

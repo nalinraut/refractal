@@ -50,7 +50,7 @@ class FakeHarness:
     """Satisfies the ``invoke`` contract and records what it was asked to do."""
 
     def __init__(self, *, successes=None, short_by=0, silent=False, steps_per_episode=1,
-                 frames_per_episode=0, reset_ordinals=True):
+                 frames_per_episode=0, reset_ordinals=True, mujoco_version=None):
         self.configs: list[dict] = []
         self.successes = successes
         self.short_by = short_by
@@ -67,6 +67,8 @@ class FakeHarness:
         #: per invocation, init states run in order. False models a harness that
         #: does not measure it.
         self.reset_ordinals = reset_ordinals
+        #: What vla-eval's orchestrator reports when MuJoCo is loaded.
+        self.mujoco_version = mujoco_version
 
     def __call__(self, config, recorder_cls):
         self.configs.append(dict(config))
@@ -94,7 +96,8 @@ class FakeHarness:
                 {
                     "episode_id": index,
                     "metrics": {"success": ok,
-                                **({"reset_ordinal": index + 1} if self.reset_ordinals else {})},
+                                **({"reset_ordinal": index + 1} if self.reset_ordinals else {}),
+                                **({"mujoco_version": self.mujoco_version} if self.mujoco_version else {})},
                     "steps": 120,
                     "elapsed_sec": 3.5,
                 }
@@ -221,7 +224,7 @@ class ObservationPerturbingHarness(FakeHarness):
 
 
 def make_plan(*, scenarios=3, seeds=(0,), checkpoints=("pi0", "pi05"), scenes=("libero-0",),
-              provider=PROVIDER):
+              provider=PROVIDER, engine_version=None):
     """A plan of the shape the LIBERO catalog compiles to: external scenes, one
     task per worker, ``init_state_index`` starting at zero."""
     planned_scenes = []
@@ -256,6 +259,7 @@ def make_plan(*, scenarios=3, seeds=(0,), checkpoints=("pi0", "pi05"), scenes=("
                 scene_id=scene_id,
                 scene_hash=f"sha256:{scene_id}",
                 engine="mujoco",
+                engine_version=engine_version,
                 external=ExternalScene(
                     provider=provider,
                     ref={"suite": "libero_spatial", "task_id": 0},

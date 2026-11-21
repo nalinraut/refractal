@@ -102,6 +102,8 @@ class EpisodeRow:
     #: Which reset of its env the harness says this episode was; None if it
     #: does not say. See `check_reset_ordinals`.
     reset_ordinal: int | None = None
+    #: The MuJoCo version the harness says it ran; None if it does not say.
+    engine_version: str | None = None
 
 
 def require_harness() -> Any:
@@ -286,7 +288,28 @@ def to_episode_row(episode: PlannedEpisode, result: Mapping[str, Any]) -> Episod
         phase_outcomes=[(str(k), bool(v)) for k, v in phases.items()],
         terminal_phase=metrics.get("terminal_phase"),
         reset_ordinal=None if ordinal is None else int(ordinal),
+        engine_version=metrics.get("mujoco_version"),
     )
+
+
+def check_engine_version(scene: Any, rows: list[EpisodeRow]) -> None:
+    """Refuse rows whose harness ran another MuJoCo than the one `build` locked.
+
+    `build` measures the engine where it runs; the harness may run in another
+    interpreter. scene_hash covers the locked version, so rows from another one
+    would join results they are not comparable with. Only reported versions are
+    checked; a plan written before plan_schema 5 carries none and is not.
+    """
+    locked = getattr(scene, "engine_version", None)
+    if getattr(scene, "engine", None) != "mujoco" or not locked:
+        return
+    ran = sorted({r.engine_version for r in rows if r.engine_version and r.engine_version != locked})
+    if ran:
+        raise BridgeError(
+            f"scene {scene.scene_id!r} was built against mujoco {locked} (build.lock), but "
+            f"the harness ran mujoco {', '.join(ran)}. Rebuild where the harness runs, or "
+            "run the harness on the locked version."
+        )
 
 
 def is_libero_provider(provider: str | None) -> bool:
@@ -1278,6 +1301,7 @@ __all__ = [
     "build_eval_config",
     "check_index_contract",
     "check_reset_ordinals",
+    "check_engine_version",
     "is_libero_provider",
     "check_server_revisions",
     "server_identity",

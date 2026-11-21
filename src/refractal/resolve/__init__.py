@@ -259,6 +259,11 @@ def resolve(
                 scene_id=scene.id,
                 scene_hash=scene_hashes[scene.id],
                 engine=scene.engine,
+                engine_version=(
+                    entry.engine_version
+                    if lock is not None and (entry := lock.scene_entry(scene.id)) is not None
+                    else scene.engine_version
+                ),
                 external=scene.external,
                 resource_shape=demand.shape,
                 metrics=list(scene.metrics),

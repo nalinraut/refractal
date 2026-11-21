@@ -67,6 +67,7 @@ from .vla_eval import (
     FrameBuffer,
     check_index_contract,
     check_reset_ordinals,
+    check_engine_version,
     check_server_revisions,
     server_identity,
     SERVER_IDENTITY_COLUMNS,
@@ -338,6 +339,7 @@ def _row(
         "failure_reason": row.failure_reason,
         "is_infra_failure": row.is_infra_failure,
         "reset_ordinal": row.reset_ordinal,
+        "engine_version": row.engine_version,
         **{column: (server or {}).get(column) for column in SERVER_IDENTITY_COLUMNS},
         "steps": row.steps,
         "elapsed_sec": row.elapsed_sec,
@@ -733,6 +735,7 @@ def _run_group(
     outcomes = rows_from_benchmark_result(result, group)
     check_reset_ordinals(group, outcomes, scenarios,
                          provider=getattr(getattr(scene, "external", None), "provider", None))
+    check_engine_version(scene, outcomes)
     if not recorder_cls.constructed:
         raise BridgeError(
             f"the harness ran {len(group)} episode(s) and never constructed the injected "

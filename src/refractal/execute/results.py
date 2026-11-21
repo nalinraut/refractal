@@ -98,7 +98,9 @@ READ_THREADS = False
 #: 4 adds server_env_digest, server_source_sha and checkpoint_revision.
 #:
 #: 5 adds server_boot_id.
-EPISODES_SCHEMA_VERSION = 5
+#:
+#: 6 adds engine_version.
+EPISODES_SCHEMA_VERSION = 6
 
 EPISODES_SCHEMA = pa.schema(
     [
@@ -500,6 +502,9 @@ EPISODES_SCHEMA = pa.schema(
         # response. Replicates of one state that span processes differ by more
         # than their seed; `refractal run` warns when they do.
         pa.field("server_boot_id", pa.string()),
+        # The physics engine version the harness reports it ran (MuJoCo's
+        # __version__), checked against the lock's before the row is written.
+        pa.field("engine_version", pa.string()),
         # What was measured, as opposed to what was run.
         #
         # NOT hashed, and the distinction is the whole point: measuring more
