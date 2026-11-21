@@ -18,6 +18,9 @@ CATALOG = Path(__file__).resolve().parents[1] / "examples" / "catalog"
 HARDWARE = "rtx5090"
 SHA_A = "45dcc8fc0e02601c8ccf0554fbd1d26a55070c1f"
 SHA_B = "7152f13e34c6c115d808aea0e5d08aca74eac14b"
+GS = "gs://openpi-assets/checkpoints/pi0_libero"
+DIGEST = "sha256:1c11e772fbe4400b692036628e5d66a118bd54e250729144e8ae60f54d78a1a2"
+DIGEST_B = "sha256:" + "0" * 64
 
 
 class TestTheShapeRule(unittest.TestCase):
@@ -50,7 +53,7 @@ class TestPlanTime(unittest.TestCase):
     def test_an_unpinned_hub_id_is_refused(self):
         with self.assertRaises(CatalogError) as ctx:
             self.plan_with("lerobot/pi0_libero_finetuned_v044", "./checkpoints/candidate")
-        self.assertIn("without a commit", str(ctx.exception))
+        self.assertIn("without its pin", str(ctx.exception))
 
     def test_a_branch_name_is_not_a_pin(self):
         with self.assertRaises(CatalogError):
@@ -97,3 +100,29 @@ class TestRunTime(unittest.TestCase):
             raise AssertionError("fetched")
 
         check_server_revisions([_ck("pi0", "./checkpoints/baseline")], self.servers, fetch=fetch)
+
+
+class TestGcsCheckpointsArePinnedByContent(unittest.TestCase):
+    def test_only_a_params_digest_pins_a_gs_path(self):
+        self.assertEqual(pinned_revision(f"{GS}@{DIGEST}"), DIGEST)
+        for loose in (GS, f"{GS}@latest", f"{GS}@{SHA_A}", f"{GS}@sha256:abc"):
+            with self.subTest(path=loose):
+                self.assertIsNone(pinned_revision(loose))
+
+    def plan_with(self, path):
+        return TestPlanTime.plan_with(self, path, "./checkpoints/candidate")
+
+    def test_an_unpinned_gs_path_is_refused_at_plan_time(self):
+        with self.assertRaises(CatalogError) as ctx:
+            self.plan_with(GS)
+        self.assertIn("gs://", str(ctx.exception))
+
+    def test_the_digest_enters_plan_id(self):
+        self.assertNotEqual(self.plan_with(f"{GS}@{DIGEST}").plan_id, self.plan_with(f"{GS}@{DIGEST_B}").plan_id)
+
+    def test_a_server_whose_params_hash_differently_is_refused(self):
+        with self.assertRaises(BridgeError):
+            check_server_revisions([_ck("pi0", f"{GS}@{DIGEST}")], {"pi0": "ws://h:1"},
+                                   fetch=_reporting(GS, DIGEST_B))
+        check_server_revisions([_ck("pi0", f"{GS}@{DIGEST}")], {"pi0": "ws://h:1"},
+                               fetch=_reporting(GS, DIGEST))

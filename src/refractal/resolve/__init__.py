@@ -70,10 +70,11 @@ def resolve(
     if loose:
         named = ", ".join(f"{cid}: {path!r}" for cid, path in loose)
         raise CatalogError(
-            f"checkpoint(s) name a Hugging Face Hub id without a commit: {named}. "
-            "A hub id loads whatever its default branch is when the server starts, so "
-            "one plan_id could cover two different checkpoints. Pin each as "
-            "`org/name@<40-hex commit>`; the revision then enters plan_id.",
+            f"checkpoint(s) name a remote checkpoint without its pin: {named}. A hub id "
+            "loads whatever its default branch is when the server starts, and a gs:// "
+            "object can be replaced in place, so one plan_id could cover two different "
+            "checkpoints. Pin a hub id as `org/name@<40-hex commit>` and a gs:// path as "
+            "`gs://.../name@sha256:<params-directory digest>`; the pin enters plan_id.",
             file="run.yaml",
         )
 
