@@ -16,6 +16,7 @@ import math
 from pathlib import Path
 
 from .. import __version__
+from ..checkpoints import unpinned
 from ..schema.errors import CatalogError
 from ..schema.loader import Catalog, load_catalog
 from ..schema.plan import (
@@ -63,6 +64,17 @@ def resolve(
     """
     if not isinstance(catalog, Catalog):
         catalog = load_catalog(catalog)
+
+    loose = unpinned(catalog.run.checkpoints)
+    if loose:
+        named = ", ".join(f"{cid}: {path!r}" for cid, path in loose)
+        raise CatalogError(
+            f"checkpoint(s) name a Hugging Face Hub id without a commit: {named}. "
+            "A hub id loads whatever its default branch is when the server starts, so "
+            "one plan_id could cover two different checkpoints. Pin each as "
+            "`org/name@<40-hex commit>`; the revision then enters plan_id.",
+            file="run.yaml",
+        )
 
     warnings = list(catalog.warnings)
     lock = load_lock(catalog.root)

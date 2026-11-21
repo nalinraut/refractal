@@ -351,6 +351,57 @@ def check_server_assignment(servers: Mapping[str, str]) -> None:
         )
 
 
+def _fetch_server_config(url: str, timeout: float = 5.0) -> dict[str, Any]:
+    """``GET /config`` on the HTTP side of a model server's WebSocket address."""
+    import json
+    import urllib.request
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    scheme = "https" if parsed.scheme == "wss" else "http"
+    with urllib.request.urlopen(f"{scheme}://{parsed.netloc}/config", timeout=timeout) as resp:
+        return json.loads(resp.read())
+
+
+def check_server_revisions(
+    checkpoints: Any, servers: Mapping[str, str], *, fetch: Any = _fetch_server_config
+) -> None:
+    """Refuse to run a pinned checkpoint on a server that did not load that commit.
+
+    Refractal never sends ``server_args``: servers are launched from their own
+    configs. So the plan's ``org/name@<commit>`` is a claim about the server,
+    and this checks it against what the server reports it loaded
+    (``response_metadata.server_env`` on ``GET /config``). A server that does
+    not report is refused too: an unchecked pin is the unpinned case again.
+    Local paths carry no Hub commit and are not checked here.
+    """
+    from ..checkpoints import pinned_revision, split_revision
+
+    problems = []
+    for checkpoint in checkpoints:
+        revision = pinned_revision(checkpoint.path)
+        if revision is None or checkpoint.id not in servers:
+            continue
+        name = split_revision(checkpoint.path)[0]
+        url = servers[checkpoint.id]
+        try:
+            env = ((fetch(url) or {}).get("response_metadata") or {}).get("server_env") or {}
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"{checkpoint.id}: could not read {url} /config ({exc.__class__.__name__})")
+            continue
+        loaded = (env.get("checkpoint"), env.get("checkpoint_revision"))
+        if loaded == (None, None):
+            problems.append(f"{checkpoint.id}: the server at {url} does not report which checkpoint it loaded")
+        elif loaded != (name, revision):
+            problems.append(f"{checkpoint.id}: plan pins {name}@{revision}, server at {url} loaded "
+                            f"{loaded[0]}@{loaded[1]}")
+    if problems:
+        raise BridgeError(
+            "pinned checkpoint(s) cannot be confirmed on their servers:\n  " + "\n  ".join(problems)
+            + "\n\nLaunch each server with the plan's revision (`revision:` in its config)."
+        )
+
+
 def preflight_servers(servers: Mapping[str, str], *, timeout: float = 5.0) -> dict[str, str]:
     """Check every declared server before the first episode, not on first use.
 
@@ -1151,6 +1202,7 @@ __all__ = [
     "build_eval_config",
     "check_index_contract",
     "check_reset_ordinals",
+    "check_server_revisions",
     "check_server_assignment",
     "preflight_servers",
     "group_by_seed",

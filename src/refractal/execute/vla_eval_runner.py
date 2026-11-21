@@ -67,6 +67,7 @@ from .vla_eval import (
     FrameBuffer,
     check_index_contract,
     check_reset_ordinals,
+    check_server_revisions,
     group_by_seed,
     make_parquet_orchestrator,
     make_parquet_recorder,
@@ -871,6 +872,7 @@ def run_vla_eval(
     # must not wait behind a connect that might itself fail for another reason.
     check_server_assignment(servers)
     servers = preflight_servers(servers)
+    check_server_revisions(plan.checkpoints, servers)
 
     # Per arm: each server writes its own log, and a shared counter across
     # groups is what lets a long run read each one forward rather than from
