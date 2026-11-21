@@ -104,6 +104,9 @@ class EpisodeRow:
     reset_ordinal: int | None = None
     #: The MuJoCo version the harness says it ran; None if it does not say.
     engine_version: str | None = None
+    #: Every server process whose responses served this episode, from those
+    #: responses. None when the harness does not report them.
+    server_boot_ids: list[str] | None = None
 
 
 def require_harness() -> Any:
@@ -289,7 +292,32 @@ def to_episode_row(episode: PlannedEpisode, result: Mapping[str, Any]) -> Episod
         terminal_phase=metrics.get("terminal_phase"),
         reset_ordinal=None if ordinal is None else int(ordinal),
         engine_version=metrics.get("mujoco_version"),
+        server_boot_ids=(None if result.get("server_boot_ids") is None
+                         else [str(b) for b in result["server_boot_ids"]]),
     )
+
+
+def check_episode_boot_ids(rows: list[EpisodeRow]) -> None:
+    """Refuse an episode whose responses came from more than one server process.
+
+    A restart mid-episode means its actions came from two numerics: the seed
+    no longer describes what drove it, and no single boot id can label the row.
+    """
+    split = [(r.episode.episode_id, r.server_boot_ids) for r in rows
+             if r.server_boot_ids is not None and len(set(r.server_boot_ids)) > 1]
+    if split:
+        eid, ids = split[0]
+        raise BridgeError(
+            f"{len(split)} episode(s) were served by more than one model-server process, "
+            f"e.g. {eid}: {', '.join(i[:8] for i in sorted(set(ids)))}. The server restarted "
+            "mid-episode, so its actions did not come from one process."
+        )
+
+
+def episode_boot_id(row: EpisodeRow) -> str | None:
+    """The one process that served this episode, or None if none was reported."""
+    ids = sorted(set(row.server_boot_ids or ()))
+    return ids[0] if len(ids) == 1 else None
 
 
 def check_engine_version(scene: Any, rows: list[EpisodeRow]) -> None:
@@ -424,7 +452,7 @@ def _fetch_server_config(url: str, timeout: float = 5.0) -> dict[str, Any]:
 
 
 #: The row columns `server_identity` fills, all null when a server does not say.
-SERVER_IDENTITY_COLUMNS = ("server_env_digest", "server_source_sha", "checkpoint_revision", "server_boot_id")
+SERVER_IDENTITY_COLUMNS = ("server_env_digest", "server_source_sha", "checkpoint_revision")
 
 
 def server_identity(url: str, *, fetch: Any = None, timeout: float = 2.0) -> dict[str, Any]:
@@ -444,12 +472,11 @@ def server_identity(url: str, *, fetch: Any = None, timeout: float = 2.0) -> dic
     except Exception:  # noqa: BLE001 - an unreadable server is a null, not a crash
         config = {}
     env = (config.get("response_metadata") or {}).get("server_env") or {}
-    boot_id = config.get("boot_id")
     sha = env.get("source_sha")
     if sha and env.get("source_dirty"):
         sha = f"{sha}+dirty"
     return {"server_env_digest": env.get("env_digest"), "server_source_sha": sha,
-            "checkpoint_revision": env.get("checkpoint_revision"), "server_boot_id": boot_id}
+            "checkpoint_revision": env.get("checkpoint_revision")}
 
 
 def boot_id_warnings(rows: list[Mapping[str, Any]]) -> list[str]:
@@ -1316,6 +1343,8 @@ __all__ = [
     "build_eval_config",
     "check_index_contract",
     "check_reset_ordinals",
+    "check_episode_boot_ids",
+    "episode_boot_id",
     "check_engine_version",
     "is_libero_provider",
     "check_server_revisions",

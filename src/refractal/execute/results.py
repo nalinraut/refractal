@@ -498,9 +498,11 @@ EPISODES_SCHEMA = pa.schema(
         pa.field("server_env_digest", pa.string()),
         pa.field("server_source_sha", pa.string()),
         pa.field("checkpoint_revision", pa.string()),
-        # The server process: a uuid it makes at start and sends with every
-        # response. Replicates of one state that span processes differ by more
-        # than their seed; `refractal run` warns when they do.
+        # The server process that served this episode: the uuid it makes at
+        # start and sends with every response, read from THIS episode's
+        # responses. An episode served by two is refused. Replicates of one
+        # state that span processes differ by more than their seed; `refractal
+        # run` warns when they do.
         pa.field("server_boot_id", pa.string()),
         # The physics engine version the harness reports it ran (MuJoCo's
         # __version__), checked against the lock's before the row is written.
