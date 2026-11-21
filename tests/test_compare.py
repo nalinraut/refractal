@@ -1110,6 +1110,37 @@ class TestTheBlockMessageNamesTheChangedFiles(unittest.TestCase):
         self.assertIn("did not write one", verdict.blocking[0])
 
 
+
+#: Seed for the generated fixtures below. Outcomes came from `hash(tag) % 3`,
+#: which Python salts per process, so every run drew a different fixture and
+#: roughly one in five or more put two arms at one rate far enough apart by
+#: chance that a comparison exited 1 -- a failure that was not the guard under
+#: test.
+OUTCOME_SEED = 20261121
+
+
+def _seeded_rows(*, units: int, seeds: int, identical: bool, seed: int = OUTCOME_SEED):
+    """Rows for arms A and B, success with probability 2/3. Identical arms share
+    one draw per (scenario, seed); otherwise each arm draws its own."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    shared = rng.random((units, seeds)) < 2 / 3
+    own = {checkpoint: rng.random((units, seeds)) < 2 / 3 for checkpoint in (A, B)}
+    rows = []
+    for i in range(units):
+        for checkpoint in (A, B):
+            for s in range(seeds):
+                success = shared[i, s] if identical else own[checkpoint][i, s]
+                rows.append({
+                    "scene_id": "s", "scene_hash": "h", "task_id": "t",
+                    "task_hash": "th", "scenario_hash": f"s{i}",
+                    "checkpoint_id": checkpoint, "seed": s, "session_id": "x",
+                    "harness_version": "v", "harness_surface": "v",
+                    "is_infra_failure": False, "success": bool(success),
+                })
+    return rows
+
 class TestDegenerateArmsAreBlocked(unittest.TestCase):
     """The second, independent guard against a checkpoint compared to itself.
 
@@ -1123,19 +1154,7 @@ class TestDegenerateArmsAreBlocked(unittest.TestCase):
     """
 
     def _rows(self, identical):
-        rows = []
-        for i in range(40):
-            for checkpoint in (A, B):
-                for seed in range(3):
-                    tag = f"{i}|{seed}" if identical else f"{checkpoint}|{i}|{seed}"
-                    rows.append({
-                        "scene_id": "s", "scene_hash": "h", "task_id": "t",
-                        "task_hash": "th", "scenario_hash": f"s{i}",
-                        "checkpoint_id": checkpoint, "seed": seed, "session_id": "x",
-                        "harness_version": "v", "harness_surface": "v",
-                        "is_infra_failure": False, "success": hash(tag) % 3 > 0,
-                    })
-        return rows
+        return _seeded_rows(units=40, seeds=3, identical=identical)
 
     def test_independent_arms_are_compared_normally(self):
         verdict = evaluate(
@@ -1176,19 +1195,7 @@ class TestOneSeedPerScenario(unittest.TestCase):
     """
 
     def _rows(self, *, seeds: int, identical: bool, units: int = 20):
-        rows = []
-        for i in range(units):
-            for checkpoint in (A, B):
-                for seed in range(seeds):
-                    tag = f"{i}|{seed}" if identical else f"{checkpoint}|{i}|{seed}"
-                    rows.append({
-                        "scene_id": "s", "scene_hash": "h", "task_id": "t",
-                        "task_hash": "th", "scenario_hash": f"s{i}",
-                        "checkpoint_id": checkpoint, "seed": seed, "session_id": "x",
-                        "harness_version": "v", "harness_surface": "v",
-                        "is_infra_failure": False, "success": hash(tag) % 3 > 0,
-                    })
-        return rows
+        return _seeded_rows(units=units, seeds=seeds, identical=identical)
 
     def _verdict(self, **kw):
         return evaluate(
