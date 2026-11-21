@@ -18,6 +18,7 @@ from pathlib import Path
 from .. import __version__
 from ..checkpoints import unpinned
 from ..schema.errors import CatalogError
+from ..schema.identity import plan_id as plan_id_of
 from ..schema.loader import Catalog, load_catalog
 from ..schema.plan import (
     PLAN_SCHEMA,
@@ -274,10 +275,14 @@ def resolve(
             + ", ".join(f"{cid} -> {dev}" for cid, dev in sorted(server_placement.items()))
         )
 
+    # One object, hashed and stored. The stored identity used to be built
+    # without the build-folded task hashes plan_id was computed with, so
+    # plan_id could not be recomputed from plan.json.
+    identity = catalog.experiment_identity(recorded, task_hashes)
     return Plan(
         plan_schema=PLAN_SCHEMA,
-        plan_id=catalog.plan_id(recorded, task_hashes),
-        identity=catalog.experiment_identity(recorded),
+        plan_id=plan_id_of(identity),
+        identity=identity,
         catalog_hash=catalog.catalog_file_hash(),
         refractal_version=__version__,
         hardware_profile=hardware_profile,
