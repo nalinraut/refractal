@@ -50,7 +50,7 @@ class FakeHarness:
     """Satisfies the ``invoke`` contract and records what it was asked to do."""
 
     def __init__(self, *, successes=None, short_by=0, silent=False, steps_per_episode=1,
-                 frames_per_episode=0, reset_ordinals=True, mujoco_version=None):
+                 frames_per_episode=0, reset_ordinals=True, mujoco_version="3.2.3"):
         self.configs: list[dict] = []
         self.successes = successes
         self.short_by = short_by
@@ -67,7 +67,8 @@ class FakeHarness:
         #: per invocation, init states run in order. False models a harness that
         #: does not measure it.
         self.reset_ordinals = reset_ordinals
-        #: What vla-eval's orchestrator reports when MuJoCo is loaded.
+        #: What vla-eval's orchestrator reports when MuJoCo is loaded, which on
+        #: LIBERO is always. None models a harness that does not report it.
         self.mujoco_version = mujoco_version
 
     def __call__(self, config, recorder_cls):

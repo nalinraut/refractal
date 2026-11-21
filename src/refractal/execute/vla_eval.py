@@ -297,9 +297,24 @@ def check_engine_version(scene: Any, rows: list[EpisodeRow]) -> None:
 
     `build` measures the engine where it runs; the harness may run in another
     interpreter. scene_hash covers the locked version, so rows from another one
-    would join results they are not comparable with. Only reported versions are
-    checked; a plan written before plan_schema 5 carries none and is not.
+    would join results they are not comparable with. A plan written before
+    plan_schema 5 carries no locked version and is not compared.
+
+    On a LIBERO provider the version is required: LIBERO always loads MuJoCo,
+    and vla-eval's harness reports the loaded version on every episode, so a
+    row without one came from a harness that does not, and cannot be checked.
+    APPARATUS rows are exempt, as for the reset ordinal.
     """
+    provider = getattr(getattr(scene, "external", None), "provider", None)
+    if is_libero_provider(provider):
+        missing = [r.episode.episode_id for r in rows
+                   if not r.engine_version and not r.is_infra_failure]
+        if missing:
+            raise BridgeError(
+                f"{len(missing)} episode(s) on LIBERO ({provider}) report no mujoco version, "
+                f"e.g. {missing[0]}. The engine the rows ran on cannot be checked against "
+                "the lock. Use a vla-eval whose harness reports mujoco_version per episode."
+            )
     locked = getattr(scene, "engine_version", None)
     if getattr(scene, "engine", None) != "mujoco" or not locked:
         return
