@@ -50,7 +50,7 @@ class FakeHarness:
     """Satisfies the ``invoke`` contract and records what it was asked to do."""
 
     def __init__(self, *, successes=None, short_by=0, silent=False, steps_per_episode=1,
-                 frames_per_episode=0):
+                 frames_per_episode=0, reset_ordinals=True):
         self.configs: list[dict] = []
         self.successes = successes
         self.short_by = short_by
@@ -63,6 +63,10 @@ class FakeHarness:
         #: with the episode's index so a test can tell which episode a written
         #: strip actually came from.
         self.frames_per_episode = frames_per_episode
+        #: What vla-eval's LIBERO benchmark reports on every episode: a fresh env
+        #: per invocation, init states run in order. False models a harness that
+        #: does not measure it.
+        self.reset_ordinals = reset_ordinals
 
     def __call__(self, config, recorder_cls):
         self.configs.append(dict(config))
@@ -89,7 +93,8 @@ class FakeHarness:
             episodes.append(
                 {
                     "episode_id": index,
-                    "metrics": {"success": ok},
+                    "metrics": {"success": ok,
+                                **({"reset_ordinal": index + 1} if self.reset_ordinals else {})},
                     "steps": 120,
                     "elapsed_sec": 3.5,
                 }
@@ -215,7 +220,8 @@ class ObservationPerturbingHarness(FakeHarness):
         return super().__call__(config, recorder_cls)
 
 
-def make_plan(*, scenarios=3, seeds=(0,), checkpoints=("pi0", "pi05"), scenes=("libero-0",)):
+def make_plan(*, scenarios=3, seeds=(0,), checkpoints=("pi0", "pi05"), scenes=("libero-0",),
+              provider=PROVIDER):
     """A plan of the shape the LIBERO catalog compiles to: external scenes, one
     task per worker, ``init_state_index`` starting at zero."""
     planned_scenes = []
@@ -251,7 +257,7 @@ def make_plan(*, scenarios=3, seeds=(0,), checkpoints=("pi0", "pi05"), scenes=("
                 scene_hash=f"sha256:{scene_id}",
                 engine="mujoco",
                 external=ExternalScene(
-                    provider=PROVIDER,
+                    provider=provider,
                     ref={"suite": "libero_spatial", "task_id": 0},
                     params={"suite": "libero_spatial", "send_state": True,
                             "send_wrist_image": True},
@@ -1407,10 +1413,26 @@ class TestTheResetOrdinal(LoopCase):
         self.assertIn("wrong reset", str(ctx.exception))
         self.assertEqual(self.rows(plan), [])
 
-    def test_an_unreported_ordinal_is_null_not_refused(self):
+    def test_an_unreported_ordinal_on_libero_is_refused_and_writes_nothing(self):
         plan = make_plan(scenarios=2, checkpoints=("pi0",))
-        self.run_loop(plan, FakeHarness(), only=("pi0",))
+        with self.assertRaises(BridgeError) as ctx:
+            self.run_loop(plan, FakeHarness(reset_ordinals=False), only=("pi0",))
+        self.assertIn("report no reset_ordinal", str(ctx.exception))
+        self.assertEqual(self.rows(plan), [])
+
+    def test_an_unreported_ordinal_elsewhere_is_null_not_refused(self):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",), provider="other_harness.bench:Bench")
+        self.run_loop(plan, FakeHarness(reset_ordinals=False), only=("pi0",))
         self.assertEqual({r["reset_ordinal"] for r in self.rows(plan)}, {None})
+
+    def test_an_apparatus_row_without_an_ordinal_is_not_refused(self):
+        from refractal.execute.vla_eval import EpisodeRow, check_reset_ordinals
+
+        plan = make_plan(scenarios=1, checkpoints=("pi0",))
+        episode = plan.scenes[0].workers[0].episodes[0]
+        row = EpisodeRow(episode=episode, success=False, steps=0, elapsed_sec=0.0,
+                         failure_reason="server_unreachable", is_infra_failure=True)
+        check_reset_ordinals([episode], [row], {}, provider=PROVIDER)
 
     def test_a_version_2_part_file_still_reads_alongside_version_3(self):
         import pyarrow as pa

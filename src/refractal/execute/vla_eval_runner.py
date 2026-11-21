@@ -728,7 +728,8 @@ def _run_group(
     ended_at = dt.datetime.now(dt.timezone.utc)
 
     outcomes = rows_from_benchmark_result(result, group)
-    check_reset_ordinals(group, outcomes, scenarios)
+    check_reset_ordinals(group, outcomes, scenarios,
+                         provider=getattr(getattr(scene, "external", None), "provider", None))
     if not recorder_cls.constructed:
         raise BridgeError(
             f"the harness ran {len(group)} episode(s) and never constructed the injected "

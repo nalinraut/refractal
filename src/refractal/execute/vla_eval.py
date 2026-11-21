@@ -289,8 +289,16 @@ def to_episode_row(episode: PlannedEpisode, result: Mapping[str, Any]) -> Episod
     )
 
 
+def is_libero_provider(provider: str | None) -> bool:
+    """vla-eval's LIBERO benchmark or one of its suites (-pro, -plus, -mem)."""
+    return bool(provider) and provider.split(":", 1)[0].startswith("vla_eval.benchmarks.libero")
+
+
 def check_reset_ordinals(
-    episodes: list[PlannedEpisode], rows: list[EpisodeRow], scenarios: Mapping[str, Any]
+    episodes: list[PlannedEpisode],
+    rows: list[EpisodeRow],
+    scenarios: Mapping[str, Any],
+    provider: str | None = None,
 ) -> None:
     """Refuse a group whose init state *i* was not the (i+1)-th reset of a fresh env.
 
@@ -302,9 +310,23 @@ def check_reset_ordinals(
     env and runs the states in order -- which is what ordinal == index + 1
     measures, and what this checks.
 
-    Only measured ordinals are checked. A harness that does not report one
-    leaves the row's column null; that is recorded, not refused.
+    On a LIBERO scene the ordinal is required: vla-eval's LIBERO benchmark
+    reports it on every episode, so a missing one means a harness that does not
+    measure the scene, and the row could not say which scene it ran. The one
+    exemption is an APPARATUS row, which reports none when it failed before its
+    env was reset and is excluded from every analysis anyway. On other providers
+    a missing ordinal is recorded as null.
     """
+    if is_libero_provider(provider):
+        missing = [e.episode_id for e, r in zip(episodes, rows)
+                   if r.reset_ordinal is None and not r.is_infra_failure]
+        if missing:
+            raise BridgeError(
+                f"{len(missing)} episode(s) on LIBERO ({provider}) report no reset_ordinal, "
+                f"e.g. {missing[0]}. LIBERO's scene is (init state, reset ordinal), so these "
+                "rows could not say which scene they ran. Use a vla-eval whose LIBERO "
+                "benchmark reports it on every episode."
+            )
     wrong = []
     for episode, row in zip(episodes, rows):
         index = (scenarios.get(episode.scenario_hash) or {}).get("init_state_index")
@@ -1229,6 +1251,7 @@ __all__ = [
     "build_eval_config",
     "check_index_contract",
     "check_reset_ordinals",
+    "is_libero_provider",
     "check_server_revisions",
     "server_identity",
     "SERVER_IDENTITY_COLUMNS",
