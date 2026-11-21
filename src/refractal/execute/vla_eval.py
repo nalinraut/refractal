@@ -363,6 +363,33 @@ def _fetch_server_config(url: str, timeout: float = 5.0) -> dict[str, Any]:
         return json.loads(resp.read())
 
 
+#: The row columns `server_identity` fills, all null when a server does not say.
+SERVER_IDENTITY_COLUMNS = ("server_env_digest", "server_source_sha", "checkpoint_revision")
+
+
+def server_identity(url: str, *, fetch: Any = None, timeout: float = 2.0) -> dict[str, Any]:
+    """What the model server at ``url`` says it is running, as row columns.
+
+    Read from its ``GET /config`` (``response_metadata.server_env``): the digest
+    of torch, transformers, lerobot, dtype and compile mode; the git commit of
+    the server source, suffixed ``+dirty`` when the tree had uncommitted edits;
+    and the Hub commit it loaded. Two processes on one checkpoint returned
+    different chunks for one observation, so these are part of what a row is.
+
+    Nulls, never a guess, when the server does not report or cannot be read.
+    """
+    fetch = fetch or (lambda u: _fetch_server_config(u, timeout=timeout))
+    try:
+        env = ((fetch(url) or {}).get("response_metadata") or {}).get("server_env") or {}
+    except Exception:  # noqa: BLE001 - an unreadable server is a null, not a crash
+        env = {}
+    sha = env.get("source_sha")
+    if sha and env.get("source_dirty"):
+        sha = f"{sha}+dirty"
+    return {"server_env_digest": env.get("env_digest"), "server_source_sha": sha,
+            "checkpoint_revision": env.get("checkpoint_revision")}
+
+
 def check_server_revisions(
     checkpoints: Any, servers: Mapping[str, str], *, fetch: Any = _fetch_server_config
 ) -> None:
@@ -1203,6 +1230,8 @@ __all__ = [
     "check_index_contract",
     "check_reset_ordinals",
     "check_server_revisions",
+    "server_identity",
+    "SERVER_IDENTITY_COLUMNS",
     "check_server_assignment",
     "preflight_servers",
     "group_by_seed",

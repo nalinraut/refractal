@@ -241,11 +241,22 @@ def build(
     # --- 1 & 2: engine version, then scene hash over sources ------------
     resolved_scene_hashes: dict[str, str] = {}
     for scene in catalog.scenes:
-        version = scene.engine_version
-        if version is None:
+        # Measured wherever an engine is present; the declaration is used only
+        # on a machine that has none. A catalog declared mujoco "3.2.0" while
+        # 3.2.3 ran, and the declared string went into scene_hash.
+        declared = scene.engine_version
+        if isinstance(probe, DeclaredProbe):
+            version = declared if declared is not None else probe.version(scene.engine)
+        else:
             version = probe.version(scene.engine)
             report.notes.append(f"probed engine_version for {scene.id!r}: {version}")
-            scene = scene.model_copy(update={"engine_version": version})
+            if declared is not None and declared != version:
+                report.warnings.append(
+                    f"scene {scene.id!r} declares engine_version {declared!r}, but the "
+                    f"installed {scene.engine} is {version!r}. The installed version is "
+                    "what runs, so it is what the lock records and scene_hash covers."
+                )
+        scene = scene.model_copy(update={"engine_version": version})
 
         if scene.is_external:
             # The geometry lives in a wrapped provider. Only a probe that can

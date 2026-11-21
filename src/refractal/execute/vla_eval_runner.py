@@ -68,6 +68,8 @@ from .vla_eval import (
     check_index_contract,
     check_reset_ordinals,
     check_server_revisions,
+    server_identity,
+    SERVER_IDENTITY_COLUMNS,
     group_by_seed,
     make_parquet_orchestrator,
     make_parquet_recorder,
@@ -271,6 +273,7 @@ def _row(
     step_budget: int | None = None,
     decisions: int | None = None,
     decisions_absent: str | None = None,
+    server: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One Parquet row.
 
@@ -332,6 +335,7 @@ def _row(
         "failure_reason": row.failure_reason,
         "is_infra_failure": row.is_infra_failure,
         "reset_ordinal": row.reset_ordinal,
+        **{column: (server or {}).get(column) for column in SERVER_IDENTITY_COLUMNS},
         "steps": row.steps,
         "elapsed_sec": row.elapsed_sec,
         "started_at": started_at,
@@ -716,6 +720,9 @@ def _run_group(
     receipts = ReceiptBuffer()
     recorder_cls = make_parquet_recorder(buffer.collect, frames, receipts)
 
+    # Per invocation, not once per run: a server restarted between groups on
+    # another environment shows up on the rows it produced.
+    server = server_identity(servers[checkpoint_id])
     started_at = dt.datetime.now(dt.timezone.utc)
     result = invoke(config, recorder_cls)
     ended_at = dt.datetime.now(dt.timezone.utc)
@@ -788,6 +795,7 @@ def _run_group(
                        if call_counts is not None else None),
             decisions_absent=_why_no_count(
                 call_counts, action_hash_log, outcome.episode.episode_id),
+            server=server,
         )
         for index, outcome in enumerate(outcomes)
     ]

@@ -94,7 +94,9 @@ READ_THREADS = False
 #: renames terminal_phase to termination_reason.
 #:
 #: 3 adds reset_ordinal. Version-2 rows load with it null.
-EPISODES_SCHEMA_VERSION = 3
+#:
+#: 4 adds server_env_digest, server_source_sha and checkpoint_revision.
+EPISODES_SCHEMA_VERSION = 4
 
 EPISODES_SCHEMA = pa.schema(
     [
@@ -484,6 +486,14 @@ EPISODES_SCHEMA = pa.schema(
         # this, not on the init state alone. Measured by the harness; null when
         # the harness does not report it, never inferred.
         pa.field("reset_ordinal", pa.int32()),
+        # What the model server said it was running when this episode's group
+        # started (its GET /config). The digest covers torch, transformers,
+        # lerobot, dtype and compile mode; the source sha ends "+dirty" when the
+        # server's tree had uncommitted edits; the revision is the Hub commit it
+        # loaded. Null when the server does not report, never inferred.
+        pa.field("server_env_digest", pa.string()),
+        pa.field("server_source_sha", pa.string()),
+        pa.field("checkpoint_revision", pa.string()),
         # What was measured, as opposed to what was run.
         #
         # NOT hashed, and the distinction is the whole point: measuring more
