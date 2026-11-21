@@ -232,7 +232,13 @@ class BuildLock(Strict):
 
         from ..schema.identity import scene_hash as _scene_hash
 
-        current = _scene_hash(catalog_root, scene)
+        # Against the engine version the lock MEASURED, not the one scenes.yaml
+        # declares: `build` records the installed version and hashes that, so a
+        # stale declaration is not a geometry change. This check is about the
+        # sources, and comparing it against the declared version refused every
+        # catalog whose declaration was wrong -- the case `build` warns about.
+        measured = scene.model_copy(update={"engine_version": entry.engine_version})
+        current = _scene_hash(catalog_root, measured)
         if current != entry.scene_hash:
             raise CatalogError(
                 f"build.lock records scene_hash {entry.scene_hash[:19]}... for scene "

@@ -27,6 +27,29 @@ class TestTheEngineVersionIsMeasured(unittest.TestCase):
             self.assertEqual({e.engine_version for e in load_lock(root).scenes}, {"3.2.3"})
             self.assertTrue(any("declares engine_version '3.2.0'" in w for w in report.warnings))
 
+    def test_a_catalog_with_a_wrong_declaration_still_plans_after_build(self):
+        """The lock hashes the measured version; freshness must not compare it
+        with a scene_hash recomputed from the declared one."""
+        from refractal.resolve import resolve
+
+        with Temp() as root:
+            build(root, probe=Probe())
+            plan = resolve(root, hardware_profile="rtx5090")
+            self.assertEqual({s.scene_hash for s in plan.scenes},
+                             {e.scene_hash for e in load_lock(root).scenes})
+
+    def test_editing_the_geometry_after_build_is_still_refused(self):
+        from refractal.resolve import resolve
+        from refractal.schema import CatalogError
+
+        with Temp() as root:
+            build(root, probe=Probe())
+            model = next((root / "assets").glob("*.xml"))
+            model.write_text(model.read_text(encoding="utf-8") + "\n<!-- moved -->\n", encoding="utf-8")
+            with self.assertRaises(CatalogError) as ctx:
+                resolve(root, hardware_profile="rtx5090")
+            self.assertIn("geometry", str(ctx.exception))
+
     def test_a_machine_without_the_engine_still_uses_the_declaration(self):
         with Temp() as root:
             build(root)
