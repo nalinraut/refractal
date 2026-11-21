@@ -42,7 +42,8 @@ class TestServerIdentity(unittest.TestCase):
     def test_it_reads_the_server_env(self):
         self.assertEqual(server_identity("ws://h:1", fetch=lambda url: ENV), {
             "server_env_digest": "sha256:abc", "server_source_sha": "102f19d+dirty",
-            "checkpoint_revision": "45dcc8fc0e02601c8ccf0554fbd1d26a55070c1f"})
+            "checkpoint_revision": "45dcc8fc0e02601c8ccf0554fbd1d26a55070c1f",
+            "server_boot_id": None})
 
     def test_an_unreadable_server_is_nulls(self):
         def down(url):

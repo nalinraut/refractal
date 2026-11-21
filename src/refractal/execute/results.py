@@ -96,7 +96,9 @@ READ_THREADS = False
 #: 3 adds reset_ordinal. Version-2 rows load with it null.
 #:
 #: 4 adds server_env_digest, server_source_sha and checkpoint_revision.
-EPISODES_SCHEMA_VERSION = 4
+#:
+#: 5 adds server_boot_id.
+EPISODES_SCHEMA_VERSION = 5
 
 EPISODES_SCHEMA = pa.schema(
     [
@@ -494,6 +496,10 @@ EPISODES_SCHEMA = pa.schema(
         pa.field("server_env_digest", pa.string()),
         pa.field("server_source_sha", pa.string()),
         pa.field("checkpoint_revision", pa.string()),
+        # The server process: a uuid it makes at start and sends with every
+        # response. Replicates of one state that span processes differ by more
+        # than their seed; `refractal run` warns when they do.
+        pa.field("server_boot_id", pa.string()),
         # What was measured, as opposed to what was run.
         #
         # NOT hashed, and the distinction is the whole point: measuring more

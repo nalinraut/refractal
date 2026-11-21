@@ -53,7 +53,7 @@ from .physics import ABSENT as PHYSICS_ABSENT
 from .physics import actuator_facts, physics_digest, physics_manifest
 from .harness import describe_installed_harness
 from .resources import PeakWatcher
-from .results import EPISODES_SCHEMA_VERSION, ResultWriter
+from .results import EPISODES_SCHEMA_VERSION, ResultWriter, read_episodes
 from .vla_eval import (
     POLICY_SEEDS_KEY,
     ReceiptBuffer,
@@ -70,6 +70,7 @@ from .vla_eval import (
     check_server_revisions,
     server_identity,
     SERVER_IDENTITY_COLUMNS,
+    boot_id_warnings,
     group_by_seed,
     make_parquet_orchestrator,
     make_parquet_recorder,
@@ -89,6 +90,8 @@ class VlaEvalSummary:
     skipped: int = 0
     invocations: int = 0
     parts: list[str] = field(default_factory=list)
+    #: (checkpoint, scenario) groups whose replicates span server processes.
+    boot_id_warnings: list[str] = field(default_factory=list)
 
 
 def default_invoke(
@@ -1040,6 +1043,17 @@ def run_vla_eval(
     # been constructed -- which happens inside the harness, during the first
     # episode. Nothing to record if no engine was ever seen.
     writer.record_physics_manifest(physics.surface, physics.manifest)
+    summary.boot_id_warnings = boot_id_warnings(
+        read_episodes(results_uri, plan.plan_id).select(
+            ["checkpoint_id", "scenario_hash", "server_boot_id"]).to_pylist())
+    if summary.boot_id_warnings:
+        print("\n  " + "!" * 72)
+        print("  WARNING: replicates of one state did not all run on one server process.")
+        print("  A seed pins the noise, not the numerics, so these replicates differ by")
+        print("  more than their seed:")
+        for line in summary.boot_id_warnings:
+            print(f"    {line}")
+        print("  " + "!" * 72 + "\n")
     return summary
 
 

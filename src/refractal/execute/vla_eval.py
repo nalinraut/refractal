@@ -386,7 +386,7 @@ def _fetch_server_config(url: str, timeout: float = 5.0) -> dict[str, Any]:
 
 
 #: The row columns `server_identity` fills, all null when a server does not say.
-SERVER_IDENTITY_COLUMNS = ("server_env_digest", "server_source_sha", "checkpoint_revision")
+SERVER_IDENTITY_COLUMNS = ("server_env_digest", "server_source_sha", "checkpoint_revision", "server_boot_id")
 
 
 def server_identity(url: str, *, fetch: Any = None, timeout: float = 2.0) -> dict[str, Any]:
@@ -402,14 +402,41 @@ def server_identity(url: str, *, fetch: Any = None, timeout: float = 2.0) -> dic
     """
     fetch = fetch or (lambda u: _fetch_server_config(u, timeout=timeout))
     try:
-        env = ((fetch(url) or {}).get("response_metadata") or {}).get("server_env") or {}
+        config = fetch(url) or {}
     except Exception:  # noqa: BLE001 - an unreadable server is a null, not a crash
-        env = {}
+        config = {}
+    env = (config.get("response_metadata") or {}).get("server_env") or {}
+    boot_id = config.get("boot_id")
     sha = env.get("source_sha")
     if sha and env.get("source_dirty"):
         sha = f"{sha}+dirty"
     return {"server_env_digest": env.get("env_digest"), "server_source_sha": sha,
-            "checkpoint_revision": env.get("checkpoint_revision")}
+            "checkpoint_revision": env.get("checkpoint_revision"), "server_boot_id": boot_id}
+
+
+def boot_id_warnings(rows: list[Mapping[str, Any]]) -> list[str]:
+    """One line per (checkpoint, scenario) whose replicates span server processes.
+
+    A seed pins the noise, not the numerics: two processes on one checkpoint
+    have returned different chunks for one observation and seed. Replicates of
+    a state that ran on different processes therefore differ by more than their
+    seed, which is the one thing q assumes they differ by. Rows whose server did
+    not report a boot id are named too, since they cannot be checked.
+    """
+    groups: dict[tuple[str, str], list[Any]] = {}
+    for row in rows:
+        groups.setdefault((row["checkpoint_id"], row["scenario_hash"]), []).append(row.get("server_boot_id"))
+    lines = []
+    for (checkpoint, scenario), ids in sorted(groups.items()):
+        seen = sorted({i for i in ids if i is not None})
+        unknown = sum(i is None for i in ids)
+        if len(seen) > 1:
+            lines.append(f"{checkpoint} {scenario[:19]}...: {len(ids)} replicate(s) ran on "
+                         f"{len(seen)} server processes ({', '.join(b[:8] for b in seen)})")
+        elif unknown and seen:
+            lines.append(f"{checkpoint} {scenario[:19]}...: {unknown} of {len(ids)} replicate(s) "
+                         "have no server boot id, so a process change cannot be ruled out")
+    return lines
 
 
 def check_server_revisions(
@@ -1254,6 +1281,7 @@ __all__ = [
     "is_libero_provider",
     "check_server_revisions",
     "server_identity",
+    "boot_id_warnings",
     "SERVER_IDENTITY_COLUMNS",
     "check_server_assignment",
     "preflight_servers",
