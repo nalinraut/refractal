@@ -1166,6 +1166,43 @@ class TestTheStoredPlanDescribesTheWholeExperiment(LoopCase):
         self.assertEqual(self.stored(plan)["total_episodes"], plan.total_episodes)
 
 
+class TestRestrictToCheckpointIsAFilter(LoopCase):
+    """`--checkpoint` reruns one arm of a plan, the way `--worker` runs one worker.
+
+    The rerun must be the same experiment: plan_id and every episode id
+    untouched, so its rows key on (results root, episode_id) against the
+    original's. And it must need no server for the arm it does not run.
+    """
+
+    def test_keeps_ids_and_only_that_arm(self):
+        from refractal.schema.plan import restrict_to_checkpoint
+
+        whole = make_plan(scenarios=2, seeds=(0, 1), checkpoints=("pi0", "pi05"))
+        one = restrict_to_checkpoint(whole, "pi0")
+        mine = [e for s in whole.scenes for w in s.workers for e in w.episodes if e.checkpoint_id == "pi0"]
+        kept = [e for s in one.scenes for w in s.workers for e in w.episodes]
+        self.assertLess(len(kept), whole.total_episodes)
+        self.assertEqual([e.episode_id for e in kept], [e.episode_id for e in mine])
+        self.assertEqual(one.plan_id, whole.plan_id)
+        self.assertEqual(one.total_episodes, len(kept))
+
+    def test_runs_with_only_that_arms_server(self):
+        from refractal.schema.plan import restrict_to_checkpoint
+
+        whole = make_plan(scenarios=2, checkpoints=("pi0", "pi05"))
+        one = restrict_to_checkpoint(whole, "pi0")
+        self.run_loop(one, FakeHarness(), only=("pi0",), provenance_plan=whole)
+        rows = self.rows(whole)
+        self.assertEqual({r["checkpoint_id"] for r in rows}, {"pi0"})
+        self.assertEqual(len(rows), one.total_episodes)
+
+    def test_refuses_an_unknown_checkpoint(self):
+        from refractal.schema.plan import PlanSchemaError, restrict_to_checkpoint
+
+        with self.assertRaises(PlanSchemaError):
+            restrict_to_checkpoint(make_plan(scenarios=2, checkpoints=("pi0",)), "pi05")
+
+
 class TestConcurrentThreadsAreIsolated(LoopCase):
     """Two checkpoints at once must not share a simulator.
 

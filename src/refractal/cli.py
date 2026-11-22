@@ -161,10 +161,16 @@ def _servers(pairs: list[str] | None) -> dict[str, str]:
 def cmd_run(args: argparse.Namespace) -> int:
     import uuid
 
-    from .schema.plan import PlanSchemaError, read_plan, restrict_to_worker
+    from .schema.plan import PlanSchemaError, read_plan, restrict_to_checkpoint, restrict_to_worker
 
     plan = read_plan(args.plan)
     whole_plan = plan
+    if args.checkpoint:
+        try:
+            plan = restrict_to_checkpoint(plan, args.checkpoint)
+        except PlanSchemaError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     if args.worker:
         # A filter, not a different plan: plan_id and every episode id are
         # untouched, so this worker's rows join the others' as though one process
@@ -177,6 +183,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     session_id = args.session_id or uuid.uuid4().hex
 
     if args.backend == "compose":
+        if args.checkpoint:
+            # The rendered containers run `--worker` only; they would run every arm.
+            print("error: --checkpoint is not passed to compose containers; run one arm "
+                  "with --backend vla-eval", file=sys.stderr)
+            return 2
         return _run_compose(args, plan)
 
     if args.backend == "vla-eval":
@@ -732,6 +743,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--harness-output", default="./vla-eval-output",
         help="scratch directory for the harness's own outputs. Not the results URI: "
              "Refractal's results go to --results as Parquet")
+    run_cmd.add_argument(
+        "--checkpoint", metavar="CHECKPOINT_ID", default=None,
+        help="run only this checkpoint's episodes, e.g. to rerun one arm. A filter "
+             "like --worker: plan_id and every episode id are unchanged, and only "
+             "this checkpoint needs a --server.")
     run_cmd.add_argument(
         "--worker", metavar="WORKER_ID",
         help="run only this worker's episodes, e.g. libero-spatial/0. The ids come "

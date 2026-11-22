@@ -369,6 +369,48 @@ def restrict_to_worker(plan: "Plan", worker_id: str) -> "Plan":
     )
 
 
+def restrict_to_checkpoint(plan: "Plan", checkpoint_id: str) -> "Plan":
+    """The same plan with every other checkpoint's episodes removed.
+
+    What ``--checkpoint`` does, for rerunning one arm of a plan: a filter, like
+    ``restrict_to_worker``, so ``plan_id`` and every episode id are untouched and
+    the rerun's rows key on (results root, episode_id) against the original's.
+    Workers left with no episodes, and scenes left with no workers, are dropped;
+    the counts are recomputed so a progress line does not count episodes this
+    process will not run. A worker's remaining episodes keep their order, so each
+    (worker, checkpoint, seed) group still runs its init states in order.
+    """
+    known = sorted({e.checkpoint_id for s in plan.scenes for w in s.workers for e in w.episodes})
+    if checkpoint_id not in known:
+        raise PlanSchemaError(
+            f"this plan runs no checkpoint {checkpoint_id!r}. It runs {known}."
+        )
+    scenes = []
+    for scene in plan.scenes:
+        workers = []
+        for worker in scene.workers:
+            episodes = [e for e in worker.episodes if e.checkpoint_id == checkpoint_id]
+            if not episodes:
+                continue
+            share = len(episodes) / len(worker.episodes)
+            workers.append(worker.model_copy(update={
+                "episodes": episodes, "estimated_seconds": worker.estimated_seconds * share}))
+        if not workers:
+            continue
+        scenes.append(scene.model_copy(update={
+            "workers": workers,
+            "episode_count": sum(len(w.episodes) for w in workers),
+            "estimated_seconds": sum(w.estimated_seconds for w in workers),
+        }))
+    return plan.model_copy(
+        update={
+            "scenes": scenes,
+            "total_episodes": sum(s.episode_count for s in scenes),
+            "estimated_seconds": sum(s.estimated_seconds for s in scenes),
+        }
+    )
+
+
 def read_plan(path: str | Path) -> Plan:
     """Load a plan, refusing an unrecognised ``plan_schema`` before anything else.
 
