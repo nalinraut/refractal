@@ -97,6 +97,7 @@ def resolve(
 
     # --- scenarios, per scene -------------------------------------------
     scenarios_by_scene: dict[str, list] = {}
+    sets_by_id = {ss.id: ss for ss in catalog.active_scenario_sets()}
     for scenario_set in catalog.active_scenario_sets():
         if lock is not None:
             lock.check_filter_fresh(scenario_set, scene_hashes[scenario_set.scene])
@@ -122,6 +123,21 @@ def resolve(
         for scenario in produced:
             prior = already.get(scenario.scenario_hash)
             if prior is not None:
+                # The kept scenario is crossed with its own set's tasks only, so a
+                # task this set names and the earlier one does not would get no
+                # episodes -- a short plan behind a warning. Refused instead.
+                kept_tasks = {t.id for t in catalog.tasks_for(sets_by_id[prior])}
+                lost = [t.id for t in catalog.tasks_for(scenario_set) if t.id not in kept_tasks]
+                if lost:
+                    raise CatalogError(
+                        f"scene {scenario_set.scene!r}: scenario set {scenario_set.id!r} "
+                        f"produces a scenario already produced by {prior!r} "
+                        f"({scenario.params}), but names task(s) {lost} that {prior!r} "
+                        "does not. The scenario is kept once and crossed with the first "
+                        "set's tasks, so those tasks would get no episodes. Write one "
+                        "set naming every task that should run this scenario.",
+                        file="scenarios.yaml",
+                    )
                 warnings.append(
                     f"scene {scenario_set.scene!r}: scenario set {scenario_set.id!r} produces a "
                     f"scenario already produced by {prior!r} ({scenario.params}); kept once. "

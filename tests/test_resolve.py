@@ -632,6 +632,51 @@ class TestTypeOnlyCollisions(unittest.TestCase):
             self.assertIn("fine", note)
 
 
+class TestOverlappingSetsNeverLoseATask(unittest.TestCase):
+    """Two sets with the same scenario and different task lists.
+
+    The dedup kept the first set's scenario, and expansion crosses a scenario
+    with its own set's tasks, so the second set's tasks silently got no
+    episodes: a warning said "kept once" and the plan was short. Found when a
+    per-task perturbation catalog (one set per task, tasks sharing a target
+    body) compiled to 28 of 40 episodes. Every task must appear, or the plan
+    is refused.
+    """
+
+    def _sets(self, root, first_tasks, second_tasks):
+        tmp = Temp.__new__(Temp)
+        tmp.root = root
+
+        def mutate(doc):
+            base = doc["scenario_sets"][0]
+            base = {k: v for k, v in base.items() if k != "tasks"}
+            doc["scenario_sets"] = [
+                {**base, "id": "a", "params": {"friction": {"choices": [1.0]}}, "tasks": first_tasks},
+                {**base, "id": "b", "params": {"friction": {"choices": [1.0]}}, "tasks": second_tasks},
+            ]
+
+        tmp.edit("scenarios.yaml", mutate)
+        tmp.edit("run.yaml", lambda d: d["run"].__setitem__("tier", "full"))
+        return resolve(root, hardware_profile=HARDWARE)
+
+    def test_different_tasks_every_task_appears_or_the_plan_is_refused(self):
+        with Temp() as root:
+            try:
+                plan = self._sets(root, ["vial-slot-4"], ["vial-slot-7"])
+            except CatalogError as exc:
+                self.assertIn("vial-slot-7", str(exc))
+                return
+            tasks = {e.task_id for s in plan.scenes for w in s.workers for e in w.episodes}
+            self.assertEqual(tasks, {"vial-slot-4", "vial-slot-7"})
+
+    def test_a_later_set_whose_tasks_are_covered_is_still_kept_once(self):
+        with Temp() as root:
+            plan = self._sets(root, ["vial-slot-4", "vial-slot-7"], ["vial-slot-7"])
+            tasks = {e.task_id for s in plan.scenes for w in s.workers for e in w.episodes}
+            self.assertEqual(tasks, {"vial-slot-4", "vial-slot-7"})
+            self.assertTrue(any("kept once" in w for w in plan.warnings))
+
+
 class TestTheDefaultFixtureExercisesItsInvariants(unittest.TestCase):
     """Does any fixture put each invariant in a position to fire?
 
