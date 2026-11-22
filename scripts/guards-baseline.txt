@@ -53,3 +53,12 @@ refractal/schema/models.py::_explain_interleaved::ValueError
 refractal/schema/models.py::_window::ValueError
 refractal/schema/plan.py::locate_plan::CatalogError
 refractal/schema/plan.py::read_plan::CatalogError
+refractal/compare/distribution.py::across_cells::DistributionError
+refractal/compare/distribution.py::ecdf::DistributionError
+refractal/compare/distribution.py::quantile::DistributionError
+refractal/compare/distribution.py::rmst::DistributionError
+refractal/compare/distribution.py::success_at::DistributionError
+refractal/compare/permutation.py::contingency_at::PermutationError
+refractal/compare/permutation.py::permutation_test::PermutationError
+refractal/execute/vla_eval.py::_build_recorder::BridgeError
+refractal/schema/outcome.py::validate_phase_records::OutcomeInvariantError
