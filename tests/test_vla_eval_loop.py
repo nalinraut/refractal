@@ -1203,6 +1203,46 @@ class TestRestrictToCheckpointIsAFilter(LoopCase):
             restrict_to_checkpoint(make_plan(scenarios=2, checkpoints=("pi0",)), "pi05")
 
 
+class TestRouteStates(LoopCase):
+    """`--route-states LO-HI=URI` writes the rows of init states LO..HI to a second results
+    root as they are written, so a sealed split never shares a directory with the rows that
+    may be read before it is unsealed. A group still runs its init states 0..N-1 in one fresh
+    env; only where each row is written changes. Same plan_id and episode ids in both roots."""
+
+    def test_rows_in_range_go_to_the_route_root_and_the_rest_stay(self):
+        plan = make_plan(scenarios=6, checkpoints=("pi0",))
+        sealed = str(Path(self.tmp) / "sealed")
+        self.run_loop(plan, FakeHarness(), only=("pi0",), route_states=(3, 5, sealed))
+        here = read_episodes(self.results, plan.plan_id).to_pylist()
+        there = read_episodes(sealed, plan.plan_id).to_pylist()
+        idx = lambda rows: sorted(int(r["episode_id"].split("-")[-3]) for r in rows)
+        self.assertEqual(idx(here), [0, 1, 2])
+        self.assertEqual(idx(there), [3, 4, 5])
+        self.assertEqual(len(here) + len(there), plan.total_episodes)
+
+    def test_resume_counts_rows_in_both_roots(self):
+        plan = make_plan(scenarios=6, checkpoints=("pi0",))
+        sealed = str(Path(self.tmp) / "sealed")
+        self.run_loop(plan, FakeHarness(), only=("pi0",), route_states=(3, 5, sealed))
+        again = self.run_loop(plan, FakeHarness(), only=("pi0",), route_states=(3, 5, sealed),
+                              session_id="bbbb-second")
+        self.assertEqual(again.written, 0)
+
+    def test_the_cli_argument_parses_and_refuses_malformed(self):
+        from refractal.cli import _route_states
+
+        self.assertEqual(_route_states("20-29=./runs/sealed"), (20, 29, "./runs/sealed"))
+        for bad in ("20-29", "29-20=x", "a-b=x", "20=x"):
+            with self.assertRaises(SystemExit):
+                _route_states(bad)
+
+    def test_video_with_routing_is_refused(self):
+        plan = make_plan(scenarios=6, checkpoints=("pi0",))
+        with self.assertRaises(BridgeError):
+            self.run_loop(plan, FakeHarness(frames_per_episode=2), only=("pi0",), record_video=True,
+                          route_states=(3, 5, str(Path(self.tmp) / "sealed")))
+
+
 class TestConcurrentThreadsAreIsolated(LoopCase):
     """Two checkpoints at once must not share a simulator.
 

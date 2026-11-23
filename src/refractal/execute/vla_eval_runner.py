@@ -657,6 +657,8 @@ def _run_group(
     call_counts: "CallCounter | None" = None,
     action_hash_log: str | None = None,
     declared_chunk: int | None = None,
+    #: (lo, hi, writer): rows whose init_state_index is in [lo, hi] go to this writer.
+    route: "tuple[int, int, ResultWriter] | None" = None,
 ) -> tuple[int, str | None]:
     """One harness invocation, start to written rows. Returns (rows, part path).
 
@@ -815,11 +817,26 @@ def _run_group(
         f"-{task_id.replace('/', '-')}"
         f"-{checkpoint_id}-seed{seed}"
     )
-    path = writer.write_episodes(checkpoint_id, scene.scene_id, rows, part=part)
     label = f"{worker_id}/{task_id}/{checkpoint_id}/seed{seed}"
-    writer.verify_written(
-        {r["episode_id"] for r in rows}, [path] if path else [], worker_id=label
-    )
+    targets = [(writer, rows)]
+    if route is not None:
+        # Split by init state AFTER the group ran whole, in one fresh env: routing
+        # changes where a row is written, never which episodes run or in what order.
+        lo, hi, routed_writer = route
+        index = [(scenarios.get(o.episode.scenario_hash) or {}).get("init_state_index")
+                 for o in outcomes]
+        inside = [i is not None and lo <= int(i) <= hi for i in index]
+        targets = [(writer, [r for r, x in zip(rows, inside) if not x]),
+                   (routed_writer, [r for r, x in zip(rows, inside) if x])]
+    path = None
+    for target, chunk in targets:
+        if not chunk:
+            continue
+        written_path = target.write_episodes(checkpoint_id, scene.scene_id, chunk, part=part)
+        target.verify_written(
+            {r["episode_id"] for r in chunk}, [written_path] if written_path else [], worker_id=label
+        )
+        path = path or written_path
 
     # The receipt for video, at the granularity `verify_written` does not reach.
     #
@@ -869,6 +886,9 @@ def run_vla_eval(
     #: as a sweep's baseline, for a class measured inert when unperturbed.
     benchmark_override: str | None = None,
     provenance_plan: Plan | None = None,
+    #: (lo, hi, uri): rows of init states lo..hi are written to a second results root
+    #: (``refractal run --route-states``), e.g. a sealed confirmation split.
+    route_states: "tuple[int, int, str] | None" = None,
 ) -> VlaEvalSummary:
     """Drive the harness once per (worker, checkpoint, seed) and write Parquet."""
     # Derived from the episodes, not from ``plan.checkpoints``. The episodes are
@@ -910,7 +930,17 @@ def run_vla_eval(
         for c in (getattr(plan, "checkpoints", None) or [])
     }
 
+    if route_states is not None and record_video:
+        raise BridgeError(
+            "--route-states with --video: frame strips are matched to rows by position "
+            "within a group, and a routed group's rows go to two roots. Run without video."
+        )
     writer = ResultWriter(results_uri, plan.plan_id)
+    routed = None
+    if route_states is not None:
+        lo, hi, routed_uri = route_states
+        routed = (int(lo), int(hi), ResultWriter(routed_uri, plan.plan_id))
+    writers = [writer] + ([routed[2]] if routed else [])
     # The WHOLE plan, not this worker's slice of it.
     #
     # Under `--backend compose` every container runs `--worker`, and `--worker`
@@ -920,7 +950,8 @@ def run_vla_eval(
     # 1 worker while its plan_id digests 600 across 10.
     #
     # An identity document that contradicts its own digest is worse than none.
-    writer.write_plan((provenance_plan or plan).to_json())
+    for w in writers:
+        w.write_plan((provenance_plan or plan).to_json())
     # What was supplied at run time, beside what was planned. Server addresses
     # and the backend shaped this run and appeared in no artifact, so two runs
     # against different servers produced rows nobody could tell apart.
@@ -928,7 +959,7 @@ def run_vla_eval(
     # Recorded, not hashed: an address is a property of a machine, and folding
     # it into plan_id would make one experiment on two machines two
     # experiments.
-    writer.write_render_manifest({
+    render = {
         "backend": "vla-eval",
         "servers": dict(sorted(servers.items())),
         "catalog_root": catalog_root,
@@ -937,18 +968,26 @@ def run_vla_eval(
         "record_video": bool(record_video),
         "frame_every": frame_every,
         "refractal_version": _refractal_version(),
-    })
+    }
+    if routed:
+        # Both roots say where the other half of every group went.
+        render["route_states"] = {"states": [routed[0], routed[1]],
+                                  "routed_uri": route_states[2], "unrouted_uri": results_uri}
+    for w in writers:
+        w.write_render_manifest(render)
     if catalog_root is not None:
-        writer.copy_catalog(catalog_root)
+        for w in writers:
+            w.copy_catalog(catalog_root)
 
     harness_version, harness_surface, manifest = describe_installed_harness()
-    writer.record_harness_manifest(harness_surface, manifest)
+    for w in writers:
+        w.record_harness_manifest(harness_surface, manifest)
     # Filled in by the bridge the first time it sees a live benchmark, because
     # what matters is the model that actually ran rather than what the catalog
     # claimed. Until then it reads absent, which is honest: nothing has looked.
     physics = PhysicsSurface()
 
-    already = writer.completed_episode_ids() if resume else set()
+    already = set().union(*(w.completed_episode_ids() for w in writers)) if resume else set()
     # Bound here rather than passed through `Invoke`, which is the seam a test
     # substitutes: a fake invoke should not have to know about provenance
     # collection to be a valid stand-in for the real one.
@@ -990,6 +1029,7 @@ def run_vla_eval(
                             checkpoint_id, CallCounter()),
                         action_hash_log=hash_logs.get(checkpoint_id),
                         declared_chunk=declared_chunks.get(checkpoint_id),
+                        route=routed,
                     )
 
                 if plan.execution_mode == "concurrent":
@@ -1049,10 +1089,17 @@ def run_vla_eval(
     # After the run, because the engine is only readable once a benchmark has
     # been constructed -- which happens inside the harness, during the first
     # episode. Nothing to record if no engine was ever seen.
-    writer.record_physics_manifest(physics.surface, physics.manifest)
-    summary.boot_id_warnings = boot_id_warnings(
-        read_episodes(results_uri, plan.plan_id).select(
-            ["checkpoint_id", "scenario_hash", "server_boot_id"]).to_pylist())
+    for w in writers:
+        w.record_physics_manifest(physics.surface, physics.manifest)
+    boot_rows = []
+    for uri in [results_uri] + ([route_states[2]] if routed else []):
+        try:
+            boot_rows += read_episodes(uri, plan.plan_id).select(
+                ["checkpoint_id", "scenario_hash", "server_boot_id"]).to_pylist()
+        except Exception:  # noqa: BLE001 -- a root this worker wrote nothing to
+            if uri == results_uri and not routed:
+                raise
+    summary.boot_id_warnings = boot_id_warnings(boot_rows)
     if summary.boot_id_warnings:
         print("\n  " + "!" * 72)
         print("  WARNING: replicates of one state did not all run on one server process.")

@@ -158,6 +158,15 @@ def _servers(pairs: list[str] | None) -> dict[str, str]:
     return servers
 
 
+def _route_states(text: str) -> tuple[int, int, str]:
+    """``LO-HI=URI`` for ``--route-states``: init states LO..HI (inclusive) go to URI."""
+    rng, sep, uri = text.partition("=")
+    lo, dash, hi = rng.partition("-")
+    if not (sep and dash and uri and lo.isdigit() and hi.isdigit() and int(lo) <= int(hi)):
+        raise SystemExit(f"--route-states {text!r}: expected LO-HI=URI with 0 <= LO <= HI, e.g. 20-29=./runs/sealed")
+    return int(lo), int(hi), uri
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     import uuid
 
@@ -182,7 +191,12 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 2
     session_id = args.session_id or uuid.uuid4().hex
 
+    route = _route_states(args.route_states) if args.route_states else None
     if args.backend == "compose":
+        if route:
+            print("error: --route-states is not passed to compose containers; use --backend vla-eval",
+                  file=sys.stderr)
+            return 2
         if args.checkpoint:
             # The rendered containers run `--worker` only; they would run every arm.
             print("error: --checkpoint is not passed to compose containers; run one arm "
@@ -207,6 +221,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 frame_every=args.frame_every,
                 benchmark_override=args.provider,
                 provenance_plan=whole_plan,
+                route_states=route,
             )
         except BridgeError as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -221,6 +236,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     from .execute import run_local
 
+    if route:
+        print("error: --route-states applies to --backend vla-eval", file=sys.stderr)
+        return 2
     if args.server:
         print(
             "error: --server applies to --backend vla-eval; the local backend "
@@ -743,6 +761,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--harness-output", default="./vla-eval-output",
         help="scratch directory for the harness's own outputs. Not the results URI: "
              "Refractal's results go to --results as Parquet")
+    run_cmd.add_argument(
+        "--route-states", metavar="LO-HI=URI", default=None,
+        help="write the rows of init states LO..HI to a second results root URI (e.g. a sealed "
+             "confirmation split). Groups still run every init state in order in one env; "
+             "only where each row is written changes. vla-eval backend, without --video.")
     run_cmd.add_argument(
         "--checkpoint", metavar="CHECKPOINT_ID", default=None,
         help="run only this checkpoint's episodes, e.g. to rerun one arm. A filter "
