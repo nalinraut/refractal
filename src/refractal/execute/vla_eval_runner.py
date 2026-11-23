@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import datetime as dt
 import functools
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
@@ -812,6 +813,9 @@ def _run_group(
         )
         for index, outcome in enumerate(outcomes)
     ]
+    status = _step_log_status()
+    for r in rows:
+        r["step_log_complete"] = None if status is None else bool(status(r["episode_id"]))
     part = (
         f"{worker_id.replace('/', '-')}"
         f"-{task_id.replace('/', '-')}"
@@ -866,6 +870,18 @@ def _run_group(
     if frames is not None:
         frames.clear()
     return len(rows), path
+
+
+def _step_log_status():
+    """The step-log status hook named by $REFRACTAL_STEP_LOG_STATUS (``module:callable``, called with
+    an episode id, returning whether its per-step log is complete), or None when unset. Resolved per
+    group: the hook lives in the worker process that ran the group's episodes."""
+    name = os.environ.get("REFRACTAL_STEP_LOG_STATUS")
+    if not name:
+        return None
+    from ..schema.importstr import resolve_import_string
+
+    return resolve_import_string(name)
 
 
 def run_vla_eval(

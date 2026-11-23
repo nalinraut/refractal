@@ -100,7 +100,9 @@ READ_THREADS = False
 #: 5 adds server_boot_id.
 #:
 #: 6 adds engine_version.
-EPISODES_SCHEMA_VERSION = 6
+#:
+#: 7 adds step_log_complete. Earlier rows load with it null.
+EPISODES_SCHEMA_VERSION = 7
 
 EPISODES_SCHEMA = pa.schema(
     [
@@ -507,6 +509,10 @@ EPISODES_SCHEMA = pa.schema(
         # The physics engine version the harness reports it ran (MuJoCo's
         # __version__), checked against the lock's before the row is written.
         pa.field("engine_version", pa.string()),
+        # Whether this episode's per-step log is complete, as reported by the status hook named in
+        # $REFRACTAL_STEP_LOG_STATUS (an import string; refractal knows nothing of the log's
+        # format). Null when no hook is set: "not recorded", never "incomplete".
+        pa.field("step_log_complete", pa.bool_()),
         # What was measured, as opposed to what was run.
         #
         # NOT hashed, and the distinction is the whole point: measuring more

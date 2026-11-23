@@ -1243,6 +1243,31 @@ class TestRouteStates(LoopCase):
                           route_states=(3, 5, str(Path(self.tmp) / "sealed")))
 
 
+def _status_for_test(episode_id):
+    """A step-log status hook: complete for init state 0, incomplete otherwise."""
+    return episode_id.split("-")[-3] == "0"
+
+
+class TestStepLogCompleteness(LoopCase):
+    """Each row records whether the episode's per-step log is complete, from the status hook named by
+    $REFRACTAL_STEP_LOG_STATUS (an import string); null when no hook is set. Schema version 7."""
+
+    def test_rows_carry_the_hooks_answer(self):
+        import os
+        os.environ["REFRACTAL_STEP_LOG_STATUS"] = "tests.test_vla_eval_loop:_status_for_test"
+        self.addCleanup(os.environ.pop, "REFRACTAL_STEP_LOG_STATUS", None)
+        plan = make_plan(scenarios=3, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness(), only=("pi0",))
+        got = {r["episode_id"].split("-")[-3]: r["step_log_complete"] for r in self.rows(plan)}
+        self.assertEqual(got, {"0": True, "1": False, "2": False})
+        self.assertEqual({r["schema_version"] for r in self.rows(plan)}, {7})
+
+    def test_without_a_hook_the_field_is_null(self):
+        plan = make_plan(scenarios=2, checkpoints=("pi0",))
+        self.run_loop(plan, FakeHarness(), only=("pi0",))
+        self.assertEqual({r["step_log_complete"] for r in self.rows(plan)}, {None})
+
+
 class TestConcurrentThreadsAreIsolated(LoopCase):
     """Two checkpoints at once must not share a simulator.
 
